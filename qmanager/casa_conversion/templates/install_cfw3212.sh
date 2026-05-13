@@ -337,6 +337,10 @@ info "qmanager_firewall patched for ports 9080/9000"
 sed -i \
     -e 's|^export PATH=.*|export PATH="/usrdata/bin:/usrdata/opt/bin:/usrdata/opt/sbin:/usr/bin:/usr/sbin:/bin:/sbin:$PATH"|g' \
     "$SRC_SCRIPTS/usr/lib/qmanager/cgi_base.sh" 2>/dev/null || true
+if ! grep -q '^export PATH=' "$SRC_SCRIPTS/usr/lib/qmanager/cgi_base.sh" 2>/dev/null; then
+    sed -i '/^_CGI_BASE_LOADED=1$/a export PATH="/usrdata/bin:/usrdata/opt/bin:/usrdata/opt/sbin:/usr/bin:/usr/sbin:/bin:/sbin:$PATH"' \
+        "$SRC_SCRIPTS/usr/lib/qmanager/cgi_base.sh" 2>/dev/null || true
+fi
 sed -i \
     -e 's|/usrdata/usrdata/opt/bin/sudo|/usrdata/bin/sudo|g' \
     -e 's|/usrdata/opt/bin/sudo|/usrdata/bin/sudo|g' \
@@ -346,6 +350,7 @@ info "cgi_base.sh and platform.sh patched for Casa tool paths"
 # lighttpd.conf: write a clean Casa-specific config instead of patching the
 # upstream file in-place. The Entware lighttpd binary uses an /opt loader path,
 # so we keep the config simple and explicit here.
+mkdir -p "$SRC_SCRIPTS/usrdata/qmanager"
 cat > "$SRC_SCRIPTS/usrdata/qmanager/lighttpd.conf" << 'EOF'
 # =============================================================================
 # QManager — lighttpd configuration for Casa CFW-3212

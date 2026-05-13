@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Convert an upstream dr-dolomite/QManager tag/release into a Casa
+# Convert an upstream dr-dolomite/QManager-RM520N tag/release into a Casa
 # CFW-3212 work tree and, when Bun/Node are available, build release artifacts.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 QMANAGER_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 DEFAULT_REF_DIR="$QMANAGER_DIR/qmanager_work_v0.1.9_casa"
 TEMPLATE_DIR="$SCRIPT_DIR/templates"
-UPSTREAM_REPO="${UPSTREAM_REPO:-https://github.com/dr-dolomite/QManager.git}"
-UPSTREAM_API="${UPSTREAM_API:-https://api.github.com/repos/dr-dolomite/QManager/releases}"
+UPSTREAM_REPO="${UPSTREAM_REPO:-https://github.com/dr-dolomite/QManager-RM520N.git}"
+UPSTREAM_API="${UPSTREAM_API:-https://api.github.com/repos/dr-dolomite/QManager-RM520N/releases}"
 WORK_PREFIX="${WORK_PREFIX:-qmanager_work}"
 CASA_BUILD="${CASA_BUILD:-1}"
 
@@ -39,8 +39,8 @@ Options:
   -h, --help            Show this help.
 
 Environment:
-  UPSTREAM_REPO         Git repo URL. Default: dr-dolomite/QManager.
-  UPSTREAM_API          GitHub releases API. Default: dr-dolomite/QManager.
+  UPSTREAM_REPO         Git repo URL. Default: dr-dolomite/QManager-RM520N.
+  UPSTREAM_API          GitHub releases API. Default: dr-dolomite/QManager-RM520N.
   WORK_PREFIX           Folder prefix. Default: qmanager_work.
   CASA_BUILD            Casa build number suffix. Default: 1.
 EOF
@@ -724,6 +724,28 @@ if "Casa profile auto-apply disabled" not in text:
         count=1,
     )
 
+if "boot_qmanager_version=$(cat /etc/qmanager/VERSION" not in text:
+    marker = '    log_info "Boot data: FW=$boot_firmware BUILD=$boot_build_date MFG=$boot_manufacturer MODEL=$boot_model"'
+    version_block = '''    boot_qmanager_version=$(cat /etc/qmanager/VERSION 2>/dev/null | tr -d '[:space:]')
+    boot_qmanager_version="${boot_qmanager_version:-unknown}"
+
+'''
+    if marker not in text:
+        raise SystemExit("boot data log marker not found for qmanager version")
+    text = text.replace(marker, version_block + marker, 1)
+
+if '--arg qmanager_version "$boot_qmanager_version"' not in text:
+    marker = '        --arg firmware "$boot_firmware" \\\n'
+    if marker not in text:
+        raise SystemExit("firmware jq arg marker not found for qmanager version")
+    text = text.replace(marker, '        --arg qmanager_version "$boot_qmanager_version" \\\n' + marker, 1)
+
+if 'qmanager_version: $qmanager_version' not in text:
+    marker = '                temperature: $temp, cpu_usage: $cpu,\n'
+    if marker not in text:
+        raise SystemExit("device json marker not found for qmanager version")
+    text = text.replace(marker, '                qmanager_version: $qmanager_version,\n' + marker, 1)
+
 path.write_text(text)
 PY
 
@@ -735,6 +757,70 @@ PY
         || fail "Could not apply Casa IPPT poller patch"
     grep -q "Casa profile auto-apply disabled" "$poller" \
         || fail "Could not apply Casa profile auto-apply poller patch"
+    grep -q "qmanager_version: \$qmanager_version" "$poller" \
+        || fail "Could not apply Casa QManager version poller patch"
+}
+
+patch_disable_profile_auto_apply() {
+    local settings_sh="$TARGET/scripts/www/cgi-bin/quecmanager/cellular/settings.sh"
+    local watchcat="$TARGET/scripts/usr/bin/qmanager_watchcat"
+
+    [ -f "$settings_sh" ] || fail "Target missing cellular/settings.sh"
+    [ -f "$watchcat" ] || fail "Target missing qmanager_watchcat"
+
+    python3 - "$settings_sh" "$watchcat" <<'PY'
+from pathlib import Path
+import sys
+
+settings = Path(sys.argv[1])
+watchcat = Path(sys.argv[2])
+
+text = settings.read_text()
+old = '''                    # Auto-apply matching profile for the new SIM
+                    sleep 1  # let SIM initialize after CFUN=1
+                    _new_iccid=$(qcmd 'AT+QCCID' 2>/dev/null | grep '+QCCID:' | sed 's/+QCCID: //g' | tr -d '\\r ')
+                    if [ -n "$_new_iccid" ]; then
+                        . /usr/lib/qmanager/profile_mgr.sh 2>/dev/null
+                        auto_apply_profile "$_new_iccid" "sim_switch"
+                    fi
+'''
+new = '''                    # Casa CFW-3212 safety: do not auto-apply SIM profiles.
+                    qlog_info "Casa profile auto-apply disabled after SIM switch"
+'''
+if old in text:
+    text = text.replace(old, new, 1)
+settings.write_text(text)
+
+text = watchcat.read_text()
+text = text.replace(
+    '''    # Auto-apply matching profile for the reverted SIM
+    local _revert_iccid
+    _revert_iccid=$(qcmd 'AT+QCCID' 2>/dev/null | grep '+QCCID:' | sed 's/+QCCID: //g' | tr -d '\\r ')
+    [ -n "$_revert_iccid" ] && auto_apply_profile "$_revert_iccid" "watchdog_revert"
+''',
+    '''    # Casa CFW-3212 safety: do not auto-apply SIM profiles.
+    qlog_info "Casa profile auto-apply disabled after watchdog SIM revert"
+''',
+)
+text = text.replace(
+    '''            # Auto-apply matching profile for the new SIM
+            if [ -n "$curr_iccid" ]; then
+                auto_apply_profile "$curr_iccid" "watchdog"
+            fi
+''',
+    '''            # Casa CFW-3212 safety: do not auto-apply SIM profiles.
+            qlog_info "Casa profile auto-apply disabled after watchdog SIM failover"
+''',
+)
+watchcat.write_text(text)
+PY
+
+    grep -q "Casa profile auto-apply disabled after SIM switch" "$settings_sh" \
+        || fail "Could not disable SIM-switch profile auto-apply"
+    grep -q "Casa profile auto-apply disabled after watchdog SIM revert" "$watchcat" \
+        || fail "Could not disable watchdog revert profile auto-apply"
+    grep -q "Casa profile auto-apply disabled after watchdog SIM failover" "$watchcat" \
+        || fail "Could not disable watchdog failover profile auto-apply"
 }
 
 patch_logging_cfw3212() {
@@ -825,6 +911,178 @@ echo "$message" >&2
 exit 1
 EOF
     chmod 755 "$dst"
+}
+
+patch_qmanager_display_version() {
+    local about_sh="$TARGET/scripts/www/cgi-bin/quecmanager/device/about.sh"
+    local about_card="$TARGET/components/about-device/about-qmanager-card.tsx"
+    local about_types="$TARGET/types/about-device.ts"
+    local modem_types="$TARGET/types/modem-status.ts"
+    local device_status="$TARGET/components/dashboard/device-status.tsx"
+
+    [ -f "$about_sh" ] || fail "Target missing device/about.sh"
+    [ -f "$about_card" ] || fail "Target missing about-qmanager-card.tsx"
+    [ -f "$about_types" ] || fail "Target missing about-device.ts"
+    [ -f "$modem_types" ] || fail "Target missing modem-status.ts"
+    [ -f "$device_status" ] || fail "Target missing dashboard/device-status.tsx"
+
+    python3 - "$about_sh" "$about_card" "$about_types" "$modem_types" "$device_status" <<'INNERPY'
+from pathlib import Path
+import sys
+
+about_sh = Path(sys.argv[1])
+about_card = Path(sys.argv[2])
+about_types = Path(sys.argv[3])
+modem_types = Path(sys.argv[4])
+device_status = Path(sys.argv[5])
+
+text = about_sh.read_text()
+if "sys_qmanager_version=" not in text:
+    marker = "# =============================================================================\n# 5. Collect public IP results (wait for background jobs, bounded by timeout)\n"
+    if marker not in text:
+        raise SystemExit("about public IP marker not found")
+    version_block = '''sys_qmanager_version=$(cat /etc/qmanager/VERSION 2>/dev/null | tr -d '[:space:]')
+sys_qmanager_version="${sys_qmanager_version:-unknown}"
+
+'''
+    text = text.replace(marker, version_block + marker, 1)
+if '--arg qmver "$sys_qmanager_version"' not in text:
+    text = text.replace(
+        '    --arg owrt "$sys_openwrt" \\\n',
+        '    --arg owrt "$sys_openwrt" \\\n    --arg qmver "$sys_qmanager_version" \\\n',
+        1,
+    )
+if 'qmanager_version: $qmver' not in text:
+    text = text.replace(
+        '            openwrt_version: $owrt\n',
+        '            openwrt_version: $owrt,\n            qmanager_version: $qmver\n',
+        1,
+    )
+about_sh.write_text(text)
+
+text = about_types.read_text()
+if "qmanager_version: string;" not in text:
+    text = text.replace("    openwrt_version: string;\n", "    openwrt_version: string;\n    qmanager_version: string;\n", 1)
+about_types.write_text(text)
+
+text = about_card.read_text()
+text = text.replace("{packageJson.version}", "{data?.system.qmanager_version || packageJson.version}")
+about_card.write_text(text)
+
+text = modem_types.read_text()
+if "qmanager_version: string;" not in text:
+    text = text.replace(
+        '  /** Average modem temperature in °C across all available sensors (null if unavailable) */\n',
+        '  /** Installed QManager package version from /etc/qmanager/VERSION */\n  qmanager_version: string;\n  /** Average modem temperature in °C across all available sensors (null if unavailable) */\n',
+        1,
+    )
+modem_types.write_text(text)
+
+text = device_status.read_text()
+text = text.replace(
+    '{ label: "QManager Version", value: packageJson.version, mono: true },',
+    '{ label: "QManager Version", value: data?.qmanager_version || packageJson.version, mono: true },',
+)
+device_status.write_text(text)
+INNERPY
+
+    grep -q "sys_qmanager_version=" "$about_sh" \
+        || fail "Could not apply Casa about-page QManager version patch"
+    grep -q "qmanager_version: string;" "$modem_types" \
+        || fail "Could not apply Casa dashboard QManager version type patch"
+    grep -q "data?.qmanager_version" "$device_status" \
+        || fail "Could not apply Casa dashboard QManager version display patch"
+}
+
+patch_casa_display_name() {
+    local settings_sh="$TARGET/scripts/www/cgi-bin/quecmanager/system/settings.sh"
+    [ -f "$settings_sh" ] || fail "Target missing system/settings.sh"
+
+    python3 - "$settings_sh" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+old = '''    # --- Hostname (display name) ---
+    hostname=$(uci -q get system.@system[0].hostname 2>/dev/null)
+    [ -z "$hostname" ] && hostname="OpenWrt"
+'''
+new = '''    # --- Hostname (display name) ---
+    hostname=$(uci -q get system.@system[0].hostname 2>/dev/null)
+    case "$hostname" in
+        ""|OpenWrt|openwrt) hostname="Casa CFW-3212" ;;
+    esac
+'''
+if "hostname=\"Casa CFW-3212\"" not in text:
+    if old in text:
+        text = text.replace(old, new)
+    else:
+        marker = '''    # --- Hostname (display name) ---
+    hostname=$(sys_get_hostname)
+'''
+        replacement = '''    # --- Hostname (display name) ---
+    hostname=$(sys_get_hostname)
+    case "$hostname" in
+        ""|OpenWrt|openwrt) hostname="Casa CFW-3212" ;;
+    esac
+'''
+        if marker not in text:
+            raise SystemExit("hostname marker not found")
+        text = text.replace(marker, replacement, 1)
+path.write_text(text)
+PY
+
+    grep -q 'hostname="Casa CFW-3212"' "$settings_sh" \
+        || fail "Could not apply Casa display name fallback patch"
+}
+
+patch_casa_reboot() {
+    local reboot_sh="$TARGET/scripts/www/cgi-bin/quecmanager/system/reboot.sh"
+    [ -f "$reboot_sh" ] || fail "Target missing system/reboot.sh"
+
+    python3 - "$reboot_sh" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+
+old = '''        qlog_info "Device reboot requested via system menu"
+        echo '{"success":true}'
+        _reboot_cmd="reboot"
+        command -v run_reboot >/dev/null 2>&1 && _reboot_cmd="run_reboot"
+        ( ( sleep 1 && $_reboot_cmd ) </dev/null >/dev/null 2>&1 & )
+        exit 0
+'''
+new = '''        qlog_info "Device reboot requested via system menu"
+        echo '{"success":true}'
+        (
+            sleep 1
+            if command -v rdb_set >/dev/null 2>&1 && command -v rdb_get >/dev/null 2>&1 && rdb_get service.system.reset >/dev/null 2>&1; then
+                rdb_set service.system.reset_reason "QManager UI reboot"
+                rdb_set service.system.reset.delay 5
+                rdb_set service.system.reset 1
+            else
+                _reboot_cmd="reboot"
+                command -v run_reboot >/dev/null 2>&1 && _reboot_cmd="run_reboot"
+                $_reboot_cmd
+            fi
+        ) </dev/null >/dev/null 2>&1 &
+        exit 0
+'''
+if "service.system.reset_reason" not in text:
+    if old not in text:
+        raise SystemExit("reboot command block not found")
+    text = text.replace(old, new, 1)
+
+path.write_text(text)
+PY
+
+    grep -q 'service.system.reset_reason "QManager UI reboot"' "$reboot_sh" \
+        || fail "Could not apply Casa RDB reboot patch"
+    grep -q 'service.system.reset.delay 5' "$reboot_sh" \
+        || fail "Could not apply Casa RDB reboot delay"
 }
 
 patch_package_version() {
@@ -955,7 +1213,11 @@ apply_casa_overlays() {
     write_update_cfw3212
 
     patch_qmanager_poller
+    patch_disable_profile_auto_apply
     patch_logging_cfw3212
+    patch_qmanager_display_version
+    patch_casa_display_name
+    patch_casa_reboot
 
     write_qmanager_update_cfw3212
     write_qmanager_auto_update_cfw3212

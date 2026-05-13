@@ -1,7 +1,7 @@
 # Casa CFW-3212 QManager GUI Button OTA Update Converter
 
 This folder contains the repeatable workflow for turning an upstream
-`dr-dolomite/QManager` tag into a Casa CFW-3212 package with a Casa-safe
+`dr-dolomite/QManager-RM520N` tag into a Casa CFW-3212 package with a Casa-safe
 manual OTA-style update flow wired to the QManager GUI **Software Update**
 button.
 
@@ -31,7 +31,7 @@ bash qmanager/casa_conversion/build-casa-port.sh --version latest --skip-build
 ```
 
 The `latest` resolver intentionally ignores non-app releases such as
-`language-packs`; it only selects tags like `v0.1.23` when the release contains
+`language-packs`; it only selects tags like `v0.1.10` when the release contains
 both `qmanager.tar.gz` and `sha256sum.txt`.
 
 If Node or Bun are not on `PATH`, the script still fetches, patches, and checks

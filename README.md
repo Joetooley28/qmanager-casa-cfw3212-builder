@@ -13,10 +13,10 @@ checked out into the existing local workspace layout.
 ## What This Variant Adds
 
 - Targets the GUI button update flow: **System Settings -> Software Update**.
-- Uses upstream `dr-dolomite/QManager`.
+- Uses upstream `dr-dolomite/QManager-RM520N`.
 - Supports `--version latest`, filtering out non-app releases such as
   `language-packs`.
-- Generates Casa release versions such as `v0.1.23-cfw3212.1`.
+- Generates Casa release versions such as `v0.1.10-cfw3212.1`.
 - Makes the QManager GUI update button check Casa package releases, download
   converted Casa tarballs, verify SHA-256, and install only after user
   confirmation.
