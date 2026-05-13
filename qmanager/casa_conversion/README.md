@@ -1,7 +1,8 @@
-# Casa CFW-3212 QManager Conversion Workflow
+# Casa CFW-3212 QManager OTA GUI Update Conversion Workflow
 
 This folder contains the repeatable workflow for turning an upstream
-`dr-dolomite/QManager` tag into a Casa CFW-3212 package.
+`dr-dolomite/QManager` tag into a Casa CFW-3212 package with a Casa-safe
+manual OTA update flow in the QManager GUI.
 
 The converter uses `qmanager/qmanager_work_v0.1.9_casa` as the current Casa
 reference patch set. It fetches upstream into a new versioned work folder,
@@ -80,7 +81,7 @@ the reference tree does not already provide a newer Casa overlay.
 - Casa IP Passthrough frontend: Casa-locked page with Ethernet
   enable/disable only.
 - Casa IP Passthrough backend: RDB `ip_handover`, no QMAP/QCFG writes.
-- Casa-safe manual software updater:
+- Casa-safe manual OTA GUI software updater:
   - checks the Casa package repo releases, not upstream QManager;
   - downloads converted `qmanager-cfw3212-<version>.tar.gz` packages;
   - requires the matching `.sha256` asset and verifies it with SHA-256;
