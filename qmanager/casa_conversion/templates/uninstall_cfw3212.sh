@@ -12,15 +12,24 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-for svc in lighttpd qmanager-poller qmanager-ping qmanager-firewall qmanager-setup qmanager-ttl qmanager-mtu qmanager-imei-check qmanager-watchcat qmanager-tower-failover; do
+for svc in lighttpd \
+    qmanager-poller qmanager-ping qmanager-firewall qmanager-setup \
+    qmanager-ttl qmanager-mtu qmanager-imei-check qmanager-watchcat \
+    qmanager-tower-failover qmanager-traffic qmanager-console \
+    qmanager-discord qmanager-ethernet qmanager-cfun-fix \
+    qmanager_tailscale_install; do
     systemctl disable --now "$svc.service" 2>/dev/null || true
     rm -f "/etc/systemd/system/$svc.service"
     rm -f "/etc/systemd/system/multi-user.target.wants/$svc.service"
 done
+find /etc/systemd/system /etc/systemd/system/multi-user.target.wants \
+    -maxdepth 1 \( -name 'qmanager*.service' -o -name 'qmanager_*.service' \) \
+    -exec rm -f {} \; 2>/dev/null || true
 systemctl daemon-reload 2>/dev/null || true
 
 rm -rf /usrdata/qmanager
-rm -f /usrdata/bin/qmanager_* /usrdata/bin/atcli_smd11 /usrdata/bin/sms_tool
+rm -f /usrdata/bin/qmanager_* /usrdata/bin/qcmd /usrdata/bin/atcli_smd11 /usrdata/bin/sms_tool
+rm -rf /tmp/qmanager_install /tmp/qmanager_update /tmp/qmanager_status.json /tmp/qmanager_status.json.tmp 2>/dev/null || true
 
 if [ "$PURGE" = "1" ]; then
     rm -rf /etc/qmanager /usrdata/opt
