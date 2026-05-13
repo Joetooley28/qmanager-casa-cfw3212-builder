@@ -1,21 +1,25 @@
-# Casa CFW-3212 QManager OTA GUI Update Conversion Workflow
+# Casa CFW-3212 QManager GUI Button OTA Update Converter
 
-This repository contains the OTA GUI update-enabled Casa CFW-3212 conversion
-workflow. It is intentionally separate from the original standalone converter
-repository so the original converter can remain unchanged.
+This repository is specifically for building Casa CFW-3212 QManager packages
+that make the **Software Update** button in the QManager GUI perform a
+Casa-safe OTA-style package update.
+
+It is intentionally separate from the original standalone converter repository
+so the original converter can remain unchanged.
 
 The files live under `qmanager/casa_conversion/` and are meant to be copied or
 checked out into the existing local workspace layout.
 
 ## What This Variant Adds
 
+- Targets the GUI button update flow: **System Settings -> Software Update**.
 - Uses upstream `dr-dolomite/QManager`.
 - Supports `--version latest`, filtering out non-app releases such as
   `language-packs`.
 - Generates Casa release versions such as `v0.1.23-cfw3212.1`.
-- Adds a manual-only OTA update flow in the QManager GUI that checks Casa
-  package releases, downloads converted Casa tarballs, verifies SHA-256, and
-  installs only after user confirmation.
+- Makes the QManager GUI update button check Casa package releases, download
+  converted Casa tarballs, verify SHA-256, and install only after user
+  confirmation.
 - Keeps `qmanager_auto_update` disabled for Casa CFW-3212.
 
 ## Basic Usage
