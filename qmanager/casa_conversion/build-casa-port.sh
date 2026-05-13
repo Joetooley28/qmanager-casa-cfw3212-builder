@@ -917,13 +917,7 @@ prepare_target() {
 apply_casa_overlays() {
     log "Applying Casa CFW-3212 overlays from $REF_DIR"
 
-    if [ -f "$REF_DIR/build.sh" ] \
-        && grep -q "install_cfw3212.sh" "$REF_DIR/build.sh" \
-        && ! grep -q "install_rm520n.sh.*STAGING\\|STAGING.*install_rm520n.sh" "$REF_DIR/build.sh"; then
-        copy_file "build.sh"
-    else
-        patch_build_script
-    fi
+    patch_build_script
 
     copy_file_or_fallback "install_cfw3212.sh" "$TEMPLATE_DIR/install_cfw3212.sh"
     patch_installer_version_cfw3212
