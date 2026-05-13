@@ -1,0 +1,205 @@
+#!/bin/sh
+# Casa CFW-3212 manual updater worker.
+# Downloads, verifies, installs, and reboots only for converted Casa packages.
+
+LOG_FILE="/tmp/qmanager_update.log"
+STATUS_FILE="/tmp/qmanager_update.json"
+PID_FILE="/tmp/qmanager_update.pid"
+VERSION_FILE="/etc/qmanager/VERSION"
+UPDATES_DIR="/etc/qmanager/updates"
+STAGED_TARBALL="/tmp/qmanager_staged.tar.gz"
+STAGED_VERSION="/tmp/qmanager_staged_version"
+PACKAGE_REPO="${QMANAGER_CFW3212_REPO:-Joetooley28/qmanager-casa-cfw3212-package}"
+
+[ -f /usrdata/qmanager/lib/platform.sh ] && . /usrdata/qmanager/lib/platform.sh
+
+pid_alive_fallback() { [ -n "$1" ] && [ -d "/proc/$1" ]; }
+command -v pid_alive >/dev/null 2>&1 || pid_alive() { pid_alive_fallback "$1"; }
+
+svc_stop_safe() {
+    if command -v svc_stop >/dev/null 2>&1; then
+        svc_stop "$1" >/dev/null 2>&1 || true
+    else
+        systemctl stop "$1.service" >/dev/null 2>&1 || true
+    fi
+}
+
+log() { printf '[%s] %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null || date '+%s')" "$1" >> "$LOG_FILE"; }
+
+write_status() {
+    local status="$1" msg="$2" version="$3" size="$4"
+    jq -n \
+        --arg status "$status" \
+        --arg message "$msg" \
+        --arg version "$version" \
+        --arg size "$size" \
+        '{status: $status, message: $message, version: $version, size: $size}' \
+        > "$STATUS_FILE"
+}
+
+cleanup() {
+    rm -f "$PID_FILE"
+    rm -rf /tmp/qmanager_update_stage
+}
+
+die() {
+    log "ERROR: $1"
+    write_status "error" "$1" "${VERSION:-}" ""
+    cleanup
+    exit 1
+}
+
+get_current_version() {
+    if [ -f "$VERSION_FILE" ]; then
+        tr -d '[:space:]' < "$VERSION_FILE"
+    else
+        echo "0.0.0-cfw3212.0"
+    fi
+}
+
+http_download() {
+    local url="$1" dest="$2" timeout="${3:-180}"
+    if command -v curl >/dev/null 2>&1; then
+        curl -fL --connect-timeout 20 --max-time "$timeout" -o "$dest" "$url"
+    elif command -v wget >/dev/null 2>&1; then
+        wget -O "$dest" -T "$timeout" "$url"
+    elif command -v uclient-fetch >/dev/null 2>&1; then
+        uclient-fetch -qO "$dest" --timeout="$timeout" "$url"
+    else
+        return 1
+    fi
+}
+
+validate_tag() {
+    printf '%s' "$1" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+-cfw3212\.[0-9]+$'
+}
+
+strip_casa_suffix() {
+    printf '%s' "$1" | sed 's/-cfw3212\.[0-9][0-9]*$//'
+}
+
+asset_name_for_tag() {
+    local upstream
+    upstream="$(strip_casa_suffix "$1")"
+    printf 'qmanager-cfw3212-%s.tar.gz' "$upstream"
+}
+
+checksum_name_for_tag() {
+    local upstream
+    upstream="$(strip_casa_suffix "$1")"
+    printf 'qmanager-cfw3212-%s.sha256' "$upstream"
+}
+
+validate_release_url() {
+    local url="$1" tag="$2" name="$3"
+    [ "$url" = "https://github.com/$PACKAGE_REPO/releases/download/$tag/$name" ]
+}
+
+echo $$ > "$PID_FILE"
+trap cleanup EXIT INT TERM
+: > "$LOG_FILE"
+
+MODE="$1"
+log "Starting qmanager_update mode=$MODE"
+
+if [ "$MODE" = "download" ]; then
+    URL="$2"
+    CHECKSUM_URL="$3"
+    VERSION="$4"
+
+    validate_tag "$VERSION" || die "Invalid Casa release tag"
+    TAR_NAME="$(asset_name_for_tag "$VERSION")"
+    SHA_NAME="$(checksum_name_for_tag "$VERSION")"
+    validate_release_url "$URL" "$VERSION" "$TAR_NAME" || die "Invalid Casa package URL"
+    validate_release_url "$CHECKSUM_URL" "$VERSION" "$SHA_NAME" || die "Invalid Casa checksum URL"
+
+    work_dir="/tmp/qmanager_update_stage"
+    rm -rf "$work_dir"
+    mkdir -p "$work_dir" || die "Could not create update work directory"
+
+    write_status "downloading" "Downloading Casa QManager ${VERSION}..." "$VERSION" ""
+    log "Downloading $URL"
+    if ! http_download "$URL" "$work_dir/$TAR_NAME"; then
+        die "Download failed. Check the router internet connection."
+    fi
+
+    write_status "verifying" "Downloading and verifying SHA-256..." "$VERSION" ""
+    log "Downloading $CHECKSUM_URL"
+    if ! http_download "$CHECKSUM_URL" "$work_dir/$SHA_NAME" 30; then
+        die "Checksum file download failed. Refusing to install unverified package."
+    fi
+
+    if ! ( cd "$work_dir" && sha256sum -c "$SHA_NAME" >/dev/null 2>&1 ); then
+        die "SHA-256 mismatch. Refusing to install package."
+    fi
+    log "SHA-256 verified"
+
+    if ! tar tzf "$work_dir/$TAR_NAME" >/dev/null 2>&1; then
+        die "Downloaded Casa package is corrupt."
+    fi
+    if ! tar tzf "$work_dir/$TAR_NAME" | grep -q '^qmanager_install/install_cfw3212.sh$'; then
+        die "Invalid Casa package: missing qmanager_install/install_cfw3212.sh"
+    fi
+    if ! tar tzf "$work_dir/$TAR_NAME" | grep -q '^qmanager_install/uninstall_cfw3212.sh$'; then
+        die "Invalid Casa package: missing qmanager_install/uninstall_cfw3212.sh"
+    fi
+
+    rm -f "$STAGED_TARBALL" "$STAGED_VERSION"
+    mv "$work_dir/$TAR_NAME" "$STAGED_TARBALL" || die "Could not stage tarball"
+    printf '%s\n' "$VERSION" > "$STAGED_VERSION"
+    local_size=$(du -k "$STAGED_TARBALL" 2>/dev/null | awk '{printf "%.1f MB", $1/1024}')
+    write_status "ready" "Download verified ($local_size)" "$VERSION" "$local_size"
+    log "Staged $VERSION ($local_size)"
+    rm -f "$PID_FILE"
+    trap - EXIT INT TERM
+    cleanup
+    exit 0
+fi
+
+if [ "$MODE" = "install_staged" ]; then
+    [ -f "$STAGED_TARBALL" ] || die "No staged tarball found. Download first."
+    [ -f "$STAGED_VERSION" ] || die "No staged version marker found."
+    VERSION=$(cat "$STAGED_VERSION" 2>/dev/null)
+    validate_tag "$VERSION" || die "Invalid staged Casa release tag"
+
+    if ! tar tzf "$STAGED_TARBALL" >/dev/null 2>&1; then
+        die "Staged Casa package is corrupt."
+    fi
+    if ! tar tzf "$STAGED_TARBALL" | grep -q '^qmanager_install/install_cfw3212.sh$'; then
+        die "Invalid staged package: missing Casa installer."
+    fi
+
+    write_status "installing" "Installing Casa QManager ${VERSION}..." "$VERSION" ""
+    current_ver=$(get_current_version)
+    mkdir -p "$UPDATES_DIR"
+    printf '%s\n' "$current_ver" > "$UPDATES_DIR/previous_version"
+    log "Saved previous version ($current_ver)"
+
+    svc_stop_safe qmanager-watchcat
+
+    cp "$STAGED_TARBALL" /tmp/qmanager.tar.gz || die "Could not prepare /tmp/qmanager.tar.gz"
+    rm -rf /tmp/qmanager_install
+    tar xzf /tmp/qmanager.tar.gz -C /tmp || die "Extraction failed"
+    [ -f /tmp/qmanager_install/install_cfw3212.sh ] || die "Casa installer not found after extraction"
+
+    log "Running install_cfw3212.sh"
+    if ! sh /tmp/qmanager_install/install_cfw3212.sh >> "$LOG_FILE" 2>&1; then
+        die "Installation failed. Check /tmp/qmanager_update.log."
+    fi
+
+    printf '%s\n' "$VERSION" > "$VERSION_FILE" 2>/dev/null || true
+    rm -f "$STAGED_TARBALL" "$STAGED_VERSION"
+    write_status "rebooting" "Rebooting device..." "$VERSION" ""
+    log "Install complete; rebooting"
+    rm -f "$PID_FILE"
+    trap - EXIT INT TERM
+    sleep 1
+    if command -v run_reboot >/dev/null 2>&1; then
+        run_reboot
+    else
+        reboot
+    fi
+    exit 0
+fi
+
+die "Unknown mode: $MODE"

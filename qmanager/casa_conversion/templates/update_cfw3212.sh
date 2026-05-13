@@ -1,0 +1,347 @@
+#!/bin/sh
+. /usrdata/qmanager/lib/cgi_base.sh
+. /usrdata/qmanager/lib/config.sh 2>/dev/null || true
+
+# Casa CFW-3212 manual updater.
+# Checks the Casa package repo, not upstream QManager, and only installs
+# verified converted Casa tarballs after explicit user action.
+
+qlog_init "cgi_system_update"
+cgi_headers
+cgi_handle_options
+
+PACKAGE_REPO="${QMANAGER_CFW3212_REPO:-Joetooley28/qmanager-casa-cfw3212-package}"
+VERSION_FILE="/etc/qmanager/VERSION"
+UPDATES_DIR="/etc/qmanager/updates"
+STATUS_FILE="/tmp/qmanager_update.json"
+PID_FILE="/tmp/qmanager_update.pid"
+STAGED_TARBALL="/tmp/qmanager_staged.tar.gz"
+STAGED_VERSION="/tmp/qmanager_staged_version"
+UPDATER="/usrdata/bin/qmanager_update"
+
+get_current_version() {
+    if [ -f "$VERSION_FILE" ]; then
+        tr -d '[:space:]' < "$VERSION_FILE"
+    else
+        echo "0.0.0-cfw3212.0"
+    fi
+}
+
+qm_update_get() {
+    if command -v qm_config_get >/dev/null 2>&1; then
+        qm_config_get update "$1" "$2"
+    else
+        echo "$2"
+    fi
+}
+
+qm_update_set() {
+    if command -v qm_config_set >/dev/null 2>&1; then
+        qm_config_set update "$1" "$2"
+    fi
+}
+
+ensure_update_config() {
+    command -v qm_config_init >/dev/null 2>&1 && qm_config_init || true
+}
+
+http_api_fetch() {
+    local url="$1" out_file="$2" header_file="$3" timeout="${4:-20}"
+    if command -v curl >/dev/null 2>&1; then
+        curl -sL --max-time "$timeout" -H "Accept: application/vnd.github+json" \
+            -o "$out_file" -D "$header_file" "$url" && return 0
+    fi
+    if command -v wget >/dev/null 2>&1; then
+        wget -qO "$out_file" -T "$timeout" "$url" 2>"$header_file" && return 0
+    fi
+    if command -v uclient-fetch >/dev/null 2>&1; then
+        uclient-fetch -qO "$out_file" --timeout="$timeout" "$url" 2>"$header_file" && return 0
+    fi
+    return 1
+}
+
+strip_casa_suffix() {
+    printf '%s' "$1" | sed 's/-cfw3212\.[0-9][0-9]*$//'
+}
+
+casa_build_number() {
+    case "$1" in
+        *-cfw3212.*) printf '%s' "${1##*-cfw3212.}" ;;
+        *) printf '0' ;;
+    esac
+}
+
+# Exit codes: 0 = $1 newer, 1 = same, 2 = $1 older.
+casa_version_compare() {
+    local a="$1" b="$2" a_base b_base a_build b_build
+    a_base="$(strip_casa_suffix "$a")"
+    b_base="$(strip_casa_suffix "$b")"
+    a_base="${a_base#v}"
+    b_base="${b_base#v}"
+    a_build="$(casa_build_number "$a")"
+    b_build="$(casa_build_number "$b")"
+
+    local a1 a2 a3 b1 b2 b3
+    IFS='.' read a1 a2 a3 <<EOF
+$a_base
+EOF
+    IFS='.' read b1 b2 b3 <<EOF
+$b_base
+EOF
+    a1=${a1:-0}; a2=${a2:-0}; a3=${a3:-0}
+    b1=${b1:-0}; b2=${b2:-0}; b3=${b3:-0}
+    [ "$a1" -gt "$b1" ] 2>/dev/null && return 0
+    [ "$a1" -lt "$b1" ] 2>/dev/null && return 2
+    [ "$a2" -gt "$b2" ] 2>/dev/null && return 0
+    [ "$a2" -lt "$b2" ] 2>/dev/null && return 2
+    [ "$a3" -gt "$b3" ] 2>/dev/null && return 0
+    [ "$a3" -lt "$b3" ] 2>/dev/null && return 2
+    [ "$a_build" -gt "$b_build" ] 2>/dev/null && return 0
+    [ "$a_build" -lt "$b_build" ] 2>/dev/null && return 2
+    return 1
+}
+
+check_lock() {
+    if [ -f "$PID_FILE" ]; then
+        local pid
+        pid=$(cat "$PID_FILE" 2>/dev/null)
+        if pid_alive "$pid"; then
+            cgi_error "update_in_progress" "An update is already in progress"
+            exit 0
+        fi
+        rm -f "$PID_FILE"
+    fi
+}
+
+asset_name_for_tag() {
+    local tag="$1" upstream
+    upstream="$(strip_casa_suffix "$tag")"
+    printf 'qmanager-cfw3212-%s.tar.gz' "$upstream"
+}
+
+checksum_name_for_tag() {
+    local tag="$1" upstream
+    upstream="$(strip_casa_suffix "$tag")"
+    printf 'qmanager-cfw3212-%s.sha256' "$upstream"
+}
+
+download_url_for_tag() {
+    local tag="$1"
+    printf 'https://github.com/%s/releases/download/%s/%s' \
+        "$PACKAGE_REPO" "$tag" "$(asset_name_for_tag "$tag")"
+}
+
+checksum_url_for_tag() {
+    local tag="$1"
+    printf 'https://github.com/%s/releases/download/%s/%s' \
+        "$PACKAGE_REPO" "$tag" "$(checksum_name_for_tag "$tag")"
+}
+
+if [ "$REQUEST_METHOD" = "GET" ]; then
+    action=$(echo "$QUERY_STRING" | sed -n 's/.*action=\([^&]*\).*/\1/p')
+
+    if [ "$action" = "status" ]; then
+        if [ -f "$STATUS_FILE" ]; then
+            cat "$STATUS_FILE"
+        else
+            jq -n '{"status":"idle"}'
+        fi
+        exit 0
+    fi
+
+    ensure_update_config
+    current_version=$(get_current_version)
+    include_prerelease=$(qm_update_get include_prerelease 1)
+    auto_time=$(qm_update_get auto_update_time "03:00")
+
+    api_url="https://api.github.com/repos/$PACKAGE_REPO/releases"
+    tmp_body="/tmp/qm_cfw3212_update_api_body.json"
+    tmp_headers="/tmp/qm_cfw3212_update_api_headers.txt"
+    rm -f "$tmp_body" "$tmp_headers"
+
+    if ! http_api_fetch "$api_url" "$tmp_body" "$tmp_headers"; then
+        rm -f "$tmp_body" "$tmp_headers"
+        jq -n \
+            --arg cv "$current_version" \
+            --arg auto_time "$auto_time" \
+            '{
+                success: true, current_version: $cv,
+                latest_version: null, update_available: false,
+                changelog: null, current_changelog: null,
+                download_url: null, download_size: null,
+                available_versions: [], download_state: null,
+                include_prerelease: true,
+                auto_update_enabled: false,
+                auto_update_time: $auto_time,
+                check_error: "Unable to check Casa package releases. Confirm the package repo is public and the router has internet."
+            }'
+        exit 0
+    fi
+
+    if grep -qi "403 Forbidden\|HTTP/[0-9.]* 403" "$tmp_headers" 2>/dev/null; then
+        rm -f "$tmp_body" "$tmp_headers"
+        jq -n \
+            --arg cv "$current_version" \
+            --arg auto_time "$auto_time" \
+            '{
+                success: true, current_version: $cv,
+                latest_version: null, update_available: false,
+                changelog: null, current_changelog: null,
+                download_url: null, download_size: null,
+                available_versions: [], download_state: null,
+                include_prerelease: true,
+                auto_update_enabled: false,
+                auto_update_time: $auto_time,
+                check_error: "GitHub rate limit or access error while checking Casa package releases."
+            }'
+        exit 0
+    fi
+
+    api_response=$(cat "$tmp_body" 2>/dev/null)
+    rm -f "$tmp_body" "$tmp_headers"
+
+    # Only Casa package releases are considered installable.
+    # language-packs and upstream QManager assets are intentionally ignored.
+    casa_filter='[
+      .[]
+      | select(.draft == false)
+      | select(.tag_name | test("^v[0-9]+\\.[0-9]+\\.[0-9]+-cfw3212\\.[0-9]+$"))
+      | . as $rel
+      | ($rel.tag_name | sub("-cfw3212\\.[0-9]+$"; "")) as $upstream
+      | ("qmanager-cfw3212-" + $upstream + ".tar.gz") as $tar
+      | ("qmanager-cfw3212-" + $upstream + ".sha256") as $sha
+      | select(any($rel.assets[]?; .name == $tar))
+      | select(any($rel.assets[]?; .name == $sha))
+    ]'
+
+    releases=$(printf '%s' "$api_response" | jq "$casa_filter" 2>/dev/null)
+    [ -n "$releases" ] || releases="[]"
+
+    latest_tag=$(printf '%s' "$releases" | jq -r '.[0].tag_name // empty')
+    changelog=$(printf '%s' "$releases" | jq -r '.[0].body // empty')
+    current_changelog=$(printf '%s' "$releases" | jq -r --arg cv "$current_version" '[ .[] | select(.tag_name == $cv) ][0].body // empty')
+
+    download_state="null"
+    if [ -f "$PID_FILE" ]; then
+        pid=$(cat "$PID_FILE" 2>/dev/null)
+        if pid_alive "$pid" && [ -f "$STATUS_FILE" ]; then
+            download_state=$(cat "$STATUS_FILE" 2>/dev/null)
+        fi
+    elif [ -f "$STAGED_TARBALL" ] && [ -f "$STAGED_VERSION" ]; then
+        staged_ver=$(cat "$STAGED_VERSION" 2>/dev/null)
+        staged_size=$(du -k "$STAGED_TARBALL" 2>/dev/null | awk '{printf "%.1f MB", $1/1024}')
+        download_state=$(jq -n \
+            --arg status "ready" \
+            --arg version "$staged_ver" \
+            --arg message "Download verified ($staged_size)" \
+            --arg size "$staged_size" \
+            '{status: $status, version: $version, message: $message, size: $size}')
+    fi
+
+    available_versions=$(printf '%s' "$releases" | jq \
+        --arg cv "$current_version" \
+        '[ .[] | (.tag_name | sub("-cfw3212\\.[0-9]+$"; "")) as $upstream | {
+            tag: .tag_name,
+            has_assets: true,
+            asset_size: (([ .assets[] | select(.name == ("qmanager-cfw3212-" + $upstream + ".tar.gz")) ][0].size // 0) / 1048576 * 10 | floor / 10 | tostring + " MB"),
+            is_current: (.tag_name == $cv)
+        }]')
+
+    download_url=""
+    download_size=""
+    if [ -n "$latest_tag" ]; then
+        download_url="$(download_url_for_tag "$latest_tag")"
+        latest_upstream="$(strip_casa_suffix "$latest_tag")"
+        latest_asset="qmanager-cfw3212-${latest_upstream}.tar.gz"
+        download_size=$(printf '%s' "$releases" | jq -r --arg asset "$latest_asset" '.[0].assets[] | select(.name == $asset) | (.size / 1048576 * 10 | floor / 10 | tostring + " MB")' 2>/dev/null | head -n1)
+    fi
+
+    update_available="false"
+    if [ -n "$latest_tag" ]; then
+        casa_version_compare "$latest_tag" "$current_version"
+        [ "$?" = "0" ] && update_available="true"
+    fi
+
+    jq -n \
+        --arg cv "$current_version" \
+        --arg lv "$latest_tag" \
+        --argjson ua "$update_available" \
+        --arg cl "$changelog" \
+        --arg ccl "$current_changelog" \
+        --arg dl "$download_url" \
+        --arg ds "$download_size" \
+        --argjson av "$available_versions" \
+        --argjson ds_obj "$download_state" \
+        --arg auto_time "$auto_time" \
+        '{
+            success: true,
+            current_version: $cv,
+            latest_version: (if $lv == "" then null else $lv end),
+            update_available: $ua,
+            changelog: (if $cl == "" then null else $cl end),
+            current_changelog: (if $ccl == "" then null else $ccl end),
+            download_url: (if $dl == "" then null else $dl end),
+            download_size: (if $ds == "" then null else $ds end),
+            available_versions: $av,
+            download_state: $ds_obj,
+            include_prerelease: true,
+            auto_update_enabled: false,
+            auto_update_time: $auto_time,
+            check_error: null
+        }'
+    exit 0
+fi
+
+if [ "$REQUEST_METHOD" = "POST" ]; then
+    cgi_read_post
+    ACTION=$(printf '%s' "$POST_DATA" | jq -r '.action // empty')
+    [ -n "$ACTION" ] || { cgi_error "missing_action" "action field is required"; exit 0; }
+
+    if [ "$ACTION" = "save_prerelease" ]; then
+        qm_update_set include_prerelease 1
+        cgi_success
+        exit 0
+    fi
+
+    if [ "$ACTION" = "save_auto_update" ]; then
+        cgi_error "auto_update_disabled_on_cfw3212" "Automatic updates are disabled in the Casa CFW-3212 build."
+        exit 0
+    fi
+
+    if [ "$ACTION" = "download" ]; then
+        check_lock
+        version=$(printf '%s' "$POST_DATA" | jq -r '.version // empty')
+        if ! printf '%s' "$version" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+-cfw3212\.[0-9]+$'; then
+            cgi_error "invalid_version" "Version must be a Casa CFW-3212 release tag."
+            exit 0
+        fi
+        download_url="$(download_url_for_tag "$version")"
+        checksum_url="$(checksum_url_for_tag "$version")"
+        jq -n '{"success":true,"status":"starting"}'
+        ( "$UPDATER" download "$download_url" "$checksum_url" "$version" </dev/null >>/tmp/qmanager_update.log 2>&1 & )
+        exit 0
+    fi
+
+    if [ "$ACTION" = "install_staged" ]; then
+        check_lock
+        [ -f "$STAGED_TARBALL" ] || { cgi_error "no_staged" "No staged download found. Download first."; exit 0; }
+        jq -n '{"success":true,"status":"starting"}'
+        ( "$UPDATER" install_staged </dev/null >>/tmp/qmanager_update.log 2>&1 & )
+        exit 0
+    fi
+
+    if [ "$ACTION" = "install" ]; then
+        cgi_error "unsupported_on_cfw3212" "Use the Casa two-step download and install flow."
+        exit 0
+    fi
+
+    if [ "$ACTION" = "rollback" ]; then
+        cgi_error "unsupported_on_cfw3212" "Select an older Casa release from Version Management instead."
+        exit 0
+    fi
+
+    cgi_error "unknown_action" "Unknown action: $ACTION"
+    exit 0
+fi
+
+cgi_method_not_allowed

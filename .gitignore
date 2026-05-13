@@ -1,0 +1,22 @@
+# Generated QManager work trees and fetch caches
+qmanager/qmanager_work*/
+qmanager/.casa_fetch/
+
+# Build outputs and dependencies
+qmanager-build/
+node_modules/
+out/
+.next/
+*.tar.gz
+*.ipk
+bun.lockb
+
+# Private/local operational notes and captures
+
+# Secrets and local machine state
+.env
+.env.*
+*.key
+*.pem
+*.pub
+.ssh/
