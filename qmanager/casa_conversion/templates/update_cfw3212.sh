@@ -151,7 +151,7 @@ if [ "$REQUEST_METHOD" = "GET" ]; then
 
     ensure_update_config
     current_version=$(get_current_version)
-    include_prerelease=$(qm_update_get include_prerelease 1)
+    include_prerelease=$(qm_update_get include_prerelease 0)
     auto_time=$(qm_update_get auto_update_time "03:00")
 
     api_url="https://api.github.com/repos/$PACKAGE_REPO/releases"
@@ -170,7 +170,7 @@ if [ "$REQUEST_METHOD" = "GET" ]; then
                 changelog: null, current_changelog: null,
                 download_url: null, download_size: null,
                 available_versions: [], download_state: null,
-                include_prerelease: true,
+                include_prerelease: false,
                 auto_update_enabled: false,
                 auto_update_time: $auto_time,
                 check_error: "Unable to check Casa package releases. Confirm the package repo is public and the router has internet."
@@ -189,7 +189,7 @@ if [ "$REQUEST_METHOD" = "GET" ]; then
                 changelog: null, current_changelog: null,
                 download_url: null, download_size: null,
                 available_versions: [], download_state: null,
-                include_prerelease: true,
+                include_prerelease: false,
                 auto_update_enabled: false,
                 auto_update_time: $auto_time,
                 check_error: "GitHub rate limit or access error while checking Casa package releases."
@@ -216,6 +216,10 @@ if [ "$REQUEST_METHOD" = "GET" ]; then
 
     releases=$(printf '%s' "$api_response" | jq "$casa_filter" 2>/dev/null)
     [ -n "$releases" ] || releases="[]"
+    if [ "$include_prerelease" != "1" ]; then
+        releases=$(printf '%s' "$releases" | jq '[ .[] | select(.prerelease == false) ]' 2>/dev/null)
+        [ -n "$releases" ] || releases="[]"
+    fi
 
     latest_tag=$(printf '%s' "$releases" | jq -r '.[0].tag_name // empty')
     changelog=$(printf '%s' "$releases" | jq -r '.[0].body // empty')
@@ -272,6 +276,7 @@ if [ "$REQUEST_METHOD" = "GET" ]; then
         --arg ds "$download_size" \
         --argjson av "$available_versions" \
         --argjson ds_obj "$download_state" \
+        --argjson include_prerelease_bool "$( [ "$include_prerelease" = "1" ] && echo true || echo false )" \
         --arg auto_time "$auto_time" \
         '{
             success: true,
@@ -284,7 +289,7 @@ if [ "$REQUEST_METHOD" = "GET" ]; then
             download_size: (if $ds == "" then null else $ds end),
             available_versions: $av,
             download_state: $ds_obj,
-            include_prerelease: true,
+            include_prerelease: $include_prerelease_bool,
             auto_update_enabled: false,
             auto_update_time: $auto_time,
             check_error: null
@@ -298,7 +303,12 @@ if [ "$REQUEST_METHOD" = "POST" ]; then
     [ -n "$ACTION" ] || { cgi_error "missing_action" "action field is required"; exit 0; }
 
     if [ "$ACTION" = "save_prerelease" ]; then
-        qm_update_set include_prerelease 1
+        enabled=$(printf '%s' "$POST_DATA" | jq -r '.enabled // false')
+        if [ "$enabled" = "true" ] || [ "$enabled" = "1" ]; then
+            qm_update_set include_prerelease 1
+        else
+            qm_update_set include_prerelease 0
+        fi
         cgi_success
         exit 0
     fi

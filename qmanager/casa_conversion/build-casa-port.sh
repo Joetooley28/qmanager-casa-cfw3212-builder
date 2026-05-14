@@ -1096,6 +1096,21 @@ patch_package_version() {
     fi
 }
 
+patch_update_defaults_cfw3212() {
+    local config="$TARGET/scripts/usr/lib/qmanager/config.sh"
+    [ -f "$config" ] || fail "config.sh missing in target"
+
+    if command -v perl >/dev/null 2>&1; then
+        perl -0pi -e 's/"include_prerelease":\s*1/"include_prerelease": 0/g' "$config"
+    else
+        sed -i.bak 's/"include_prerelease":[[:space:]]*1/"include_prerelease": 0/g' "$config"
+        rm -f "$config.bak"
+    fi
+
+    grep -q '"include_prerelease": 0' "$config" \
+        || fail "Could not set Casa prerelease default to disabled"
+}
+
 patch_installer_version_cfw3212() {
     local installer="$TARGET/install_cfw3212.sh"
     [ -f "$installer" ] || fail "Casa installer missing in target"
@@ -1223,6 +1238,7 @@ apply_casa_overlays() {
     write_qmanager_auto_update_cfw3212
 
     patch_package_version
+    patch_update_defaults_cfw3212
 }
 
 write_smoke_checklist() {
