@@ -266,49 +266,37 @@ info "Extracted to $EXTRACT_DIR"
 
 step "Patching path references for CFW-3212"
 
-renice -n 19 $$ >/dev/null 2>&1 || true
+_patch_file() {
+    sed -i \
+        -e 's|/usr/lib/qmanager|/usrdata/qmanager/lib|g' \
+        -e 's|/usr/bin/qmanager_|/usrdata/bin/qmanager_|g' \
+        -e 's|/usr/bin/qcmd\b|/usrdata/bin/qcmd|g' \
+        -e 's|/usr/bin/atcli_smd11|/usrdata/bin/atcli_smd11|g' \
+        -e 's|/usr/bin/sms_tool|/usrdata/bin/sms_tool|g' \
+        -e 's|/lib/systemd/system/multi-user\.target\.wants|/etc/systemd/system/multi-user.target.wants|g' \
+        -e 's|/lib/systemd/system|/etc/systemd/system|g' \
+        -e 's|/opt/bin/\([a-z]\)|/usrdata/opt/bin/\1|g' \
+        -e 's|/opt/sbin/\([a-z]\)|/usrdata/opt/sbin/\1|g' \
+        -e 's|/opt/etc/\([a-z]\)|/usrdata/opt/etc/\1|g' \
+        -e 's|/opt/lib/\([a-z]\)|/usrdata/opt/lib/\1|g' \
+        "$1" 2>/dev/null || true
+}
 
-# Walk all shell scripts and service files in the extracted tree
+# Walk shell scripts and service files — grep pre-filter skips files with no matches
 find "$SRC_SCRIPTS" -type f | while read -r f; do
     case "$f" in
-        *.sh|*.service|*.conf)
-            ;;
-        */usr/bin/*|*/usr/lib/qmanager/*)
-            ;;
-        *)
-            continue
-            ;;
+        *.sh|*.service|*.conf) ;;
+        */usr/bin/*|*/usr/lib/qmanager/*) ;;
+        *) continue ;;
     esac
-    sed -i \
-        -e 's|/usr/lib/qmanager|/usrdata/qmanager/lib|g' \
-        -e 's|/usr/bin/qmanager_|/usrdata/bin/qmanager_|g' \
-        -e 's|/usr/bin/qcmd\b|/usrdata/bin/qcmd|g' \
-        -e 's|/usr/bin/atcli_smd11|/usrdata/bin/atcli_smd11|g' \
-        -e 's|/usr/bin/sms_tool|/usrdata/bin/sms_tool|g' \
-        -e 's|/lib/systemd/system/multi-user\.target\.wants|/etc/systemd/system/multi-user.target.wants|g' \
-        -e 's|/lib/systemd/system|/etc/systemd/system|g' \
-        -e 's|/opt/bin/\([a-z]\)|/usrdata/opt/bin/\1|g' \
-        -e 's|/opt/sbin/\([a-z]\)|/usrdata/opt/sbin/\1|g' \
-        -e 's|/opt/etc/\([a-z]\)|/usrdata/opt/etc/\1|g' \
-        -e 's|/opt/lib/\([a-z]\)|/usrdata/opt/lib/\1|g' \
-        "$f" 2>/dev/null || true
+    grep -qF '/usr/' "$f" 2>/dev/null || grep -qF '/opt/' "$f" 2>/dev/null || continue
+    _patch_file "$f"
 done
 
-# Catch the usr/bin and usr/lib files (excluded from the case above)
+# Catch usr/bin, usr/lib, and www files — grep pre-filter is critical here (484 www files)
 find "$SRC_SCRIPTS/usr" "$SRC_SCRIPTS/www" -type f 2>/dev/null | while read -r f; do
-    sed -i \
-        -e 's|/usr/lib/qmanager|/usrdata/qmanager/lib|g' \
-        -e 's|/usr/bin/qmanager_|/usrdata/bin/qmanager_|g' \
-        -e 's|/usr/bin/qcmd\b|/usrdata/bin/qcmd|g' \
-        -e 's|/usr/bin/atcli_smd11|/usrdata/bin/atcli_smd11|g' \
-        -e 's|/usr/bin/sms_tool|/usrdata/bin/sms_tool|g' \
-        -e 's|/lib/systemd/system/multi-user\.target\.wants|/etc/systemd/system/multi-user.target.wants|g' \
-        -e 's|/lib/systemd/system|/etc/systemd/system|g' \
-        -e 's|/opt/bin/\([a-z]\)|/usrdata/opt/bin/\1|g' \
-        -e 's|/opt/sbin/\([a-z]\)|/usrdata/opt/sbin/\1|g' \
-        -e 's|/opt/etc/\([a-z]\)|/usrdata/opt/etc/\1|g' \
-        -e 's|/opt/lib/\([a-z]\)|/usrdata/opt/lib/\1|g' \
-        "$f" 2>/dev/null || true
+    grep -qF '/usr/' "$f" 2>/dev/null || grep -qF '/opt/' "$f" 2>/dev/null || continue
+    _patch_file "$f"
 done
 
 info "Path references patched"
@@ -536,8 +524,6 @@ disable_post_endpoint \
     "$SRC_SCRIPTS/www/cgi-bin/quecmanager/profiles/deactivate.sh" \
     "Profile deactivation is disabled on Casa CFW-3212"
 info "Casa modem/network write endpoints switched to read-only mode"
-
-renice -n 0 $$ >/dev/null 2>&1 || true
 
 # --- Users and groups --------------------------------------------------------
 
