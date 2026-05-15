@@ -818,6 +818,15 @@ done
 find "$CGI_DIR" -name "*.sh" -exec chmod 755 {} \; 2>/dev/null || true
 find "$LIB_DIR" -name "*.sh" -exec chmod 644 {} \; 2>/dev/null || true
 
+# --- Stop any existing services ----------------------------------------------
+
+step "Stopping existing QManager services"
+for svc in qmanager-poller qmanager-ping qmanager-setup qmanager-ttl qmanager-mtu lighttpd; do
+    systemctl stop "$svc" 2>/dev/null || true
+done
+pkill -f qmanager_poller 2>/dev/null || true
+sleep 1
+
 # --- Start services ----------------------------------------------------------
 
 step "Starting QManager services"
@@ -883,6 +892,10 @@ fi
 
 echo ""
 printf "${GREEN}${BOLD}QManager install complete.${NC}\n"
+echo ""
+printf "${YELLOW}  Note: lighttpd was restarted. If the web UI appears blank,${NC}\n"
+printf "${YELLOW}  do a hard refresh (Ctrl+F5 / Cmd+Shift+R) — do not wait.${NC}\n"
+printf "${YELLOW}  Your login session is preserved across updates.${NC}\n"
 echo ""
 echo "  Web UI:   https://<router-lan-ip>:9000/"
 echo "  Setup:    create the QManager password on first login"
