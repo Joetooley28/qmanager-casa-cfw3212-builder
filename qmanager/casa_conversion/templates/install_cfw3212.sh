@@ -266,6 +266,8 @@ info "Extracted to $EXTRACT_DIR"
 
 step "Patching path references for CFW-3212"
 
+renice -n 19 $$ >/dev/null 2>&1 || true
+
 # Walk all shell scripts and service files in the extracted tree
 find "$SRC_SCRIPTS" -type f | while read -r f; do
     case "$f" in
@@ -534,6 +536,8 @@ disable_post_endpoint \
     "$SRC_SCRIPTS/www/cgi-bin/quecmanager/profiles/deactivate.sh" \
     "Profile deactivation is disabled on Casa CFW-3212"
 info "Casa modem/network write endpoints switched to read-only mode"
+
+renice -n 0 $$ >/dev/null 2>&1 || true
 
 # --- Users and groups --------------------------------------------------------
 
@@ -848,6 +852,8 @@ else
 fi
 
 systemctl start qmanager-ping 2>/dev/null && info "qmanager-ping started" || true
+pkill -f qmanager_poller 2>/dev/null || true
+sleep 1
 systemctl start qmanager-poller 2>/dev/null \
     && info "qmanager-poller started" \
     || warn "qmanager-poller failed — check: systemctl status qmanager-poller"
