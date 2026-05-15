@@ -793,7 +793,7 @@ EOF
 sed -i 's/\r$//' "$SYSTEMD_DIR/lighttpd.service"
 info "lighttpd.service installed (overrides squashfs null-mask)"
 
-systemctl daemon-reload
+systemctl daemon-reload || true
 
 # Enable services
 for svc in lighttpd qmanager-firewall qmanager-setup qmanager-ping \
@@ -805,7 +805,7 @@ for svc in lighttpd qmanager-firewall qmanager-setup qmanager-ping \
     fi
 done
 
-systemctl daemon-reload
+systemctl daemon-reload || true
 
 # --- Fix permissions ---------------------------------------------------------
 
