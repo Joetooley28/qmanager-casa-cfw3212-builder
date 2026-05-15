@@ -189,6 +189,9 @@ if [ "$MODE" = "install_staged" ]; then
 
     printf '%s\n' "$VERSION" > "$VERSION_FILE" 2>/dev/null || true
     rm -f "$STAGED_TARBALL" "$STAGED_VERSION"
+    write_status "installing" "Installation complete; flushing flash writes..." "$VERSION" ""
+    log "Install complete; syncing flash writes"
+    sync
     write_status "rebooting" "Rebooting device..." "$VERSION" ""
     log "Install complete; rebooting"
     rm -f "$PID_FILE"
