@@ -73,6 +73,24 @@ The Casa installer entrypoints live in `templates/`:
 The converter copies these templates into each generated Casa work tree when
 the reference tree does not already provide a newer Casa overlay.
 
+## Installer update behavior
+
+The Casa installer is intentionally conservative about flash writes:
+
+- Frontend, CGI, library, and binary files are compared before copying, so
+  weekly updates skip unchanged files instead of deleting and rewriting the
+  whole static web tree.
+- Fresh installs still write the full tree once, but actual copies are paced
+  with periodic `sync` calls to keep UBIFS flash cleanup and the hardware
+  watchdog from being starved.
+- The terminal installer prints progress counters during large sync sections so
+  users can tell the modem is still working.
+- The GUI updater flushes flash writes with `sync` before triggering reboot.
+
+This behavior was added after live CFW-3212 testing showed that full rewrites of
+the 484-file frontend tree could temporarily saturate CPU, RAM, and swap on
+repeated installs.
+
 ## What gets applied
 
 - Casa installer and uninstaller: `install_cfw3212.sh`,
