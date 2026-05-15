@@ -115,6 +115,10 @@ sync_tree_changed() {
         total=$((total + 1))
         if copy_if_changed "$src" "$dst" "$mode"; then
             copied=$((copied + 1))
+            if [ $((copied % 50)) -eq 0 ]; then
+                sync
+                sleep 1
+            fi
         else
             skipped=$((skipped + 1))
         fi
