@@ -92,17 +92,21 @@ sync_tree_changed() {
     local dst_dir="$2"
     local preserve_prefix="${3:-}"
     local default_mode="${4:-}"
+    local label="${5:-files}"
     local list="/tmp/qmanager_sync_src.$$"
     local prune_list="/tmp/qmanager_sync_dst.$$"
-    local src rel dst mode total copied skipped pruned existing
+    local src rel dst mode total copied skipped pruned existing checked
 
     total=0
     copied=0
     skipped=0
     pruned=0
+    checked=0
 
     mkdir -p "$dst_dir"
     find "$src_dir" -type f > "$list"
+    total=$(wc -l < "$list" | tr -d ' ')
+    printf "  ... %s: checking %s files\n" "$label" "$total"
     while IFS= read -r src; do
         rel="${src#$src_dir/}"
         dst="$dst_dir/$rel"
@@ -112,18 +116,23 @@ sync_tree_changed() {
             *.json) [ -z "$mode" ] && mode=644 ;;
         esac
 
-        total=$((total + 1))
+        checked=$((checked + 1))
         if copy_if_changed "$src" "$dst" "$mode"; then
             copied=$((copied + 1))
             if [ $((copied % 50)) -eq 0 ]; then
+                printf "  ... %s: %s/%s checked, %s changed; flushing flash\n" "$label" "$checked" "$total" "$copied"
                 sync
                 sleep 1
             fi
         else
             skipped=$((skipped + 1))
         fi
+        if [ $((checked % 25)) -eq 0 ]; then
+            printf "  ... %s: %s/%s checked, %s changed, %s unchanged\n" "$label" "$checked" "$total" "$copied" "$skipped"
+        fi
     done < "$list"
     rm -f "$list"
+    printf "  ... %s: pruning stale files\n" "$label"
 
     find "$dst_dir" -type f > "$prune_list"
     while IFS= read -r existing; do
@@ -138,7 +147,7 @@ sync_tree_changed() {
     done < "$prune_list"
     rm -f "$prune_list"
 
-    SYNC_TOTAL=$total
+    SYNC_TOTAL=$checked
     SYNC_COPIED=$copied
     SYNC_SKIPPED=$skipped
     SYNC_PRUNED=$pruned
@@ -719,7 +728,7 @@ step "Installing libraries to $LIB_DIR"
 mkdir -p "$LIB_DIR"
 if [ -d "$SRC_SCRIPTS/usr/lib/qmanager" ]; then
     find "$SRC_SCRIPTS/usr/lib/qmanager" -name "*.sh" -exec sed -i 's/\r$//' {} \;
-    sync_tree_changed "$SRC_SCRIPTS/usr/lib/qmanager" "$LIB_DIR" "" 644
+    sync_tree_changed "$SRC_SCRIPTS/usr/lib/qmanager" "$LIB_DIR" "" 644 "libraries"
     info "$SYNC_TOTAL library files checked ($SYNC_COPIED changed, $SYNC_SKIPPED unchanged, $SYNC_PRUNED removed)"
 fi
 
@@ -734,14 +743,14 @@ done
 step "Installing frontend to $WWW_ROOT"
 
 mkdir -p "$WWW_ROOT/cgi-bin"
-sync_tree_changed "$SRC_FRONTEND" "$WWW_ROOT" "cgi-bin" 644
+sync_tree_changed "$SRC_FRONTEND" "$WWW_ROOT" "cgi-bin" 644 "frontend"
 info "$SYNC_TOTAL frontend files checked ($SYNC_COPIED changed, $SYNC_SKIPPED unchanged, $SYNC_PRUNED removed)"
 
 # --- CGI scripts -------------------------------------------------------------
 
 step "Installing CGI scripts"
 
-sync_tree_changed "$SRC_SCRIPTS/www/cgi-bin/quecmanager" "$CGI_DIR" "" 644
+sync_tree_changed "$SRC_SCRIPTS/www/cgi-bin/quecmanager" "$CGI_DIR" "" 644 "CGI scripts"
 info "$SYNC_TOTAL CGI files checked ($SYNC_COPIED changed, $SYNC_SKIPPED unchanged, $SYNC_PRUNED removed)"
 
 # --- lighttpd config ---------------------------------------------------------
