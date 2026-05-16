@@ -1,2 +1,2 @@
-source=unified public builder; supersedes standalone converter and GUI-OTA split
+source=unified public builder; supersedes old standalone/converter split
 base_original_commit=6487b24

@@ -1,13 +1,12 @@
 # Casa CFW-3212 QManager Builder
 
 This folder contains the repeatable workflow for turning an upstream
-`dr-dolomite/QManager-RM520N` tag into a Casa CFW-3212 package with a Casa-safe
-manual OTA-style update flow wired to the QManager GUI **Software Update**
-button.
+`dr-dolomite/QManager-RM520N` tag into a Casa CFW-3212 package with Casa-safe
+install and update behavior.
 
 The public GitHub Actions builder lives in this same repository at
 `.github/workflows/build-casa-package.yml`. The package/download repo remains
-`Joetooley28/qmanager-casa-cfw3212-package`; router install and GUI update flows
+`Joetooley28/qmanager-casa-cfw3212-package`; router install and update flows
 must continue to consume assets from that package repo only.
 
 The converter uses `qmanager/qmanager_work_v0.1.9_casa` as the current Casa
@@ -90,7 +89,7 @@ The Casa installer is intentionally conservative about flash writes:
   watchdog from being starved.
 - The terminal installer prints progress counters during large sync sections so
   users can tell the modem is still working.
-- The GUI updater flushes flash writes with `sync` before triggering reboot.
+- The update worker flushes flash writes with `sync` before triggering reboot.
 
 This behavior was added after live CFW-3212 testing showed that full rewrites of
 the 484-file frontend tree could temporarily saturate CPU, RAM, and swap on
@@ -105,11 +104,11 @@ repeated installs.
 - Casa IP Passthrough frontend: Casa-locked page with Ethernet
   enable/disable only.
 - Casa IP Passthrough backend: RDB `ip_handover`, no QMAP/QCFG writes.
-- Casa-safe manual OTA GUI button updater:
+- Casa-safe package update path:
   - checks the Casa package repo releases, not upstream QManager;
   - downloads converted `qmanager-cfw3212-<version>.tar.gz` packages;
   - requires the matching `.sha256` asset and verifies it with SHA-256;
-  - installs only after the user confirms in the GUI.
+  - installs only after user confirmation.
 - Auto-update remains disabled for Casa CFW-3212.
 - Boot profile auto-apply disabled in `qmanager_poller`.
 

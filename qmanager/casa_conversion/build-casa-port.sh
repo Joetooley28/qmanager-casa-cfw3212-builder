@@ -439,7 +439,7 @@ write_qmanager_update_cfw3212() {
         cp "$TEMPLATE_DIR/qmanager_update_cfw3212" "$TARGET/scripts/usr/bin/qmanager_update"
     else
         replace_with_stub "scripts/usr/bin/qmanager_update" \
-            "QManager OTA updates are disabled in this Casa CFW-3212 build."
+            "QManager package updates are disabled in this Casa CFW-3212 build."
     fi
     chmod 755 "$TARGET/scripts/usr/bin/qmanager_update"
 }
@@ -1060,7 +1060,7 @@ new = '''        qlog_info "Device reboot requested via system menu"
         (
             sleep 1
             if command -v rdb_set >/dev/null 2>&1 && command -v rdb_get >/dev/null 2>&1 && rdb_get service.system.reset >/dev/null 2>&1; then
-                rdb_set service.system.reset_reason "QManager UI reboot"
+                rdb_set service.system.reset_reason "QManager web reboot"
                 rdb_set service.system.reset.delay 5
                 rdb_set service.system.reset 1
             else
@@ -1079,7 +1079,7 @@ if "service.system.reset_reason" not in text:
 path.write_text(text)
 PY
 
-    grep -q 'service.system.reset_reason "QManager UI reboot"' "$reboot_sh" \
+    grep -q 'service.system.reset_reason "QManager web reboot"' "$reboot_sh" \
         || fail "Could not apply Casa RDB reboot patch"
     grep -q 'service.system.reset.delay 5' "$reboot_sh" \
         || fail "Could not apply Casa RDB reboot delay"
@@ -1284,9 +1284,9 @@ Build: @VERSION_NAME@-cfw3212.1
 - `grep -R 'QCFG="usbnet",' /usrdata/qmanager/www/cgi-bin/quecmanager /usrdata/bin || true`
 - `grep -R 'QMAP="MPDN_rule"' /usrdata/qmanager/www/cgi-bin/quecmanager /usrdata/bin || true`
 - `grep -R 'qmanager_auto_update' /var/spool/cron/crontabs /etc/crontabs 2>/dev/null || true`
-- Confirm Software Update checks Casa package releases only.
+- Confirm package update checks Casa package releases only.
 - Confirm auto-update remains disabled and no qmanager_auto_update cron entry exists.
-- Confirm GUI download verifies SHA-256 before the Install button is useful.
+- Confirm package download verifies SHA-256 before install is useful.
 - Confirm profile apply/save/delete endpoints report unsupported for POST.
 
 ## Rollback
