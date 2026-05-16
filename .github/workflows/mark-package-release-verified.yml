@@ -1,0 +1,102 @@
+name: Mark Casa package release verified
+
+on:
+  workflow_dispatch:
+    inputs:
+      casa_tag:
+        description: Casa package release tag, for example v0.1.10-cfw3212.12
+        required: true
+      verified_by:
+        description: Verification label/name
+        required: true
+        default: JTooley
+
+permissions:
+  contents: read
+
+env:
+  PACKAGE_REPO: Joetooley28/qmanager-casa-cfw3212-package
+
+jobs:
+  mark-verified:
+    name: Mark existing package release verified
+    runs-on: ubuntu-latest
+    environment: official-package-release
+    env:
+      GH_TOKEN: ${{ secrets.PACKAGE_RELEASE_TOKEN }}
+
+    steps:
+      - name: Mark release verified
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ "$GITHUB_REPOSITORY" != "Joetooley28/qmanager-casa-cfw3212-builder" ]; then
+            echo "Official release edits are only allowed from Joetooley28/qmanager-casa-cfw3212-builder." >&2
+            exit 1
+          fi
+
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "Missing required environment secret: PACKAGE_RELEASE_TOKEN" >&2
+            exit 1
+          fi
+
+          tag="${{ github.event.inputs.casa_tag }}"
+          verified_by="${{ github.event.inputs.verified_by }}"
+          today="$(date -u +%Y-%m-%d)"
+
+          case "$tag" in
+            v[0-9]*.[0-9]*.[0-9]*-cfw3212.[0-9]*) ;;
+            *)
+              echo "Invalid Casa package tag: $tag" >&2
+              exit 1
+              ;;
+          esac
+
+          release_json="$RUNNER_TEMP/release.json"
+          gh release view "$tag" --repo "$PACKAGE_REPO" --json name,body,isPrerelease > "$release_json"
+
+          title="$(
+            python3 - "$release_json" "$verified_by" <<'PY'
+          import json
+          import re
+          import sys
+          from pathlib import Path
+
+          data = json.loads(Path(sys.argv[1]).read_text())
+          verified_by = sys.argv[2]
+          title = data.get("name") or ""
+          title = title.replace(" (bot-built, unverified)", "")
+          title = re.sub(r" \(router-verified by [^)]+\)$", "", title)
+          print(f"{title} (router-verified by {verified_by})")
+          PY
+          )"
+
+          python3 - "$release_json" "$verified_by" "$today" > "$RUNNER_TEMP/release-notes-verified.md" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          data = json.loads(Path(sys.argv[1]).read_text())
+          verified_by = sys.argv[2]
+          today = sys.argv[3]
+          body = data.get("body") or ""
+
+          unverified = "Bot-built prerelease. Not yet live-router verified by JTooley."
+          verified = f"Router-verified by {verified_by} on {today}."
+
+          if unverified in body:
+              body = body.replace(unverified, verified)
+          elif verified not in body:
+              body = f"{verified}\n\n{body}".rstrip() + "\n"
+
+          print(body.rstrip())
+          PY
+
+          gh release edit "$tag" \
+            --repo "$PACKAGE_REPO" \
+            --title "$title" \
+            --notes-file "$RUNNER_TEMP/release-notes-verified.md" \
+            --prerelease
+
+          echo "Marked $tag as router-verified by $verified_by."

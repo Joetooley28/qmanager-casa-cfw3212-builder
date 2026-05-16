@@ -42,6 +42,10 @@ The generated prerelease title/body mark bot-published builds as
 preserve the upstream release link, SHA-256, internet install command,
 no-internet/manual install commands, and Casa safety scope.
 
+After live-router testing, run the **Mark Casa package release verified**
+workflow with the Casa release tag. It edits the existing package release title
+and notes in place without rebuilding or replacing the tested assets.
+
 ## Basic Usage
 
 ```sh
