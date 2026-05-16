@@ -1,11 +1,13 @@
-# Casa CFW-3212 QManager GUI Button OTA Update Converter
+# Casa CFW-3212 QManager Builder
 
-This repository is specifically for building Casa CFW-3212 QManager packages
-that make the **Software Update** button in the QManager GUI perform a
-Casa-safe OTA-style package update.
+This repository contains the public Casa CFW-3212 QManager converter, builder,
+and GitHub Actions workflow.
 
-It is intentionally separate from the original standalone converter repository
-so the original converter can remain unchanged.
+It is the source of truth for building packages that are published to:
+
+```text
+Joetooley28/qmanager-casa-cfw3212-package
+```
 
 The files live under `qmanager/casa_conversion/` and are meant to be copied or
 checked out into the existing local workspace layout.
@@ -21,6 +23,23 @@ checked out into the existing local workspace layout.
   converted Casa tarballs, verify SHA-256, and install only after user
   confirmation.
 - Keeps `qmanager_auto_update` disabled for Casa CFW-3212.
+
+## GitHub Actions
+
+The workflow lives at:
+
+```text
+.github/workflows/build-casa-package.yml
+```
+
+Default runs build downloadable artifacts only. Publishing official package
+repo prereleases requires `create_release=true`, `dry_run=false`, and approval
+of the protected `official-package-release` environment before the package
+release token is exposed.
+
+The generated release notes preserve the upstream release link, SHA-256,
+internet install command, no-internet/manual install commands, and Casa safety
+scope.
 
 ## Basic Usage
 

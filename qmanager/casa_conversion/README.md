@@ -1,9 +1,14 @@
-# Casa CFW-3212 QManager GUI Button OTA Update Converter
+# Casa CFW-3212 QManager Builder
 
 This folder contains the repeatable workflow for turning an upstream
 `dr-dolomite/QManager-RM520N` tag into a Casa CFW-3212 package with a Casa-safe
 manual OTA-style update flow wired to the QManager GUI **Software Update**
 button.
+
+The public GitHub Actions builder lives in this same repository at
+`.github/workflows/build-casa-package.yml`. The package/download repo remains
+`Joetooley28/qmanager-casa-cfw3212-package`; router install and GUI update flows
+must continue to consume assets from that package repo only.
 
 The converter uses `qmanager/qmanager_work_v0.1.9_casa` as the current Casa
 reference patch set. It fetches upstream into a new versioned work folder,

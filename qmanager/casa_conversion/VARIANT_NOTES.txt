@@ -1,2 +1,2 @@
-source=local implementation split from qmanager/casa_conversion before restoring standalone converter
+source=unified public builder; supersedes standalone converter and GUI-OTA split
 base_original_commit=6487b24
