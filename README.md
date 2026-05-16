@@ -37,9 +37,10 @@ repo prereleases requires `create_release=true`, `dry_run=false`, and approval
 of the protected `official-package-release` environment before the package
 release token is exposed.
 
-The generated release notes preserve the upstream release link, SHA-256,
-internet install command, no-internet/manual install commands, and Casa safety
-scope.
+The generated prerelease title/body mark bot-published builds as
+`bot-built, unverified` until live-router testing is complete. Release notes
+preserve the upstream release link, SHA-256, internet install command,
+no-internet/manual install commands, and Casa safety scope.
 
 ## Basic Usage
 

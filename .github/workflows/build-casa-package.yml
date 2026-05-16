@@ -360,6 +360,8 @@ jobs:
 
           Upstream release notes: https://github.com/dr-dolomite/QManager-RM520N/releases/tag/UPSTREAM_TAG_PLACEHOLDER
 
+          Bot-built prerelease. Not yet live-router verified by JTooley.
+
           This is a prerelease for live-router validation before any manual stable promotion.
 
           Safety scope:
@@ -535,7 +537,7 @@ jobs:
           else
             gh release create "$casa_tag" "$tar_path" "$sha_path" "$install_script" "$uninstall_script" \
               --repo "$PACKAGE_REPO" \
-              --title "QManager ${casa_tag} for Casa CFW-3212" \
+              --title "QManager ${casa_tag} for Casa CFW-3212 (bot-built, unverified)" \
               --notes-file "$notes_file" \
               --prerelease \
               --latest=false
