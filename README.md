@@ -1,5 +1,8 @@
 # Casa CFW-3212 QManager Builder
 
+Looking for the newest Casa-ready build? Use the release/package repo:
+**[Joetooley28/qmanager-casa-cfw3212-package](https://github.com/Joetooley28/qmanager-casa-cfw3212-package)**.
+
 This repository contains the public Casa CFW-3212 QManager converter, builder,
 and GitHub Actions workflow.
 
