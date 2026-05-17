@@ -9,8 +9,10 @@ and GitHub Actions workflow.
 ## Credit
 
 QManager is built and maintained by **Rus | Ame** (`misuzu__` on Discord),
-GitHub **[dr-dolomite](https://github.com/dr-dolomite)**. The upstream project
-is **[dr-dolomite/QManager-RM520N](https://github.com/dr-dolomite/QManager-RM520N)**.
+GitHub **[dr-dolomite](https://github.com/dr-dolomite)**. Huge thanks to Rus
+for all the hard work building, maintaining, and sharing QManager with the
+community. The upstream project is
+**[dr-dolomite/QManager-RM520N](https://github.com/dr-dolomite/QManager-RM520N)**.
 
 Joetooley built only the Casa CFW-3212 converter/package flow for making
 QManager installable on the Casa CFW-3212.
