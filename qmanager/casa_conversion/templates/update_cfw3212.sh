@@ -208,9 +208,10 @@ if [ "$REQUEST_METHOD" = "GET" ]; then
     casa_filter='[
       .[]
       | select(.draft == false)
-      | select(.tag_name | test("^v[0-9]+\\.[0-9]+\\.[0-9]+-cfw3212\\.[0-9]+$"))
+      | select(.tag_name | startswith("v"))
+      | select(.tag_name | contains("-cfw3212."))
       | . as $rel
-      | ($rel.tag_name | sub("-cfw3212\\.[0-9]+$"; "")) as $upstream
+      | ($rel.tag_name | split("-cfw3212.")[0]) as $upstream
       | ("qmanager-cfw3212-" + $upstream + ".tar.gz") as $tar
       | ("qmanager-cfw3212-" + $upstream + ".sha256") as $sha
       | select(any($rel.assets[]?; .name == $tar))
@@ -247,7 +248,7 @@ if [ "$REQUEST_METHOD" = "GET" ]; then
 
     available_versions=$(printf '%s' "$releases" | jq \
         --arg cv "$current_version" \
-        '[ .[] | (.tag_name | sub("-cfw3212\\.[0-9]+$"; "")) as $upstream | {
+        '[ .[] | (.tag_name | split("-cfw3212.")[0]) as $upstream | {
             tag: .tag_name,
             has_assets: true,
             asset_size: (([ .assets[] | select(.name == ("qmanager-cfw3212-" + $upstream + ".tar.gz")) ][0].size // 0) / 1048576 * 10 | floor / 10 | tostring + " MB"),
