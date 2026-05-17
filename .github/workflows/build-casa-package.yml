@@ -512,28 +512,42 @@ jobs:
           uninstall_script="publish/uninstall-qmanager-cfw3212.sh"
           notes_file="publish/release-notes.md"
           force="${{ needs.build.outputs.force }}"
-          release_exists="${{ needs.build.outputs.release_exists }}"
 
           test -f "$tar_path"
           test -f "$sha_path"
           test -f "$install_script"
           test -f "$uninstall_script"
           test -f "$notes_file"
+          command -v jq >/dev/null
 
-          upload_asset() {
-            release_id="$1"
-            asset_path="$2"
-            asset_name="$(basename "$asset_path")"
+          release_exists=false
+          if gh release view "$casa_tag" --repo "$PACKAGE_REPO" >/dev/null 2>&1; then
+            release_exists=true
+          fi
 
-            if ! gh api --method POST "repos/${PACKAGE_REPO}/releases/${release_id}/assets?name=${asset_name}" \
-                -H "Content-Type: application/octet-stream" \
-                --input "$asset_path" > "$RUNNER_TEMP/upload-${asset_name}.json" 2> "$RUNNER_TEMP/upload-${asset_name}.err"; then
-              echo "Failed to upload release asset: $asset_name" >&2
-              cat "$RUNNER_TEMP/upload-${asset_name}.err" >&2
+          upload_assets() {
+            upload_args=(
+              "$casa_tag"
+              "$tar_path"
+              "$sha_path"
+              "$install_script"
+              "$uninstall_script"
+              --repo "$PACKAGE_REPO"
+            )
+            if [ "$force" = "true" ]; then
+              upload_args+=(--clobber)
+            fi
+
+            if ! gh release upload "${upload_args[@]}" > "$RUNNER_TEMP/upload-assets.out" 2> "$RUNNER_TEMP/upload-assets.err"; then
+              echo "Failed to upload one or more release assets for $casa_tag." >&2
+              cat "$RUNNER_TEMP/upload-assets.err" >&2
+              if [ -s "$RUNNER_TEMP/upload-assets.out" ]; then
+                cat "$RUNNER_TEMP/upload-assets.out" >&2
+              fi
               exit 1
             fi
 
-            echo "Uploaded release asset: $asset_name"
+            echo "Uploaded package assets for $casa_tag."
           }
 
           if [ "$release_exists" = "true" ]; then
@@ -547,51 +561,46 @@ jobs:
               echo "Refusing to modify stable releases from automation." >&2
               exit 1
             fi
-            release_id="$(gh api "repos/${PACKAGE_REPO}/releases/tags/${casa_tag}" --jq '.id')"
 
-            for asset_path in "$tar_path" "$sha_path" "$install_script" "$uninstall_script"; do
-              asset_name="$(basename "$asset_path")"
-              asset_id="$(gh api "repos/${PACKAGE_REPO}/releases/${release_id}/assets" --jq ".[] | select(.name == \"${asset_name}\") | .id")"
-              if [ -n "$asset_id" ]; then
-                gh api --method DELETE "repos/${PACKAGE_REPO}/releases/assets/${asset_id}" >/dev/null
-              fi
-              upload_asset "$release_id" "$asset_path"
-            done
+            upload_assets
           else
             title="QManager ${casa_tag} for Casa CFW-3212 (Actions-built, unverified)"
 
-            python3 - "$casa_tag" "$title" "$notes_file" > "$RUNNER_TEMP/create-release.json" <<'PY'
-          import json
-          import sys
-          from pathlib import Path
-
-          tag, title, notes_file = sys.argv[1:4]
-          payload = {
-              "tag_name": tag,
-              "target_commitish": "main",
-              "name": title,
-              "body": Path(notes_file).read_text(),
-              "draft": False,
-              "prerelease": True,
-              "make_latest": "false",
-          }
-          print(json.dumps(payload))
-          PY
+            jq -n \
+              --arg tag "$casa_tag" \
+              --arg title "$title" \
+              --rawfile body "$notes_file" \
+              '{
+                tag_name: $tag,
+                target_commitish: "main",
+                name: $title,
+                body: $body,
+                draft: false,
+                prerelease: true,
+                make_latest: "false"
+              }' > "$RUNNER_TEMP/create-release.json"
 
             if ! gh api --method POST "repos/${PACKAGE_REPO}/releases" \
+                -H "Content-Type: application/json" \
                 --input "$RUNNER_TEMP/create-release.json" \
                 > "$RUNNER_TEMP/create-release-response.json" \
                 2> "$RUNNER_TEMP/create-release.err"; then
               echo "Failed to create $casa_tag in $PACKAGE_REPO." >&2
               echo "Check that PACKAGE_RELEASE_TOKEN has Contents: Read and write on the package repo." >&2
               cat "$RUNNER_TEMP/create-release.err" >&2
+              if [ -s "$RUNNER_TEMP/create-release-response.json" ]; then
+                cat "$RUNNER_TEMP/create-release-response.json" >&2
+              fi
               exit 1
             fi
 
-            release_id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["id"])' "$RUNNER_TEMP/create-release-response.json")"
+            release_id="$(jq -r '.id // empty' "$RUNNER_TEMP/create-release-response.json")"
+            if [ -z "$release_id" ]; then
+              echo "GitHub created no usable release id for $casa_tag." >&2
+              cat "$RUNNER_TEMP/create-release-response.json" >&2
+              exit 1
+            fi
             echo "Created package prerelease $casa_tag with release id $release_id."
 
-            for asset_path in "$tar_path" "$sha_path" "$install_script" "$uninstall_script"; do
-              upload_asset "$release_id" "$asset_path"
-            done
+            upload_assets
           fi
