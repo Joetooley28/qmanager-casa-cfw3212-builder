@@ -6,6 +6,7 @@ TAG="${QMANAGER_CFW3212_TAG:-@@CASA_TAG@@}"
 VERSION="${QMANAGER_CFW3212_VERSION:-@@UPSTREAM_TAG@@}"
 BASE_URL="${QMANAGER_CFW3212_BASE_URL:-https://github.com/$REPO/releases/download/$TAG}"
 WORK_DIR="${QMANAGER_CFW3212_WORK_DIR:-/tmp/qmanager-cfw3212-install}"
+INSTALL_TARBALL="/tmp/qmanager.tar.gz"
 TARBALL_NAME="qmanager-cfw3212-$VERSION.tar.gz"
 SHA_NAME="qmanager-cfw3212-$VERSION.sha256"
 
@@ -40,19 +41,24 @@ mkdir -p "$WORK_DIR"
 cd "$WORK_DIR"
 
 echo "[qmanager-cfw3212] Downloading $TARBALL_NAME"
-download "$BASE_URL/$TARBALL_NAME" "$TARBALL_NAME"
+download "$BASE_URL/$TARBALL_NAME" "$INSTALL_TARBALL"
 
 echo "[qmanager-cfw3212] Downloading $SHA_NAME"
 download "$BASE_URL/$SHA_NAME" "$SHA_NAME"
 
 echo "[qmanager-cfw3212] Verifying checksum"
-sha256sum -c "$SHA_NAME"
+expected_sha=$(awk '{print $1; exit}' "$SHA_NAME")
+actual_sha=$(sha256sum "$INSTALL_TARBALL" | awk '{print $1}')
+if [ "$expected_sha" != "$actual_sha" ]; then
+    echo "ERROR: SHA-256 mismatch for $TARBALL_NAME" >&2
+    echo "expected: $expected_sha" >&2
+    echo "actual:   $actual_sha" >&2
+    exit 1
+fi
+echo "$TARBALL_NAME: OK"
 
-echo "[qmanager-cfw3212] Extracting package"
-tar xzf "$TARBALL_NAME"
-
-echo "[qmanager-cfw3212] Staging tarball for installer pre-flight"
-cp "$TARBALL_NAME" /tmp/qmanager.tar.gz
+echo "[qmanager-cfw3212] Extracting Casa installer"
+tar xzf "$INSTALL_TARBALL" -C "$WORK_DIR" qmanager_install/install_cfw3212.sh
 
 echo "[qmanager-cfw3212] Running Casa installer"
 exec sh "$WORK_DIR/qmanager_install/install_cfw3212.sh"
