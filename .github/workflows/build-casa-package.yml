@@ -360,7 +360,7 @@ jobs:
 
           Upstream release notes: https://github.com/dr-dolomite/QManager-RM520N/releases/tag/UPSTREAM_TAG_PLACEHOLDER
 
-          Bot-built prerelease. Not yet live-router verified by JTooley.
+          Actions-built prerelease. Not yet live-router verified by JTooley.
 
           This is a prerelease for live-router validation before any manual stable promotion.
 
@@ -535,10 +535,16 @@ jobs:
               --repo "$PACKAGE_REPO" \
               --clobber
           else
-            gh release create "$casa_tag" "$tar_path" "$sha_path" "$install_script" "$uninstall_script" \
-              --repo "$PACKAGE_REPO" \
-              --title "QManager ${casa_tag} for Casa CFW-3212 (bot-built, unverified)" \
-              --notes-file "$notes_file" \
-              --prerelease \
-              --latest=false
+            if ! gh release create "$casa_tag" "$tar_path" "$sha_path" "$install_script" "$uninstall_script" \
+                --repo "$PACKAGE_REPO" \
+                --target main \
+                --title "QManager ${casa_tag} for Casa CFW-3212 (Actions-built, unverified)" \
+                --notes-file "$notes_file" \
+                --prerelease; then
+              echo "Failed to create $casa_tag in $PACKAGE_REPO." >&2
+              echo "Check that PACKAGE_RELEASE_TOKEN has Contents: Read and write on the package repo." >&2
+              exit 1
+            fi
+
+            gh release edit "$casa_tag" --repo "$PACKAGE_REPO" --latest=false
           fi
