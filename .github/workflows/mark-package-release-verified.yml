@@ -56,42 +56,46 @@ jobs:
           release_json="$RUNNER_TEMP/release.json"
           gh release view "$tag" --repo "$PACKAGE_REPO" --json name,body,isPrerelease > "$release_json"
 
-          title="$(
-            python3 - "$release_json" "$verified_by" <<'PY'
+          python3 - "$release_json" "$verified_by" "$today" "$RUNNER_TEMP/release-title.txt" "$RUNNER_TEMP/release-notes-verified.md" <<'PY'
           import json
           import re
           import sys
           from pathlib import Path
 
-          data = json.loads(Path(sys.argv[1]).read_text())
-          verified_by = sys.argv[2]
+          release_json, verified_by, today, title_out, body_out = sys.argv[1:6]
+          data = json.loads(Path(release_json).read_text())
+
           title = data.get("name") or ""
-          title = title.replace(" (bot-built, unverified)", "")
-          title = re.sub(r" \(router-verified by [^)]+\)$", "", title)
-          print(f"{title} (router-verified by {verified_by})")
-          PY
-          )"
+          title = re.sub(r"\s*\((?:Actions|bot)-built, unverified\)", "", title, flags=re.IGNORECASE)
+          title = re.sub(r"\s*\(router-verified by [^)]+\)$", "", title, flags=re.IGNORECASE)
+          Path(title_out).write_text(f"{title} (router-verified by {verified_by})\n")
 
-          python3 - "$release_json" "$verified_by" "$today" > "$RUNNER_TEMP/release-notes-verified.md" <<'PY'
-          import json
-          import sys
-          from pathlib import Path
-
-          data = json.loads(Path(sys.argv[1]).read_text())
-          verified_by = sys.argv[2]
-          today = sys.argv[3]
           body = data.get("body") or ""
+          verified = f"Actions-built prerelease. This package has been live-router verified by {verified_by} on {today}."
+          top_line = f"Router-verified by {verified_by} on {today}."
 
-          unverified = "Bot-built prerelease. Not yet live-router verified by JTooley."
-          verified = f"Router-verified by {verified_by} on {today}."
+          body = re.sub(
+              r"(?:Actions|Bot)-built prerelease\. Not yet live-router verified by JTooley\.",
+              verified,
+              body,
+              flags=re.IGNORECASE,
+          )
 
-          if unverified in body:
-              body = body.replace(unverified, verified)
-          elif verified not in body:
+          body = re.sub(
+              r"Router-verified by [^\n]+ on \d{4}-\d{2}-\d{2}\.\n\n",
+              "",
+              body,
+              count=1,
+          )
+
+          if verified not in body:
               body = f"{verified}\n\n{body}".rstrip() + "\n"
 
-          print(body.rstrip())
+          body = f"{top_line}\n\n{body}".rstrip() + "\n"
+          Path(body_out).write_text(body)
           PY
+
+          title="$(cat "$RUNNER_TEMP/release-title.txt")"
 
           gh release edit "$tag" \
             --repo "$PACKAGE_REPO" \
