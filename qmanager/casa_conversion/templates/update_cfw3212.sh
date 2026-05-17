@@ -137,6 +137,20 @@ checksum_url_for_tag() {
         "$PACKAGE_REPO" "$tag" "$(checksum_name_for_tag "$tag")"
 }
 
+start_update_worker() {
+    local unit="$1"
+    shift
+
+    if command -v systemd-run >/dev/null 2>&1; then
+        systemd-run --unit="$unit" --collect \
+            /bin/sh -c 'exec "$@" </dev/null >>/tmp/qmanager_update.log 2>&1' \
+            qmanager-update-worker "$@" >/dev/null 2>&1 && return 0
+    fi
+
+    ( "$@" </dev/null >>/tmp/qmanager_update.log 2>&1 & )
+    return 0
+}
+
 if [ "$REQUEST_METHOD" = "GET" ]; then
     action=$(echo "$QUERY_STRING" | sed -n 's/.*action=\([^&]*\).*/\1/p')
 
@@ -331,16 +345,22 @@ if [ "$REQUEST_METHOD" = "POST" ]; then
         fi
         download_url="$(download_url_for_tag "$version")"
         checksum_url="$(checksum_url_for_tag "$version")"
+        if ! start_update_worker "qmanager-update-download" "$UPDATER" download "$download_url" "$checksum_url" "$version"; then
+            cgi_error "update_start_failed" "Could not start the Casa update download worker."
+            exit 0
+        fi
         jq -n '{"success":true,"status":"starting"}'
-        ( "$UPDATER" download "$download_url" "$checksum_url" "$version" </dev/null >>/tmp/qmanager_update.log 2>&1 & )
         exit 0
     fi
 
     if [ "$ACTION" = "install_staged" ]; then
         check_lock
         [ -f "$STAGED_TARBALL" ] || { cgi_error "no_staged" "No staged download found. Download first."; exit 0; }
+        if ! start_update_worker "qmanager-update-install" "$UPDATER" install_staged; then
+            cgi_error "update_start_failed" "Could not start the Casa update install worker."
+            exit 0
+        fi
         jq -n '{"success":true,"status":"starting"}'
-        ( "$UPDATER" install_staged </dev/null >>/tmp/qmanager_update.log 2>&1 & )
         exit 0
     fi
 
