@@ -355,7 +355,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cat > "$RUNNER_TEMP/release-notes.md" <<'NOTES_EOF'
+          notes_file="$RUNNER_TEMP/casa-release-assets/release-notes.md"
+          cat > "$notes_file" <<'NOTES_EOF'
           Casa CFW-3212 conversion of dr-dolomite/QManager-RM520N UPSTREAM_TAG_PLACEHOLDER.
 
           Upstream release notes: https://github.com/dr-dolomite/QManager-RM520N/releases/tag/UPSTREAM_TAG_PLACEHOLDER
@@ -412,13 +413,14 @@ jobs:
             -e "s|SHA256_PLACEHOLDER|${{ steps.stage.outputs.sha256 }}|g" \
             -e "s|CASA_TAG_PLACEHOLDER|${{ steps.resolve.outputs.casa_tag }}|g" \
             -e "s|TAR_NAME_PLACEHOLDER|${{ steps.resolve.outputs.tar_name }}|g" \
-            "$RUNNER_TEMP/release-notes.md"
+            "$notes_file"
 
       - name: Write install scripts
         if: steps.scheduled_check.outputs.should_build == 'true'
         shell: bash
         run: |
           set -euo pipefail
+          bundle_dir="$RUNNER_TEMP/casa-release-assets"
           subst() {
             sed \
               -e "s|@@CASA_TAG@@|${{ steps.resolve.outputs.casa_tag }}|g" \
@@ -427,9 +429,9 @@ jobs:
             chmod +x "$2"
           }
           subst qmanager/casa_conversion/templates/install-qmanager-cfw3212.sh.tmpl \
-                 "$RUNNER_TEMP/install-qmanager-cfw3212.sh"
+                 "$bundle_dir/install-qmanager-cfw3212.sh"
           subst qmanager/casa_conversion/templates/uninstall-qmanager-cfw3212.sh.tmpl \
-                 "$RUNNER_TEMP/uninstall-qmanager-cfw3212.sh"
+                 "$bundle_dir/uninstall-qmanager-cfw3212.sh"
 
       - name: Upload publish bundle
         if: steps.scheduled_check.outputs.should_build == 'true'
@@ -439,9 +441,9 @@ jobs:
           path: |
             ${{ steps.stage.outputs.tar_path }}
             ${{ steps.stage.outputs.sha_path }}
-            ${{ runner.temp }}/install-qmanager-cfw3212.sh
-            ${{ runner.temp }}/uninstall-qmanager-cfw3212.sh
-            ${{ runner.temp }}/release-notes.md
+            ${{ runner.temp }}/casa-release-assets/install-qmanager-cfw3212.sh
+            ${{ runner.temp }}/casa-release-assets/uninstall-qmanager-cfw3212.sh
+            ${{ runner.temp }}/casa-release-assets/release-notes.md
           if-no-files-found: error
 
       - name: Dry-run summary
@@ -513,11 +515,20 @@ jobs:
           notes_file="publish/release-notes.md"
           force="${{ needs.build.outputs.force }}"
 
-          test -f "$tar_path"
-          test -f "$sha_path"
-          test -f "$install_script"
-          test -f "$uninstall_script"
-          test -f "$notes_file"
+          require_file() {
+            if [ ! -f "$1" ]; then
+              echo "Missing publish bundle file: $1" >&2
+              echo "Downloaded publish bundle contents:" >&2
+              find publish -maxdepth 3 -type f -print | sort >&2
+              exit 1
+            fi
+          }
+
+          require_file "$tar_path"
+          require_file "$sha_path"
+          require_file "$install_script"
+          require_file "$uninstall_script"
+          require_file "$notes_file"
 
           release_exists=false
           if gh release view "$casa_tag" --repo "$PACKAGE_REPO" >/dev/null 2>&1; then
