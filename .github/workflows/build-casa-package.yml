@@ -361,6 +361,12 @@ jobs:
 
           Upstream release notes: https://github.com/dr-dolomite/QManager-RM520N/releases/tag/UPSTREAM_TAG_PLACEHOLDER
 
+          ## Credit
+
+          QManager is built and maintained by **Rus | Ame** (`misuzu__` on Discord), GitHub **[dr-dolomite](https://github.com/dr-dolomite)**.
+
+          Joetooley built only the Casa CFW-3212 converter/package flow for making QManager installable on the Casa CFW-3212.
+
           Actions-built prerelease. Not yet live-router verified by JTooley.
 
           This is a prerelease for live-router validation before any manual stable promotion.
