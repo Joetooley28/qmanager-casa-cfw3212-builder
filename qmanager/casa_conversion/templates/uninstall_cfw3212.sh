@@ -45,7 +45,13 @@ info "systemd reloaded"
 
 step "Removing QManager files"
 rm -rf /usrdata/qmanager
-rm -f /usrdata/bin/qmanager_* /usrdata/bin/qcmd /usrdata/bin/atcli_smd11 /usrdata/bin/sms_tool
+rm -f /usrdata/bin/qmanager_* \
+    /usrdata/bin/qcmd \
+    /usrdata/bin/atcli_smd11 \
+    /usrdata/bin/sms_tool \
+    /usrdata/bin/jq \
+    /usrdata/bin/sudo \
+    /usrdata/bin/speedtest
 info "Install files removed"
 
 step "Removing temporary QManager state"

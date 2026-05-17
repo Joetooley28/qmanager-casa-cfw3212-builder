@@ -40,7 +40,7 @@ write_status() {
 
 cleanup() {
     rm -f "$PID_FILE"
-    rm -rf /tmp/qmanager_update_stage
+    rm -rf /tmp/qmanager_update_stage /tmp/qmanager_update_install
 }
 
 die() {
@@ -178,18 +178,28 @@ if [ "$MODE" = "install_staged" ]; then
 
     svc_stop_safe qmanager-watchcat
 
-    cp "$STAGED_TARBALL" /tmp/qmanager.tar.gz || die "Could not prepare /tmp/qmanager.tar.gz"
-    rm -rf /tmp/qmanager_install
-    tar xzf /tmp/qmanager.tar.gz -C /tmp || die "Extraction failed"
-    [ -f /tmp/qmanager_install/install_cfw3212.sh ] || die "Casa installer not found after extraction"
+    rm -f /tmp/qmanager.tar.gz
+    if ln -s "$STAGED_TARBALL" /tmp/qmanager.tar.gz 2>/dev/null; then
+        log "Linked staged tarball to /tmp/qmanager.tar.gz"
+    else
+        cp "$STAGED_TARBALL" /tmp/qmanager.tar.gz || die "Could not prepare /tmp/qmanager.tar.gz"
+    fi
+
+    rm -rf /tmp/qmanager_update_install
+    mkdir -p /tmp/qmanager_update_install || die "Could not create installer work directory"
+    tar xzf /tmp/qmanager.tar.gz -C /tmp/qmanager_update_install qmanager_install/install_cfw3212.sh \
+        || die "Installer extraction failed"
+    [ -f /tmp/qmanager_update_install/qmanager_install/install_cfw3212.sh ] \
+        || die "Casa installer not found after extraction"
 
     log "Running install_cfw3212.sh"
-    if ! sh /tmp/qmanager_install/install_cfw3212.sh >> "$LOG_FILE" 2>&1; then
+    if ! sh /tmp/qmanager_update_install/qmanager_install/install_cfw3212.sh >> "$LOG_FILE" 2>&1; then
         die "Installation failed. Check /tmp/qmanager_update.log."
     fi
 
     printf '%s\n' "$VERSION" > "$VERSION_FILE" 2>/dev/null || true
-    rm -f "$STAGED_TARBALL" "$STAGED_VERSION"
+    rm -f /tmp/qmanager.tar.gz "$STAGED_TARBALL" "$STAGED_VERSION"
+    rm -rf /tmp/qmanager_update_install
     write_status "installing" "Installation complete; flushing flash writes..." "$VERSION" ""
     log "Install complete; syncing flash writes"
     sync
