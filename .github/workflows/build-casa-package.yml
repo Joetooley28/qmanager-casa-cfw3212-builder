@@ -413,6 +413,42 @@ jobs:
 
               scp -O TAR_NAME_PLACEHOLDER root@192.168.1.1:/tmp/qmanager.tar.gz
               ssh root@192.168.1.1 "rm -rf /tmp/qmanager_install && tar xzf /tmp/qmanager.tar.gz -C /tmp && sh /tmp/qmanager_install/install_cfw3212.sh"
+
+          ## Uninstall
+
+          Default uninstall removes QManager services, `/usrdata/qmanager`, and QManager-installed binaries under `/usrdata/bin`. It preserves `/etc/qmanager` and `/usrdata/opt`.
+
+          ### Online Uninstall
+
+          SSH into the router from Windows PowerShell:
+
+              ssh root@192.168.1.1
+
+          Then run this on the router:
+
+              curl -fsSL https://github.com/Joetooley28/qmanager-casa-cfw3212-package/releases/download/CASA_TAG_PLACEHOLDER/uninstall-qmanager-cfw3212.sh | sh
+
+          If curl fails, use wget instead:
+
+              wget -qO- https://github.com/Joetooley28/qmanager-casa-cfw3212-package/releases/download/CASA_TAG_PLACEHOLDER/uninstall-qmanager-cfw3212.sh | sh
+
+          ### Offline Uninstall
+
+          If the router has no internet, use the same downloaded `.tar.gz` and run these two commands from Windows PowerShell:
+
+              scp -O .\TAR_NAME_PLACEHOLDER root@192.168.1.1:/tmp/qmanager.tar.gz
+              ssh root@192.168.1.1 "rm -rf /tmp/qmanager_install && tar xzf /tmp/qmanager.tar.gz -C /tmp && sh /tmp/qmanager_install/uninstall_cfw3212.sh --force --no-reboot"
+
+          Linux/WSL:
+
+              scp -O TAR_NAME_PLACEHOLDER root@192.168.1.1:/tmp/qmanager.tar.gz
+              ssh root@192.168.1.1 "rm -rf /tmp/qmanager_install && tar xzf /tmp/qmanager.tar.gz -C /tmp && sh /tmp/qmanager_install/uninstall_cfw3212.sh --force --no-reboot"
+
+          ### Purge
+
+          Add `--purge` only when you want to remove preserved QManager config and bundled Entware state too:
+
+              curl -fsSL https://github.com/Joetooley28/qmanager-casa-cfw3212-package/releases/download/CASA_TAG_PLACEHOLDER/uninstall-qmanager-cfw3212.sh | sh -s -- --purge
           NOTES_EOF
           sed -i \
             -e "s|UPSTREAM_TAG_PLACEHOLDER|${{ steps.resolve.outputs.upstream_tag }}|g" \
