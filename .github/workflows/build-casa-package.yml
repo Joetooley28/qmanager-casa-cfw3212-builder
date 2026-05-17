@@ -535,16 +535,30 @@ jobs:
               --repo "$PACKAGE_REPO" \
               --clobber
           else
-            if ! gh release create "$casa_tag" "$tar_path" "$sha_path" "$install_script" "$uninstall_script" \
-                --repo "$PACKAGE_REPO" \
-                --target main \
-                --title "QManager ${casa_tag} for Casa CFW-3212 (Actions-built, unverified)" \
-                --notes-file "$notes_file" \
-                --prerelease; then
+            title="QManager ${casa_tag} for Casa CFW-3212 (Actions-built, unverified)"
+            body="$(cat "$notes_file")"
+
+            set +e
+            create_output="$(
+              gh api --method POST "repos/${PACKAGE_REPO}/releases" \
+                -f tag_name="$casa_tag" \
+                -f target_commitish="main" \
+                -f name="$title" \
+                -f body="$body" \
+                -F draft=false \
+                -F prerelease=true \
+                -f make_latest=false 2>&1
+            )"
+            create_status=$?
+            set -e
+
+            if [ "$create_status" -ne 0 ]; then
               echo "Failed to create $casa_tag in $PACKAGE_REPO." >&2
               echo "Check that PACKAGE_RELEASE_TOKEN has Contents: Read and write on the package repo." >&2
+              echo "$create_output" >&2
               exit 1
             fi
 
-            gh release edit "$casa_tag" --repo "$PACKAGE_REPO" --latest=false
+            gh release upload "$casa_tag" "$tar_path" "$sha_path" "$install_script" "$uninstall_script" \
+              --repo "$PACKAGE_REPO"
           fi
