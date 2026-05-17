@@ -1,6 +1,10 @@
 #!/bin/sh
 set -e
 
+info() { echo "  ✓  $*"; }
+warn() { echo "  !  $*"; }
+step() { printf "\n▶ %s\n" "$*"; }
+
 NO_REBOOT=0
 PURGE=0
 while [ $# -gt 0 ]; do
@@ -19,20 +23,32 @@ SERVICES="lighttpd \
     qmanager-discord qmanager-ethernet qmanager-cfun-fix \
     qmanager_tailscale_install"
 
-# Stop everything first so QManager is quiet before deleting files from flash.
-systemctl stop $SERVICES 2>/dev/null || true
+step "Stopping QManager services"
+systemctl stop --no-block $SERVICES 2>/dev/null \
+    && info "Stop requested" \
+    || warn "Some services were already stopped or missing"
+sleep 2
+
+step "Removing service units"
 for svc in $SERVICES; do
-    systemctl disable "$svc.service" 2>/dev/null || true
     rm -f "/etc/systemd/system/$svc.service"
     rm -f "/etc/systemd/system/multi-user.target.wants/$svc.service"
 done
+info "QManager service units removed"
+
+step "Removing stale QManager unit files"
 find /etc/systemd/system /etc/systemd/system/multi-user.target.wants \
     -maxdepth 1 \( -name 'qmanager*.service' -o -name 'qmanager_*.service' \) \
     -exec rm -f {} \; 2>/dev/null || true
 systemctl daemon-reload 2>/dev/null || true
+info "systemd reloaded"
 
+step "Removing QManager files"
 rm -rf /usrdata/qmanager
 rm -f /usrdata/bin/qmanager_* /usrdata/bin/qcmd /usrdata/bin/atcli_smd11 /usrdata/bin/sms_tool
+info "Install files removed"
+
+step "Removing temporary QManager state"
 rm -rf /tmp/qmanager_install \
     /tmp/qmanager_update \
     /tmp/qmanager_update_stage \
@@ -59,13 +75,18 @@ rm -rf /tmp/qmanager_install \
     /tmp/speedtest \
     /run/qmanager*.pid \
     /var/lock/qmanager.pid 2>/dev/null || true
+info "Temporary files removed"
 
 if [ "$PURGE" = "1" ]; then
+    step "Purging preserved config and bundled Entware state"
     rm -rf /etc/qmanager /usrdata/opt
     rm -f /etc/sudoers.d/qmanager /usrdata/opt/etc/sudoers.d/qmanager 2>/dev/null || true
+    info "Purge cleanup complete"
 fi
 
+step "Resetting failed service state"
 systemctl reset-failed $SERVICES 2>/dev/null || true
+info "Failed state reset"
 
 echo "Casa CFW-3212 QManager files removed."
 if [ "$NO_REBOOT" != "1" ]; then
