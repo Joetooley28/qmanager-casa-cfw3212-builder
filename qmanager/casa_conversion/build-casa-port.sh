@@ -386,9 +386,9 @@ if [ "$PURGE" = "1" ]; then
     info "Purge cleanup complete"
 fi
 
-step "Resetting failed service state"
+step "Clearing old systemd status"
 systemctl reset-failed $SERVICES 2>/dev/null || true
-info "Failed state reset"
+info "Old systemd status cleared"
 
 echo "Casa CFW-3212 QManager files removed."
 if [ "$NO_REBOOT" != "1" ]; then
