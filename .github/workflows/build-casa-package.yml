@@ -449,6 +449,12 @@ jobs:
           Add `--purge` only when you want to remove preserved QManager config and bundled Entware state too:
 
               curl -fsSL https://github.com/Joetooley28/qmanager-casa-cfw3212-package/releases/download/CASA_TAG_PLACEHOLDER/uninstall-qmanager-cfw3212.sh | sh -s -- --purge
+
+          Or with wget:
+
+              wget -qO- https://github.com/Joetooley28/qmanager-casa-cfw3212-package/releases/download/CASA_TAG_PLACEHOLDER/uninstall-qmanager-cfw3212.sh | sh -s -- --purge
+
+          Offline purge uses the same offline uninstall command with `--purge` appended.
           NOTES_EOF
           sed -i \
             -e "s|UPSTREAM_TAG_PLACEHOLDER|${{ steps.resolve.outputs.upstream_tag }}|g" \
