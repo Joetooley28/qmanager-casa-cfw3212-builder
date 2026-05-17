@@ -151,8 +151,9 @@ if [ "$REQUEST_METHOD" = "GET" ]; then
 
     ensure_update_config
     current_version=$(get_current_version)
-    include_prerelease=$(qm_update_get include_prerelease 0)
+    include_prerelease=$(qm_update_get include_prerelease 1)
     auto_time=$(qm_update_get auto_update_time "03:00")
+    include_prerelease_json="$( [ "$include_prerelease" = "1" ] && echo true || echo false )"
 
     api_url="https://api.github.com/repos/$PACKAGE_REPO/releases"
     tmp_body="/tmp/qm_cfw3212_update_api_body.json"
@@ -163,6 +164,7 @@ if [ "$REQUEST_METHOD" = "GET" ]; then
         rm -f "$tmp_body" "$tmp_headers"
         jq -n \
             --arg cv "$current_version" \
+            --argjson include_prerelease_bool "$include_prerelease_json" \
             --arg auto_time "$auto_time" \
             '{
                 success: true, current_version: $cv,
@@ -170,7 +172,7 @@ if [ "$REQUEST_METHOD" = "GET" ]; then
                 changelog: null, current_changelog: null,
                 download_url: null, download_size: null,
                 available_versions: [], download_state: null,
-                include_prerelease: false,
+                include_prerelease: $include_prerelease_bool,
                 auto_update_enabled: false,
                 auto_update_time: $auto_time,
                 check_error: "Unable to check Casa package releases. Confirm the package repo is public and the router has internet."
@@ -182,6 +184,7 @@ if [ "$REQUEST_METHOD" = "GET" ]; then
         rm -f "$tmp_body" "$tmp_headers"
         jq -n \
             --arg cv "$current_version" \
+            --argjson include_prerelease_bool "$include_prerelease_json" \
             --arg auto_time "$auto_time" \
             '{
                 success: true, current_version: $cv,
@@ -189,7 +192,7 @@ if [ "$REQUEST_METHOD" = "GET" ]; then
                 changelog: null, current_changelog: null,
                 download_url: null, download_size: null,
                 available_versions: [], download_state: null,
-                include_prerelease: false,
+                include_prerelease: $include_prerelease_bool,
                 auto_update_enabled: false,
                 auto_update_time: $auto_time,
                 check_error: "GitHub rate limit or access error while checking Casa package releases."
@@ -276,7 +279,7 @@ if [ "$REQUEST_METHOD" = "GET" ]; then
         --arg ds "$download_size" \
         --argjson av "$available_versions" \
         --argjson ds_obj "$download_state" \
-        --argjson include_prerelease_bool "$( [ "$include_prerelease" = "1" ] && echo true || echo false )" \
+        --argjson include_prerelease_bool "$include_prerelease_json" \
         --arg auto_time "$auto_time" \
         '{
             success: true,
