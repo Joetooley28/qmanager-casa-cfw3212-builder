@@ -191,6 +191,22 @@ copy_file_or_fallback() {
     sed -i 's/\r$//' "$TARGET/$rel" 2>/dev/null || true
 }
 
+copy_template_or_fallback() {
+    local rel="$1"
+    local template="$2"
+    if [ -f "$template" ]; then
+        mkdir -p "$(dirname "$TARGET/$rel")"
+        cp "$template" "$TARGET/$rel"
+        sed -i 's/\r$//' "$TARGET/$rel" 2>/dev/null || true
+        return
+    fi
+    if [ -f "$REF_DIR/$rel" ]; then
+        copy_file "$rel"
+        return
+    fi
+    fail "Template/reference overlay missing: $rel"
+}
+
 patch_build_script() {
     local build="$TARGET/build.sh"
     [ -f "$build" ] || fail "Target missing build.sh"
@@ -225,6 +241,8 @@ mkdir -p "$STAGING_DIR"
 
 step "Copying frontend build output..."
 cp -r "$OUT_DIR" "$STAGING_DIR/out"
+( cd "$OUT_DIR" && find . -type f -print | sort | while IFS= read -r f; do sha256sum "$f"; done ) \
+    > "$STAGING_DIR/frontend.sha256"
 
 step "Copying backend scripts..."
 mkdir -p "$STAGING_DIR/scripts"
@@ -1234,13 +1252,11 @@ apply_casa_overlays() {
 
     patch_build_script
 
-    copy_file_or_fallback "install_cfw3212.sh" "$TEMPLATE_DIR/install_cfw3212.sh"
+    copy_template_or_fallback "install_cfw3212.sh" "$TEMPLATE_DIR/install_cfw3212.sh"
     patch_installer_version_cfw3212
 
-    if [ -f "$REF_DIR/uninstall_cfw3212.sh" ]; then
-        copy_file "uninstall_cfw3212.sh"
-    elif [ -f "$TEMPLATE_DIR/uninstall_cfw3212.sh" ]; then
-        copy_file_or_fallback "uninstall_cfw3212.sh" "$TEMPLATE_DIR/uninstall_cfw3212.sh"
+    if [ -f "$TEMPLATE_DIR/uninstall_cfw3212.sh" ] || [ -f "$REF_DIR/uninstall_cfw3212.sh" ]; then
+        copy_template_or_fallback "uninstall_cfw3212.sh" "$TEMPLATE_DIR/uninstall_cfw3212.sh"
     else
         write_uninstall_cfw3212
     fi

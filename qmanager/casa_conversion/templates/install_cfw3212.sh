@@ -51,6 +51,8 @@ EXTRACT_DIR="/tmp/qmanager_install"
 SRC_FRONTEND="$EXTRACT_DIR/out"
 SRC_SCRIPTS="$EXTRACT_DIR/scripts"
 SRC_DEPS="$EXTRACT_DIR/dependencies"
+FRONTEND_MANIFEST_SRC="$EXTRACT_DIR/frontend.sha256"
+FRONTEND_MANIFEST_DST="$WWW_ROOT/.qmanager_frontend.sha256"
 
 # --- Colors ------------------------------------------------------------------
 
@@ -721,6 +723,15 @@ else
     warn "Skipping bundled dropbear install during direct-IPK bootstrap (postinst would not generate host keys)"
 fi
 
+# Keep QManager quiet before the flash-heavy file sync sections. This lowers
+# contention from lighttpd/poller work while /usrdata is being checked/written.
+step "Stopping existing QManager services"
+for svc in qmanager-poller qmanager-ping qmanager-setup qmanager-ttl qmanager-mtu lighttpd; do
+    systemctl stop "$svc" 2>/dev/null || true
+done
+pkill -f qmanager_poller 2>/dev/null || true
+sleep 1
+
 # --- Libraries ---------------------------------------------------------------
 
 step "Installing libraries to $LIB_DIR"
@@ -743,8 +754,21 @@ done
 step "Installing frontend to $WWW_ROOT"
 
 mkdir -p "$WWW_ROOT/cgi-bin"
-sync_tree_changed "$SRC_FRONTEND" "$WWW_ROOT" "cgi-bin" 644 "frontend"
-info "$SYNC_TOTAL frontend files checked ($SYNC_COPIED changed, $SYNC_SKIPPED unchanged, $SYNC_PRUNED removed)"
+if [ -f "$FRONTEND_MANIFEST_SRC" ] && [ -f "$FRONTEND_MANIFEST_DST" ] && \
+    cmp -s "$FRONTEND_MANIFEST_SRC" "$FRONTEND_MANIFEST_DST"; then
+    SYNC_TOTAL=0
+    SYNC_COPIED=0
+    SYNC_SKIPPED=$(wc -l < "$FRONTEND_MANIFEST_SRC" | tr -d ' ')
+    SYNC_PRUNED=0
+    info "frontend manifest unchanged; skipped frontend file sync"
+else
+    sync_tree_changed "$SRC_FRONTEND" "$WWW_ROOT" "cgi-bin" 644 "frontend"
+    if [ -f "$FRONTEND_MANIFEST_SRC" ]; then
+        cp "$FRONTEND_MANIFEST_SRC" "$FRONTEND_MANIFEST_DST"
+        chmod 644 "$FRONTEND_MANIFEST_DST" 2>/dev/null || true
+    fi
+    info "$SYNC_TOTAL frontend files checked ($SYNC_COPIED changed, $SYNC_SKIPPED unchanged, $SYNC_PRUNED removed)"
+fi
 
 # --- CGI scripts -------------------------------------------------------------
 
@@ -862,8 +886,6 @@ EOF
 sed -i 's/\r$//' "$SYSTEMD_DIR/lighttpd.service"
 info "lighttpd.service installed (overrides squashfs null-mask)"
 
-systemctl daemon-reload || true
-
 # Enable services
 for svc in lighttpd qmanager-firewall qmanager-setup qmanager-ping \
            qmanager-poller qmanager-ttl qmanager-mtu qmanager-imei-check; do
@@ -886,15 +908,6 @@ for b in qcmd qcmd_test atcli_smd11 sms_tool jq; do
 done
 find "$CGI_DIR" -name "*.sh" -exec chmod 755 {} \; 2>/dev/null || true
 find "$LIB_DIR" -name "*.sh" -exec chmod 644 {} \; 2>/dev/null || true
-
-# --- Stop any existing services ----------------------------------------------
-
-step "Stopping existing QManager services"
-for svc in qmanager-poller qmanager-ping qmanager-setup qmanager-ttl qmanager-mtu lighttpd; do
-    systemctl stop "$svc" 2>/dev/null || true
-done
-pkill -f qmanager_poller 2>/dev/null || true
-sleep 1
 
 # --- Start services ----------------------------------------------------------
 
