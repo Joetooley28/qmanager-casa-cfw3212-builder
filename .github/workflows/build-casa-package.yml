@@ -520,6 +520,29 @@ jobs:
           test -f "$uninstall_script"
           test -f "$notes_file"
 
+          upload_asset() {
+            release_id="$1"
+            asset_path="$2"
+            asset_name="$(basename "$asset_path")"
+
+            set +e
+            upload_output="$(
+              gh api --method POST "repos/${PACKAGE_REPO}/releases/${release_id}/assets?name=${asset_name}" \
+                -H "Content-Type: application/octet-stream" \
+                --input "$asset_path" 2>&1
+            )"
+            upload_status=$?
+            set -e
+
+            if [ "$upload_status" -ne 0 ]; then
+              echo "Failed to upload release asset: $asset_name" >&2
+              echo "$upload_output" >&2
+              exit 1
+            fi
+
+            echo "Uploaded release asset: $asset_name"
+          }
+
           if [ "$release_exists" = "true" ]; then
             if [ "$force" != "true" ]; then
               echo "Release exists and force=false; refusing to upload assets." >&2
@@ -531,9 +554,16 @@ jobs:
               echo "Refusing to modify stable releases from automation." >&2
               exit 1
             fi
-            gh release upload "$casa_tag" "$tar_path" "$sha_path" "$install_script" "$uninstall_script" \
-              --repo "$PACKAGE_REPO" \
-              --clobber
+            release_id="$(gh api "repos/${PACKAGE_REPO}/releases/tags/${casa_tag}" --jq '.id')"
+
+            for asset_path in "$tar_path" "$sha_path" "$install_script" "$uninstall_script"; do
+              asset_name="$(basename "$asset_path")"
+              asset_id="$(gh api "repos/${PACKAGE_REPO}/releases/${release_id}/assets" --jq ".[] | select(.name == \"${asset_name}\") | .id")"
+              if [ -n "$asset_id" ]; then
+                gh api --method DELETE "repos/${PACKAGE_REPO}/releases/assets/${asset_id}" >/dev/null
+              fi
+              upload_asset "$release_id" "$asset_path"
+            done
           else
             title="QManager ${casa_tag} for Casa CFW-3212 (Actions-built, unverified)"
             body="$(cat "$notes_file")"
@@ -547,7 +577,8 @@ jobs:
                 -f body="$body" \
                 -F draft=false \
                 -F prerelease=true \
-                -f make_latest=false 2>&1
+                -f make_latest=false \
+                --jq '.id' 2>&1
             )"
             create_status=$?
             set -e
@@ -559,6 +590,10 @@ jobs:
               exit 1
             fi
 
-            gh release upload "$casa_tag" "$tar_path" "$sha_path" "$install_script" "$uninstall_script" \
-              --repo "$PACKAGE_REPO"
+            release_id="$create_output"
+            echo "Created package prerelease $casa_tag with release id $release_id."
+
+            for asset_path in "$tar_path" "$sha_path" "$install_script" "$uninstall_script"; do
+              upload_asset "$release_id" "$asset_path"
+            done
           fi
