@@ -561,22 +561,22 @@ jobs:
             title="QManager ${casa_tag} for Casa CFW-3212 (Actions-built, unverified)"
 
             python3 - "$casa_tag" "$title" "$notes_file" > "$RUNNER_TEMP/create-release.json" <<'PY'
-            import json
-            import sys
-            from pathlib import Path
+          import json
+          import sys
+          from pathlib import Path
 
-            tag, title, notes_file = sys.argv[1:4]
-            payload = {
-                "tag_name": tag,
-                "target_commitish": "main",
-                "name": title,
-                "body": Path(notes_file).read_text(),
-                "draft": False,
-                "prerelease": True,
-                "make_latest": "false",
-            }
-            print(json.dumps(payload))
-            PY
+          tag, title, notes_file = sys.argv[1:4]
+          payload = {
+              "tag_name": tag,
+              "target_commitish": "main",
+              "name": title,
+              "body": Path(notes_file).read_text(),
+              "draft": False,
+              "prerelease": True,
+              "make_latest": "false",
+          }
+          print(json.dumps(payload))
+          PY
 
             if ! gh api --method POST "repos/${PACKAGE_REPO}/releases" \
                 --input "$RUNNER_TEMP/create-release.json" \
