@@ -48,8 +48,8 @@ download "$BASE_URL/$SHA_NAME" "$SHA_NAME"
 echo "[qmanager-cfw3212] Verifying checksum"
 sha256sum -c "$SHA_NAME"
 
-echo "[qmanager-cfw3212] Extracting package"
-tar xzf "$TARBALL_NAME"
+echo "[qmanager-cfw3212] Extracting Casa uninstaller"
+tar xzf "$TARBALL_NAME" qmanager_install/uninstall_cfw3212.sh
 
 echo "[qmanager-cfw3212] Running Casa uninstaller"
 exec sh "$WORK_DIR/qmanager_install/uninstall_cfw3212.sh" --force --no-reboot "$@"

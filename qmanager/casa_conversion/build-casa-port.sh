@@ -314,13 +314,17 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-for svc in lighttpd \
+SERVICES="lighttpd \
     qmanager-poller qmanager-ping qmanager-firewall qmanager-setup \
     qmanager-ttl qmanager-mtu qmanager-imei-check qmanager-watchcat \
     qmanager-tower-failover qmanager-traffic qmanager-console \
     qmanager-discord qmanager-ethernet qmanager-cfun-fix \
-    qmanager_tailscale_install; do
-    systemctl disable --now "$svc.service" 2>/dev/null || true
+    qmanager_tailscale_install"
+
+# Stop everything first so QManager is quiet before deleting files from flash.
+systemctl stop $SERVICES 2>/dev/null || true
+for svc in $SERVICES; do
+    systemctl disable "$svc.service" 2>/dev/null || true
     rm -f "/etc/systemd/system/$svc.service"
     rm -f "/etc/systemd/system/multi-user.target.wants/$svc.service"
 done
@@ -363,12 +367,7 @@ if [ "$PURGE" = "1" ]; then
     rm -f /etc/sudoers.d/qmanager /usrdata/opt/etc/sudoers.d/qmanager 2>/dev/null || true
 fi
 
-systemctl reset-failed lighttpd \
-    qmanager-poller qmanager-ping qmanager-firewall qmanager-setup \
-    qmanager-ttl qmanager-mtu qmanager-imei-check qmanager-watchcat \
-    qmanager-tower-failover qmanager-traffic qmanager-console \
-    qmanager-discord qmanager-ethernet qmanager-cfun-fix \
-    qmanager_tailscale_install 2>/dev/null || true
+systemctl reset-failed $SERVICES 2>/dev/null || true
 
 echo "Casa CFW-3212 QManager files removed."
 if [ "$NO_REBOOT" != "1" ]; then
