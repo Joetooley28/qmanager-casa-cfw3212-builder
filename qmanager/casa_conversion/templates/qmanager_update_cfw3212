@@ -1,6 +1,7 @@
 #!/bin/sh
 # Casa CFW-3212 manual updater worker.
-# Downloads, verifies, installs, and reboots only for converted Casa packages.
+# Downloads, verifies, and installs converted Casa packages. Reboot is left
+# under explicit operator control after installation completes.
 
 LOG_FILE="/tmp/qmanager_update.log"
 STATUS_FILE="/tmp/qmanager_update.json"
@@ -192,16 +193,10 @@ if [ "$MODE" = "install_staged" ]; then
     write_status "installing" "Installation complete; flushing flash writes..." "$VERSION" ""
     log "Install complete; syncing flash writes"
     sync
-    write_status "rebooting" "Rebooting device..." "$VERSION" ""
-    log "Install complete; rebooting"
+    write_status "reboot_required" "Installation complete. Reboot when ready to finish applying the update." "$VERSION" ""
+    log "Install complete; reboot required"
     rm -f "$PID_FILE"
     trap - EXIT INT TERM
-    sleep 1
-    if command -v run_reboot >/dev/null 2>&1; then
-        run_reboot
-    else
-        reboot
-    fi
     exit 0
 fi
 

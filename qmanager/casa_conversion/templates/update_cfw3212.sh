@@ -340,6 +340,23 @@ if [ "$REQUEST_METHOD" = "POST" ]; then
         exit 0
     fi
 
+    if [ "$ACTION" = "reboot_now" ]; then
+        jq -n '{"success":true,"status":"rebooting"}'
+        jq -n \
+            --arg status "rebooting" \
+            --arg message "Rebooting device..." \
+            '{status: $status, message: $message}' > "$STATUS_FILE"
+        (
+            sleep 1
+            if command -v run_reboot >/dev/null 2>&1; then
+                run_reboot
+            else
+                reboot
+            fi
+        ) </dev/null >/dev/null 2>&1 &
+        exit 0
+    fi
+
     if [ "$ACTION" = "install" ]; then
         cgi_error "unsupported_on_cfw3212" "Use the Casa two-step download and install flow."
         exit 0

@@ -1171,6 +1171,218 @@ patch_update_defaults_cfw3212() {
         || fail "Could not set Casa prerelease default to disabled"
 }
 
+patch_software_update_reboot_required_cfw3212() {
+    local hook="$TARGET/hooks/use-software-update.ts"
+    local page="$TARGET/components/monitoring/software-update/software-update.tsx"
+    local card="$TARGET/components/monitoring/software-update/update-status-card.tsx"
+    [ -f "$hook" ] || fail "use-software-update.ts missing in target"
+    [ -f "$page" ] || fail "software-update.tsx missing in target"
+    [ -f "$card" ] || fail "update-status-card.tsx missing in target"
+
+    python3 - "$hook" "$page" "$card" <<'PY'
+from pathlib import Path
+import sys
+
+hook, page, card = map(Path, sys.argv[1:4])
+
+def replace_once(path: Path, old: str, new: str) -> None:
+    text = path.read_text()
+    if new in text:
+        return
+    if old not in text:
+        raise SystemExit(f"patch target not found in {path}: {old[:80]!r}")
+    path.write_text(text.replace(old, new, 1))
+
+replace_once(
+    hook,
+    '  status: "idle" | "downloading" | "installing" | "rebooting" | "error";',
+    '  status: "idle" | "downloading" | "installing" | "reboot_required" | "rebooting" | "error";',
+)
+replace_once(
+    hook,
+    '  installUpdate: () => Promise<void>;\n  togglePrerelease:',
+    '  installUpdate: () => Promise<void>;\n  rebootNow: () => Promise<void>;\n  togglePrerelease:',
+)
+replace_once(
+    hook,
+    '''        if (json.status === "rebooting") {
+          // Navigate to /reboot/ immediately so the static page loads from
+          // lighttpd before the OTA worker fires the reboot syscall. The
+          // worker waits for the page's reboot_ack before issuing reboot,
+          // so any delay here only widens the race.
+          if (pollRef.current) clearInterval(pollRef.current);
+          pollRef.current = null;
+          sessionStorage.setItem("qm_rebooting", "1");
+          document.cookie = "qm_logged_in=; Path=/; Max-Age=0";
+          window.location.href = "/reboot/";
+        }
+''',
+    '''        if (json.status === "reboot_required") {
+          if (pollRef.current) clearInterval(pollRef.current);
+          pollRef.current = null;
+          setIsUpdating(false);
+          return;
+        }
+
+        if (json.status === "rebooting") {
+          if (pollRef.current) clearInterval(pollRef.current);
+          pollRef.current = null;
+          sessionStorage.setItem("qm_rebooting", "1");
+          document.cookie = "qm_logged_in=; Path=/; Max-Age=0";
+          window.location.href = "/reboot/";
+        }
+''',
+)
+replace_once(
+    hook,
+    '''      } catch {
+        // Fetch failed — device is likely rebooting already. Navigate
+        // immediately; if the static page is uncached and lighttpd is
+        // already gone the user will see a connection error, but waiting
+        // doesn't help since the device won't come back any sooner.
+        if (pollRef.current) clearInterval(pollRef.current);
+        pollRef.current = null;
+        sessionStorage.setItem("qm_rebooting", "1");
+        document.cookie = "qm_logged_in=; Path=/; Max-Age=0";
+        window.location.href = "/reboot/";
+      }
+''',
+    '''      } catch {
+        // Casa does not reboot automatically after package install. A brief
+        // lighttpd restart during install can make one poll fail, so leave the
+        // user on the update page instead of assuming the router is rebooting.
+        if (pollRef.current) clearInterval(pollRef.current);
+        pollRef.current = null;
+        setIsUpdating(false);
+        setError("Lost connection while checking install status. Refresh QManager and reboot when ready if the update completed.");
+      }
+''',
+)
+replace_once(
+    hook,
+    '  const togglePrerelease = useCallback(async (enabled: boolean) => {\n',
+    '''  const rebootNow = useCallback(async () => {
+    setError(null);
+    setUpdateStatus({ status: "rebooting", message: "Rebooting device..." });
+    sessionStorage.setItem("qm_rebooting", "1");
+    document.cookie = "qm_logged_in=; Path=/; Max-Age=0";
+    fetch(CGI_ENDPOINT, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "reboot_now" }),
+      keepalive: true,
+    }).catch(() => {});
+    window.location.href = "/reboot/";
+  }, []);
+
+  const togglePrerelease = useCallback(async (enabled: boolean) => {
+''',
+)
+replace_once(
+    hook,
+    '    installStaged,\n    installUpdate,\n    togglePrerelease,\n',
+    '    installStaged,\n    installUpdate,\n    rebootNow,\n    togglePrerelease,\n',
+)
+
+replace_once(
+    page,
+    '''  // ── Updating state (replaces entire card grid) ────────────────────────
+  if (isUpdating && updateStatus.status !== "error") {
+''',
+    '''  // ── Updating state (replaces entire card grid) ────────────────────────
+  if (isUpdating && updateStatus.status !== "error" && updateStatus.status !== "reboot_required") {
+''',
+)
+replace_once(
+    page,
+    '  downloading: 0,\n  installing: 1,\n  rebooting: 2,\n',
+    '  downloading: 0,\n  installing: 1,\n  reboot_required: 2,\n  rebooting: 2,\n',
+)
+replace_once(
+    page,
+    '          installStaged={hookData.installStaged}\n',
+    '          installStaged={hookData.installStaged}\n          rebootNow={hookData.rebootNow}\n',
+)
+replace_once(
+    page,
+    '''  if (isUpdating && updateStatus.status !== "error") {
+    return (
+      <Badge variant="outline" className="bg-info/15 text-info hover:bg-info/20 border-info/30">
+        <DownloadIcon className="h-3 w-3" />
+        Updating
+      </Badge>
+    );
+  }
+''',
+    '''  if (updateStatus.status === "reboot_required") {
+    return (
+      <Badge variant="outline" className="bg-warning/15 text-warning hover:bg-warning/20 border-warning/30">
+        <TriangleAlertIcon className="h-3 w-3" />
+        Reboot required
+      </Badge>
+    );
+  }
+  if (isUpdating && updateStatus.status !== "error") {
+    return (
+      <Badge variant="outline" className="bg-info/15 text-info hover:bg-info/20 border-info/30">
+        <DownloadIcon className="h-3 w-3" />
+        Updating
+      </Badge>
+    );
+  }
+''',
+)
+
+replace_once(card, '  RefreshCwIcon,\n', '  RefreshCwIcon,\n  RotateCwIcon,\n')
+replace_once(card, '  installStaged: () => Promise<void>;\n', '  installStaged: () => Promise<void>;\n  rebootNow: () => Promise<void>;\n')
+replace_once(card, '  installStaged,\n}: UpdateStatusCardProps) {\n', '  installStaged,\n  rebootNow,\n}: UpdateStatusCardProps) {\n')
+replace_once(card, '  const displayError = updateInfo?.check_error || error;\n', '  const displayError = updateInfo?.check_error || error;\n  const rebootRequired = updateStatus.status === "reboot_required";\n')
+replace_once(
+    card,
+    '''          <motion.div
+            className="grid gap-2 min-w-0"
+''',
+    '''          {rebootRequired && (
+            <Alert className="mb-4 border-warning/30 bg-warning/10">
+              <AlertTriangleIcon className="size-4 text-warning" />
+              <AlertDescription className="flex flex-col gap-3 text-warning">
+                <span>
+                  {updateStatus.message || "Installation complete. Reboot when ready to finish applying the update."}
+                </span>
+                <span className="flex flex-wrap gap-2">
+                  <Button variant="outline" size="sm" onClick={rebootNow}>
+                    <RotateCwIcon className="size-4" />
+                    Reboot Now
+                  </Button>
+                  <span className="self-center text-xs text-muted-foreground">
+                    Or reboot later from the user menu.
+                  </span>
+                </span>
+              </AlertDescription>
+            </Alert>
+          )}
+
+          <motion.div
+            className="grid gap-2 min-w-0"
+''',
+)
+replace_once(
+    card,
+    '''              The device will reboot automatically after installation. Do not
+              power off the device during the update.
+''',
+    '''              QManager will restart its services after installation and then
+              ask you to reboot when ready. Do not power off the device during
+              the update.
+''',
+)
+
+for path in (hook, page, card):
+    if "reboot_required" not in path.read_text():
+        raise SystemExit(f"reboot_required patch missing from {path}")
+PY
+}
+
 patch_installer_version_cfw3212() {
     local installer="$TARGET/install_cfw3212.sh"
     [ -f "$installer" ] || fail "Casa installer missing in target"
@@ -1291,6 +1503,7 @@ apply_casa_overlays() {
     patch_qmanager_display_version
     patch_casa_display_name
     patch_casa_reboot
+    patch_software_update_reboot_required_cfw3212
 
     write_qmanager_update_cfw3212
     write_qmanager_auto_update_cfw3212
