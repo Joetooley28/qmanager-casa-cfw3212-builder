@@ -1274,13 +1274,14 @@ replace_once(
       }
 ''',
     '''      } catch {
-        // Casa does not reboot automatically after package install. A brief
-        // lighttpd restart during install can make one poll fail, so leave the
-        // user on the update page instead of assuming the router is rebooting.
-        if (pollRef.current) clearInterval(pollRef.current);
-        pollRef.current = null;
-        setIsUpdating(false);
-        setError("Lost connection while checking install status. Refresh QManager and reboot when ready if the update completed.");
+        // Casa restarts QManager/lighttpd during install. A failed poll here is
+        // expected while services restart, so keep polling until the worker
+        // reports reboot_required or a real error.
+        setError(null);
+        setUpdateStatus({
+          status: "installing",
+          message: "QManager services are restarting; reconnecting...",
+        });
       }
 ''',
 )
