@@ -645,9 +645,11 @@ for bin in atcli_smd11 sms_tool; do
 done
 
 if [ -d "$SRC_SCRIPTS/usr/bin" ]; then
-    find "$SRC_SCRIPTS/usr/bin" -type f -exec sed -i 's/\r$//' {} \;
     for f in "$SRC_SCRIPTS/usr/bin"/*; do
         [ -f "$f" ] || continue
+        if head -c 2 "$f" 2>/dev/null | grep -q '^#!'; then
+            sed -i 's/\r$//' "$f"
+        fi
         fname=$(basename "$f")
         copy_if_changed "$f" "$BIN_DIR/$fname" 755 || true
     done
