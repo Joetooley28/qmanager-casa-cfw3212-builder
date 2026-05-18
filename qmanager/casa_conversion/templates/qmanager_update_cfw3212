@@ -12,6 +12,8 @@ STAGED_TARBALL="/tmp/qmanager_staged.tar.gz"
 STAGED_VERSION="/tmp/qmanager_staged_version"
 PACKAGE_REPO="${QMANAGER_CFW3212_REPO:-Joetooley28/qmanager-casa-cfw3212-package}"
 
+export PATH="/usrdata/bin:/usrdata/opt/bin:/usrdata/opt/sbin:/usr/bin:/usr/sbin:/bin:/sbin:$PATH"
+
 [ -f /usrdata/qmanager/lib/platform.sh ] && . /usrdata/qmanager/lib/platform.sh
 
 pid_alive_fallback() { [ -n "$1" ] && [ -d "/proc/$1" ]; }
