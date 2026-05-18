@@ -679,8 +679,22 @@ new = '''# Group A: Identity reads — compound AT (6 -> 1 call)
     # AT+QGETCAPABILITY is intentionally separated: it is unsupported on some
     # platforms (e.g. CFW-3212/RG520N-NA) and returns ERROR, which poisons the
     # entire compound response causing all device identity fields to go blank.
+    #
+    # On CFW-3212 the modem can still reject this read during early boot. Retry
+    # briefly so one transient ERROR does not cache empty identity fields until
+    # qmanager-poller is manually restarted.
     # =========================================================================
-    result=$(qcmd 'AT+CVERSION;+CGMM;+CGSN;+CIMI;+QCCID;+CNUM' 2>/dev/null)'''
+    result=""
+    local identity_try
+    for identity_try in 1 2 3 4 5 6; do
+        result=$(qcmd 'AT+CVERSION;+CGMM;+CGSN;+CIMI;+QCCID;+CNUM' 2>/dev/null)
+        if printf '%s\n' "$result" | tr -d '\r' | grep -q '^OK$' && printf '%s\n' "$result" | tr -d '\r' | grep -q '^+QCCID:'; then
+            break
+        fi
+        result=""
+        qlog_warn "Boot identity read not ready; retry ${identity_try}/6"
+        sleep 3
+    done'''
 text = text.replace(old, new)
 
 old = '''
