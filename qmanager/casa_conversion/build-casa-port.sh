@@ -880,6 +880,95 @@ pin_casa_stable_ping_rust() {
     log "Pinned qmanager_ping Rust binary from Casa-tested reference"
 }
 
+patch_qmanager_health_check_paths_cfw3212() {
+    local worker="$TARGET/scripts/usr/bin/qmanager_health_check"
+    [ -f "$worker" ] || fail "Target missing qmanager_health_check worker"
+
+    python3 - "$worker" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+
+# Single-pass replacements — each rule uses a distinct upstream-only key so
+# the output of one rule never re-matches another. (str.replace is
+# non-overlapping by default; we still build the rule list to avoid any
+# cascade between similar paths like /etc/sudoers.d/qmanager vs
+# /opt/etc/sudoers.d/qmanager.)
+rules = [
+    ("/usr/bin/atcli_smd11",          "/usrdata/bin/atcli_smd11"),
+    ("/usr/bin/sms_tool",             "/usrdata/bin/sms_tool"),
+    ("/usr/bin/qcmd",                 "/usrdata/bin/qcmd"),
+    ("/opt/bin/jq",                   "/usrdata/opt/bin/jq"),
+    ("/opt/bin/curl",                 "/usrdata/opt/bin/curl"),
+    ("/opt/bin/openssl",              "/usrdata/opt/bin/openssl"),
+    ("/opt/bin/msmtp",                "/usrdata/opt/bin/msmtp"),
+    # Order matters: rewrite the /opt/etc form first, then the bare /etc
+    # form. Both ultimately resolve to /usrdata/opt/etc/sudoers.d/qmanager
+    # on Casa, so doing the long key first lets the short rule run on a
+    # string that no longer contains a /opt/etc prefix.
+    ("/opt/etc/sudoers.d/qmanager",   "/usrdata/opt/etc/sudoers.d/qmanager"),
+    ("/etc/sudoers.d/qmanager",       "/usrdata/opt/etc/sudoers.d/qmanager"),
+    ("/lib/systemd/system/multi-user.target.wants",
+     "/etc/systemd/system/multi-user.target.wants"),
+    # Lighttpd port check — Casa exposes 9080/9000 instead of 80/443.
+    (r"grep -qE '[:.](80)\b'",        r"grep -qE '[:.](9080)\b'"),
+    (r"grep -qE '[:.](443)\b'",       r"grep -qE '[:.](9000)\b'"),
+]
+
+# Build a single replacement table indexed by left-most match position so
+# no rule's output is fed back into another rule's input.
+positions = []
+for src, dst in rules:
+    idx = 0
+    while True:
+        i = text.find(src, idx)
+        if i < 0:
+            break
+        positions.append((i, src, dst))
+        idx = i + len(src)
+positions.sort()
+
+# Stitch the new string from the original, replacing each found range.
+parts = []
+cursor = 0
+last_end = -1
+for i, src, dst in positions:
+    if i < last_end:
+        # Overlapping match (shouldn't happen with our rule set, but guard
+        # so we never silently corrupt the file).
+        continue
+    parts.append(text[cursor:i])
+    parts.append(dst)
+    cursor = i + len(src)
+    last_end = cursor
+parts.append(text[cursor:])
+new_text = "".join(parts)
+
+if new_text != text:
+    path.write_text(new_text)
+PY
+
+    # Verify the swaps applied and nothing cascaded.
+    grep -q "/usrdata/bin/atcli_smd11" "$worker" \
+        || fail "Health-check worker missing /usrdata/bin/atcli_smd11 after patch"
+    grep -q "/usrdata/opt/bin/jq" "$worker" \
+        || fail "Health-check worker missing /usrdata/opt/bin/jq after patch"
+    grep -q "/etc/systemd/system/multi-user.target.wants" "$worker" \
+        || fail "Health-check worker missing Casa systemd wants path"
+    ! grep -q "/usrdata/usrdata/" "$worker" \
+        || fail "Health-check worker cascaded paths (double /usrdata/) — patch ordering broken"
+    ! grep -q "/usr/bin/atcli_smd11" "$worker" \
+        || fail "Health-check worker still has upstream /usr/bin/atcli_smd11"
+    # Every /etc/sudoers.d/qmanager occurrence must be the Casa form
+    # (/usrdata/opt/etc/sudoers.d/qmanager). Compare counts to confirm.
+    sudoers_total=$(grep -c "/etc/sudoers\.d/qmanager" "$worker" || echo 0)
+    sudoers_casa=$(grep -c "/usrdata/opt/etc/sudoers\.d/qmanager" "$worker" || echo 0)
+    [ "$sudoers_total" = "$sudoers_casa" ] \
+        || fail "Health-check worker has non-Casa /etc/sudoers.d/qmanager references"
+}
+
 patch_disable_profile_auto_apply() {
     local settings_sh="$TARGET/scripts/www/cgi-bin/quecmanager/cellular/settings.sh"
     local watchcat="$TARGET/scripts/usr/bin/qmanager_watchcat"
@@ -1722,6 +1811,7 @@ apply_casa_overlays() {
     write_update_cfw3212
 
     pin_casa_stable_ping_rust
+    patch_qmanager_health_check_paths_cfw3212
     patch_qmanager_poller
     patch_disable_profile_auto_apply
     patch_logging_cfw3212
