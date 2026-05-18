@@ -917,12 +917,25 @@ log_fallback() {
 }
 
 if [ "${QM_PING_FORCE_SHELL:-0}" != "1" ] && [ -x "$RUST" ]; then
-    "$RUST"
-    rc=$?
-    case "$rc" in
-        0|143|130) exit "$rc" ;;
-    esac
-    log_fallback "Rust qmanager_ping exited rc=$rc; starting Casa shell fallback"
+    RUST_ATTEMPTS="${QM_PING_RUST_ATTEMPTS:-4}"
+    RUST_RETRY_DELAY="${QM_PING_RUST_RETRY_DELAY:-15}"
+    RUST_START_DELAY="${QM_PING_RUST_START_DELAY:-20}"
+    sleep "$RUST_START_DELAY"
+    attempt=1
+    while [ "$attempt" -le "$RUST_ATTEMPTS" ]; do
+        "$RUST"
+        rc=$?
+        case "$rc" in
+            0|143|130) exit "$rc" ;;
+        esac
+        if [ "$attempt" -lt "$RUST_ATTEMPTS" ]; then
+            log_fallback "Rust qmanager_ping exited rc=$rc on attempt $attempt/$RUST_ATTEMPTS; retrying in ${RUST_RETRY_DELAY}s"
+            sleep "$RUST_RETRY_DELAY"
+        else
+            log_fallback "Rust qmanager_ping exited rc=$rc on attempt $attempt/$RUST_ATTEMPTS; starting Casa shell fallback"
+        fi
+        attempt=$((attempt + 1))
+    done
 fi
 
 exec "$SHELL_FALLBACK"
@@ -1213,6 +1226,7 @@ for svc in lighttpd qmanager-firewall qmanager-setup qmanager-ping \
     f="$SYSTEMD_DIR/${svc}.service"
     if [ -f "$f" ]; then
         ln -sf "$f" "$WANTS_DIR/${svc}.service"
+        systemctl enable "$svc" >/dev/null 2>&1 || true
         info "Enabled $svc"
     fi
 done
