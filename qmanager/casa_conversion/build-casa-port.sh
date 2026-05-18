@@ -861,6 +861,25 @@ PY
         || fail "Could not apply Casa QManager version poller patch"
 }
 
+pin_casa_stable_ping_rust() {
+    local ref_ping="$REF_DIR/scripts/usr/bin/qmanager_ping"
+    local target_ping="$TARGET/scripts/usr/bin/qmanager_ping"
+    [ -f "$ref_ping" ] || fail "Casa reference missing stable qmanager_ping: $ref_ping"
+    [ -f "$target_ping" ] || fail "Target missing qmanager_ping: $target_ping"
+
+    local ref_size
+    ref_size=$(wc -c < "$ref_ping" | tr -d ' ')
+    [ "$ref_size" -gt 100000 ] \
+        || fail "Casa reference qmanager_ping is not the expected Rust binary: $ref_ping"
+    if head -c 64 "$ref_ping" | grep -q '#!/bin/sh'; then
+        fail "Casa reference qmanager_ping is a shell wrapper, not the stable Rust binary: $ref_ping"
+    fi
+
+    cp "$ref_ping" "$target_ping"
+    chmod 755 "$target_ping"
+    log "Pinned qmanager_ping Rust binary from Casa-tested reference"
+}
+
 patch_disable_profile_auto_apply() {
     local settings_sh="$TARGET/scripts/www/cgi-bin/quecmanager/cellular/settings.sh"
     local watchcat="$TARGET/scripts/usr/bin/qmanager_watchcat"
@@ -1702,6 +1721,7 @@ apply_casa_overlays() {
 
     write_update_cfw3212
 
+    pin_casa_stable_ping_rust
     patch_qmanager_poller
     patch_disable_profile_auto_apply
     patch_logging_cfw3212
