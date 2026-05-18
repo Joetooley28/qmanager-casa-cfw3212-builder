@@ -1246,6 +1246,7 @@ replace_once(
     '''        if (json.status === "reboot_required") {
           if (pollRef.current) clearInterval(pollRef.current);
           pollRef.current = null;
+          sessionStorage.removeItem("qm_update_reload_scheduled");
           setIsUpdating(false);
           return;
         }
@@ -1276,11 +1277,18 @@ replace_once(
     '''      } catch {
         // Casa restarts QManager/lighttpd during install. A failed poll here is
         // expected while services restart, so keep polling until the worker
-        // reports reboot_required or a real error.
+        // reports reboot_required or a real error. Schedule one plain browser
+        // reload as a fallback for users left on stale UI state.
+        if (!sessionStorage.getItem("qm_update_reload_scheduled")) {
+          sessionStorage.setItem("qm_update_reload_scheduled", "1");
+          window.setTimeout(() => {
+            window.location.reload();
+          }, 30000);
+        }
         setError(null);
         setUpdateStatus({
           status: "installing",
-          message: "QManager services are restarting; reconnecting...",
+          message: "QManager services are restarting; reconnecting. This page will refresh automatically in about 30 seconds if the status does not recover.",
         });
       }
 ''',
