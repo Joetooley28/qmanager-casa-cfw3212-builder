@@ -1302,7 +1302,7 @@ if 'const toggleService = useCallback' not in text:
 
   return {
 ''', 1)
-if 'serviceEnabled,' not in text:
+if '\n    serviceEnabled,\n' not in text:
     text = text.replace('    target2,\n', '    target2,\n    serviceEnabled,\n    serviceActive,\n    serviceAvailable,\n    runtime,\n')
     text = text.replace('    isSaving,\n', '    isSaving,\n    isTogglingService,\n')
     text = text.replace('    save,\n', '    save,\n    toggleService,\n')
