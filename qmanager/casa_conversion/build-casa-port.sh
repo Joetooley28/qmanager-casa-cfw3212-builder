@@ -926,6 +926,19 @@ rules = [
      "_svc_check qmanager-console.service 0"),
     ("_svc_check qmanager-traffic.service 1",
      "_svc_check qmanager-traffic.service 0"),
+    # cfg.cgi_path_opt — the test looks for /opt/bin in lighttpd.conf /
+    # cgi_base.sh, but on Casa the PATH includes /usrdata/opt/bin instead.
+    # cgi_base.sh also lives at /usrdata/qmanager/lib/, not /usr/lib/qmanager/.
+    ("local cgi_base=/usr/lib/qmanager/cgi_base.sh",
+     "local cgi_base=/usrdata/qmanager/lib/cgi_base.sh"),
+    (r"'PATH.*\/opt\/bin'",           r"'PATH.*\/usrdata\/opt\/bin'"),
+    (r"'PATH=.*\/opt\/bin'",          r"'PATH=.*\/usrdata\/opt\/bin'"),
+    ('"pass|PATH includes /opt/bin in lighttpd.conf"',
+     '"pass|PATH includes /usrdata/opt/bin in lighttpd.conf"'),
+    ('"fail|/opt/bin not in lighttpd.conf and not in cgi_base.sh"',
+     '"fail|/usrdata/opt/bin not in lighttpd.conf and not in cgi_base.sh"'),
+    ("lighttpd CGI PATH includes /opt/bin",
+     "lighttpd CGI PATH includes /usrdata/opt/bin"),
 ]
 
 # Build a single replacement table indexed by left-most match position so
@@ -1004,6 +1017,10 @@ PY
         || fail "Health-check worker did not mark qmanager-console optional"
     grep -q "_svc_check qmanager-traffic.service 0" "$worker" \
         || fail "Health-check worker did not mark qmanager-traffic optional"
+    grep -q "local cgi_base=/usrdata/qmanager/lib/cgi_base.sh" "$worker" \
+        || fail "Health-check worker still has upstream /usr/lib/qmanager/cgi_base.sh path"
+    grep -q "lighttpd CGI PATH includes /usrdata/opt/bin" "$worker" \
+        || fail "Health-check worker cfg.cgi_path_opt label still says /opt/bin"
 }
 
 patch_disable_profile_auto_apply() {
