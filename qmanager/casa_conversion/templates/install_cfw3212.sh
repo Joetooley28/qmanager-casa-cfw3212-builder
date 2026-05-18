@@ -346,6 +346,25 @@ available_kb=$(df /usrdata | awk 'NR==2{print $4}')
 [ "$available_kb" -gt 30000 ] || die "/usrdata < 30MB free"
 info "/usrdata has $((available_kb/1024))MB free"
 
+# Entware sudo has its ELF interpreter and RPATH baked to /opt/lib/...
+# Without /opt -> /usrdata/opt, the setuid sudo at /usrdata/opt/bin/sudo
+# cannot find its loader, and the ld-linux wrapper at /usrdata/bin/sudo
+# loses setuid privileges (kernel strips them when the loader is named
+# explicitly). Every CGI that uses `sudo -n` then silently fails.
+if [ ! -e /opt ]; then
+    if mount -o remount,rw / 2>/dev/null; then
+        ln -s /usrdata/opt /opt 2>/dev/null || true
+        mount -o remount,ro / 2>/dev/null || true
+    fi
+    if [ -L /opt ]; then
+        info "/opt -> /usrdata/opt symlink created"
+    else
+        warn "/opt symlink could not be created — Entware sudo may not work"
+    fi
+else
+    info "/opt already present"
+fi
+
 # --- Extract -----------------------------------------------------------------
 
 step "Extracting tarball"
