@@ -281,8 +281,10 @@ jobs:
           upstream_tag="${{ steps.resolve.outputs.upstream_tag }}"
           casa_build="${{ steps.resolve.outputs.casa_build }}"
           ref_dir="$RUNNER_TEMP/casa-reference"
-          mkdir -p "$ref_dir"
+          mkdir -p "$ref_dir" "$ref_dir/scripts/usr/bin"
           cp qmanager/casa_conversion/templates/install_cfw3212.sh "$ref_dir/install_cfw3212.sh"
+          cp qmanager/casa_conversion/vendor/scripts/usr/bin/qmanager_ping "$ref_dir/scripts/usr/bin/qmanager_ping"
+          chmod 755 "$ref_dir/scripts/usr/bin/qmanager_ping"
 
           UPSTREAM_REPO="https://github.com/${UPSTREAM_REPO_SLUG}.git" \
           UPSTREAM_API="https://api.github.com/repos/${UPSTREAM_REPO_SLUG}/releases" \
