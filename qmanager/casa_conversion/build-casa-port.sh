@@ -915,6 +915,17 @@ rules = [
     # Lighttpd port check — Casa exposes 9080/9000 instead of 80/443.
     (r"grep -qE '[:.](80)\b'",        r"grep -qE '[:.](9080)\b'"),
     (r"grep -qE '[:.](443)\b'",       r"grep -qE '[:.](9000)\b'"),
+    # Cosmetic strings tied to the port test — labels and result messages.
+    ("lighttpd listening on 80/443",  "lighttpd listening on 9080/9000"),
+    ("listening on 80 and 443",       "listening on 9080 and 9000"),
+    ("not listening on 80 or 443",    "not listening on 9080 or 9000"),
+    # qmanager-console (ttyd web console) and qmanager-traffic (live traffic
+    # counter) are opt-in features. Mark them optional so a fresh install
+    # reports them as skip rather than warn when they aren't enabled.
+    ("_svc_check qmanager-console.service 1",
+     "_svc_check qmanager-console.service 0"),
+    ("_svc_check qmanager-traffic.service 1",
+     "_svc_check qmanager-traffic.service 0"),
 ]
 
 # Build a single replacement table indexed by left-most match position so
@@ -946,6 +957,22 @@ for i, src, dst in positions:
 parts.append(text[cursor:])
 new_text = "".join(parts)
 
+# _svc_check capture bug: `systemctl is-active` exits non-zero for inactive
+# / failed services, so the original `|| echo unknown` fallback fires AND
+# the real state is also captured, producing a two-line $active string that
+# falls through the case statement to the catch-all `*) warn "state=$active"`.
+# Capture stdout only and explicitly fall back to "unknown" only when empty.
+svc_check_old = (
+    '    local active; active=$(systemctl is-active "$unit" 2>/dev/null '
+    '|| echo unknown)\n'
+)
+svc_check_new = (
+    '    local active; active=$(systemctl is-active "$unit" 2>/dev/null)\n'
+    '    [ -z "$active" ] && active="unknown"\n'
+)
+if svc_check_old in new_text:
+    new_text = new_text.replace(svc_check_old, svc_check_new, 1)
+
 if new_text != text:
     path.write_text(new_text)
 PY
@@ -967,6 +994,16 @@ PY
     sudoers_casa=$(grep -c "/usrdata/opt/etc/sudoers\.d/qmanager" "$worker" || echo 0)
     [ "$sudoers_total" = "$sudoers_casa" ] \
         || fail "Health-check worker has non-Casa /etc/sudoers.d/qmanager references"
+    grep -q "lighttpd listening on 9080/9000" "$worker" \
+        || fail "Health-check worker still has 80/443 in lighttpd_listen label"
+    ! grep -q "|| echo unknown)" "$worker" \
+        || fail "Health-check worker _svc_check still has || echo unknown bug"
+    grep -qE '\[ -z "\$active" \] && active="unknown"' "$worker" \
+        || fail "Health-check worker _svc_check fallback patch did not apply"
+    grep -q "_svc_check qmanager-console.service 0" "$worker" \
+        || fail "Health-check worker did not mark qmanager-console optional"
+    grep -q "_svc_check qmanager-traffic.service 0" "$worker" \
+        || fail "Health-check worker did not mark qmanager-traffic optional"
 }
 
 patch_disable_profile_auto_apply() {
