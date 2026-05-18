@@ -1182,6 +1182,177 @@ patch_package_version() {
     fi
 }
 
+patch_ping_profile_service_toggle_cfw3212() {
+    local cgi="$TARGET/scripts/www/cgi-bin/quecmanager/settings/ping_profile.sh"
+    local hook="$TARGET/hooks/use-ping-profile.ts"
+    local card="$TARGET/components/system-settings/connection-quality/connectivity-sensitivity-card.tsx"
+    [ -f "$cgi" ] || return 0
+    [ -f "$hook" ] || return 0
+    [ -f "$card" ] || return 0
+
+    python3 - "$cgi" "$hook" "$card" <<'PY'
+from pathlib import Path
+import sys
+
+cgi, hook, card = map(Path, sys.argv[1:4])
+
+text = cgi.read_text()
+text = text.replace(
+    'RELOAD_FLAG="${PING_PROFILE_RELOAD_FLAG:-/tmp/qmanager_ping_reload}"\n',
+    'RELOAD_FLAG="${PING_PROFILE_RELOAD_FLAG:-/tmp/qmanager_ping_reload}"\nSERVICE_NAME="${PING_SERVICE_NAME:-qmanager-ping.service}"\n',
+    1,
+) if 'PING_SERVICE_NAME' not in text else text
+text = text.replace(
+    '    if [ -f "$CONFIG" ]; then\n        v=$(jq -r \'.profile // empty\' "$CONFIG" 2>/dev/null) || v=""\n',
+    '    service_enabled=false\n    service_active=false\n    service_available=false\n    if command -v systemctl >/dev/null 2>&1; then\n        service_available=true\n        systemctl is-enabled "$SERVICE_NAME" >/dev/null 2>&1 && service_enabled=true\n        systemctl is-active "$SERVICE_NAME" >/dev/null 2>&1 && service_active=true\n    fi\n    runtime="unknown"\n    if pgrep -f "/usrdata/bin/qmanager_ping_rust" >/dev/null 2>&1; then\n        runtime="rust"\n    elif pgrep -f "/usrdata/bin/qmanager_ping_shell" >/dev/null 2>&1; then\n        runtime="shell"\n    elif [ "$service_active" = "false" ]; then\n        runtime="stopped"\n    fi\n\n    if [ -f "$CONFIG" ]; then\n        v=$(jq -r \'.profile // empty\' "$CONFIG" 2>/dev/null) || v=""\n',
+    1,
+) if 'service_available=false' not in text else text
+text = text.replace(
+'''    jq -n \\
+        --arg profile "$profile" \\
+        --arg target_1 "$target_1" \\
+        --arg target_2 "$target_2" \\
+        '{success: true, settings: {profile: $profile, target_1: $target_1, target_2: $target_2}}'
+''',
+'''    jq -n \\
+        --arg profile "$profile" \\
+        --arg target_1 "$target_1" \\
+        --arg target_2 "$target_2" \\
+        --argjson service_enabled "$service_enabled" \\
+        --argjson service_active "$service_active" \\
+        --argjson service_available "$service_available" \\
+        --arg runtime "$runtime" \\
+        '{success: true, settings: {profile: $profile, target_1: $target_1, target_2: $target_2, service_enabled: $service_enabled, service_active: $service_active, service_available: $service_available, runtime: $runtime}}'
+''',
+    1,
+) if 'service_enabled: $service_enabled' not in text else text
+if 'set_service_enabled' not in text:
+    text = text.replace(
+'''    if [ "$ACTION" != "save_settings" ]; then
+''',
+'''    if [ "$ACTION" = "set_service_enabled" ]; then
+        enabled=$(printf '%s' "$POST_DATA" | jq -r '.enabled | if . == null then empty else tostring end' 2>/dev/null)
+        case "$enabled" in
+            true|1)
+                systemctl enable "$SERVICE_NAME" >/dev/null 2>&1 || { cgi_error "service_enable_failed" "Failed to enable qmanager-ping"; exit 0; }
+                systemctl restart "$SERVICE_NAME" >/dev/null 2>&1 || { cgi_error "service_start_failed" "Failed to start qmanager-ping"; exit 0; }
+                ;;
+            false|0)
+                systemctl disable --now "$SERVICE_NAME" >/dev/null 2>&1 || true
+                ;;
+            *)
+                cgi_error "invalid_enabled" "enabled must be true or false"
+                exit 0
+                ;;
+        esac
+        service_enabled=false
+        service_active=false
+        systemctl is-enabled "$SERVICE_NAME" >/dev/null 2>&1 && service_enabled=true
+        systemctl is-active "$SERVICE_NAME" >/dev/null 2>&1 && service_active=true
+        runtime="unknown"
+        if pgrep -f "/usrdata/bin/qmanager_ping_rust" >/dev/null 2>&1; then runtime="rust"; elif pgrep -f "/usrdata/bin/qmanager_ping_shell" >/dev/null 2>&1; then runtime="shell"; elif [ "$service_active" = "false" ]; then runtime="stopped"; fi
+        jq -n --argjson service_enabled "$service_enabled" --argjson service_active "$service_active" --arg runtime "$runtime" '{success:true, service_enabled:$service_enabled, service_active:$service_active, runtime:$runtime}'
+        exit 0
+    fi
+
+    if [ "$ACTION" != "save_settings" ]; then
+''',
+        1,
+    )
+cgi.write_text(text)
+
+text = hook.read_text()
+text = text.replace('  target_2: string;\n}', '  target_2: string;\n  service_enabled?: boolean;\n  service_active?: boolean;\n  service_available?: boolean;\n  runtime?: "rust" | "shell" | "stopped" | "unknown";\n}', 1) if 'service_enabled?: boolean;' not in text else text
+text = text.replace('  detail?: string;\n}', '  detail?: string;\n  service_enabled?: boolean;\n  service_active?: boolean;\n  runtime?: "rust" | "shell" | "stopped" | "unknown";\n}', 1) if 'service_active?: boolean;' not in text.split('interface PingProfileResponse', 1)[1].split('export interface', 1)[0] else text
+if 'serviceEnabled: boolean | undefined;' not in text:
+    text = text.replace('  target2: string | undefined;\n', '  target2: string | undefined;\n  serviceEnabled: boolean | undefined;\n  serviceActive: boolean | undefined;\n  serviceAvailable: boolean | undefined;\n  runtime: "rust" | "shell" | "stopped" | "unknown" | undefined;\n')
+    text = text.replace('  isSaving: boolean;\n', '  isSaving: boolean;\n  isTogglingService: boolean;\n')
+    text = text.replace('  }) => Promise<PingProfileResponse>;\n}', '  }) => Promise<PingProfileResponse>;\n  toggleService: (enabled: boolean) => Promise<PingProfileResponse>;\n}')
+if 'const [serviceEnabled' not in text:
+    text = text.replace('  const [target2, setTarget2] = useState<string | undefined>(undefined);\n', '  const [target2, setTarget2] = useState<string | undefined>(undefined);\n  const [serviceEnabled, setServiceEnabled] = useState<boolean | undefined>(undefined);\n  const [serviceActive, setServiceActive] = useState<boolean | undefined>(undefined);\n  const [serviceAvailable, setServiceAvailable] = useState<boolean | undefined>(undefined);\n  const [runtime, setRuntime] = useState<"rust" | "shell" | "stopped" | "unknown" | undefined>(undefined);\n')
+    text = text.replace('  const [isSaving, setIsSaving] = useState(false);\n', '  const [isSaving, setIsSaving] = useState(false);\n  const [isTogglingService, setIsTogglingService] = useState(false);\n')
+if 'setServiceEnabled(json.settings.service_enabled);' not in text:
+    text = text.replace('      setTarget2(json.settings.target_2);\n', '      setTarget2(json.settings.target_2);\n      setServiceEnabled(json.settings.service_enabled);\n      setServiceActive(json.settings.service_active);\n      setServiceAvailable(json.settings.service_available);\n      setRuntime(json.settings.runtime);\n', 1)
+if 'const toggleService = useCallback' not in text:
+    text = text.replace('  return {\n', '''  const toggleService = useCallback(async (enabled: boolean): Promise<PingProfileResponse> => {
+    setSaveError(null);
+    setIsTogglingService(true);
+    try {
+      const resp = await authFetch(ENDPOINT, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "set_service_enabled", enabled }),
+      });
+      const json: PingProfileResponse = await resp.json();
+      if (!mountedRef.current) return json;
+      if (!json.success) throw new Error(json.detail ?? json.error ?? "Service toggle failed");
+      setServiceEnabled(json.service_enabled ?? enabled);
+      setServiceActive(json.service_active ?? enabled);
+      setRuntime(json.runtime);
+      fetchProfile(true);
+      return json;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Service toggle failed";
+      if (mountedRef.current) setSaveError(msg);
+      throw err;
+    } finally {
+      if (mountedRef.current) setIsTogglingService(false);
+    }
+  }, [fetchProfile]);
+
+  return {
+''', 1)
+if 'serviceEnabled,' not in text:
+    text = text.replace('    target2,\n', '    target2,\n    serviceEnabled,\n    serviceActive,\n    serviceAvailable,\n    runtime,\n')
+    text = text.replace('    isSaving,\n', '    isSaving,\n    isTogglingService,\n')
+    text = text.replace('    save,\n', '    save,\n    toggleService,\n')
+hook.write_text(text)
+
+text = card.read_text()
+if 'components/ui/switch' not in text:
+    text = text.replace('import { Button } from "@/components/ui/button";\n', 'import { Button } from "@/components/ui/button";\nimport { Switch } from "@/components/ui/switch";\n', 1)
+if 'serviceEnabled,' not in text:
+    text = text.replace('    target2,\n    isLoading,', '    target2,\n    serviceEnabled,\n    serviceActive,\n    serviceAvailable,\n    runtime,\n    isTogglingService,\n    isLoading,')
+    text = text.replace('    save,\n  } = usePingProfile();', '    save,\n    toggleService,\n  } = usePingProfile();')
+if 'id="ping-service-enabled"' not in text:
+    text = text.replace('        {saveError && (\n', '''        {serviceAvailable && (
+          <div className="mb-4 flex items-center justify-between gap-4 rounded-md border p-3">
+            <div className="space-y-0.5">
+              <div className="flex items-center gap-2">
+                <Label htmlFor="ping-service-enabled">Latency monitor</Label>
+                <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium ${runtime === "rust" ? "text-emerald-600" : runtime === "shell" ? "text-amber-600" : "text-muted-foreground"}`}>
+                  <span className={`size-1.5 rounded-full ${runtime === "rust" ? "bg-emerald-500" : runtime === "shell" ? "bg-amber-500" : "bg-muted-foreground"}`} />
+                  {runtime === "rust" ? "Rust" : runtime === "shell" ? "Shell" : runtime === "stopped" ? "Off" : "Unknown"}
+                </span>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {serviceActive ? "Service is running." : "Service is stopped."}
+              </p>
+            </div>
+            <Switch
+              id="ping-service-enabled"
+              checked={serviceEnabled ?? false}
+              disabled={isTogglingService}
+              onCheckedChange={async (checked) => {
+                try {
+                  await toggleService(checked);
+                  toast.success(checked ? "Latency monitor enabled" : "Latency monitor disabled");
+                } catch (e) {
+                  const msg = e instanceof Error ? e.message : "Failed to update latency monitor";
+                  toast.error(msg);
+                }
+              }}
+              aria-label="Enable latency monitor service"
+            />
+          </div>
+        )}
+
+        {saveError && (
+''', 1)
+card.write_text(text)
+PY
+}
+
 patch_software_update_reboot_required_cfw3212() {
     local hook="$TARGET/hooks/use-software-update.ts"
     local page="$TARGET/components/monitoring/software-update/software-update.tsx"
@@ -1523,6 +1694,7 @@ apply_casa_overlays() {
     patch_qmanager_display_version
     patch_casa_display_name
     patch_casa_reboot
+    patch_ping_profile_service_toggle_cfw3212
     patch_software_update_reboot_required_cfw3212
 
     write_qmanager_update_cfw3212

@@ -654,6 +654,282 @@ if [ -d "$SRC_SCRIPTS/usr/bin" ]; then
     info "$(ls "$SRC_SCRIPTS/usr/bin" | wc -l) daemons installed to $BIN_DIR"
 fi
 
+# Preserve the upstream Rust qmanager_ping as the primary implementation, but
+# install a Casa shell fallback. If Rust exits nonzero during early boot, the
+# wrapper falls back instead of letting systemd restart-loop the router.
+step "Installing Casa ping daemon wrapper and fallback"
+if [ -f "$BIN_DIR/qmanager_ping" ]; then
+    mv "$BIN_DIR/qmanager_ping" "$BIN_DIR/qmanager_ping_rust"
+    chmod 755 "$BIN_DIR/qmanager_ping_rust"
+fi
+cat > "$BIN_DIR/qmanager_ping_shell" << 'EOF'
+#!/bin/sh
+
+LIB_DIR="${QM_LIB_DIR:-/usrdata/qmanager/lib}"
+. "$LIB_DIR/qlog.sh" 2>/dev/null || . /usr/lib/qmanager/qlog.sh 2>/dev/null || {
+    qlog_init() { :; }
+    qlog_debug() { :; }
+    qlog_info() { :; }
+    qlog_warn() { :; }
+    qlog_error() { :; }
+    qlog_state_change() { :; }
+}
+qlog_init "ping"
+
+CONFIG="${PING_PROFILE_CONFIG:-/etc/qmanager/ping_profile.json}"
+RELOAD_FLAG="${PING_PROFILE_RELOAD_FLAG:-/tmp/qmanager_ping_reload}"
+CACHE_FILE="/tmp/qmanager_ping.json"
+CACHE_TMP="/tmp/qmanager_ping.json.tmp"
+HISTORY_FILE="/tmp/qmanager_ping_history"
+RECOVERY_FLAG="/tmp/qmanager_recovery_active"
+PID_FILE="/tmp/qmanager_ping.pid"
+PING_TIMEOUT="${PING_TIMEOUT:-2}"
+
+profile="relaxed"
+target_1="http://cp.cloudflare.com/"
+target_2="http://www.gstatic.com/generate_204"
+interval_sec=5
+fail_secs=15
+recover_secs=10
+intercept_secs=8
+history_secs=300
+fail_threshold=3
+recover_threshold=2
+streak_success=0
+streak_fail=0
+reachable="true"
+connectivity="connected"
+target_index=0
+history_count=0
+history_size=60
+
+ceil_div() {
+    a="$1"
+    b="$2"
+    [ "$b" -le 0 ] 2>/dev/null && b=1
+    echo $(( (a + b - 1) / b ))
+}
+
+profile_defaults() {
+    case "$1" in
+        sensitive)
+            profile="sensitive"; interval_sec=1; fail_secs=6; recover_secs=3; intercept_secs=8; history_secs=300 ;;
+        regular)
+            profile="regular"; interval_sec=2; fail_secs=10; recover_secs=6; intercept_secs=8; history_secs=300 ;;
+        quiet)
+            profile="quiet"; interval_sec=10; fail_secs=30; recover_secs=20; intercept_secs=8; history_secs=600 ;;
+        *)
+            profile="relaxed"; interval_sec=5; fail_secs=15; recover_secs=10; intercept_secs=8; history_secs=300 ;;
+    esac
+}
+
+load_config() {
+    cfg_profile="relaxed"
+    if [ -f "$CONFIG" ]; then
+        cfg_profile=$(jq -r '.profile // "relaxed"' "$CONFIG" 2>/dev/null || echo relaxed)
+    fi
+    case "$cfg_profile" in sensitive|regular|relaxed|quiet) ;; *) cfg_profile="relaxed" ;; esac
+    profile_defaults "$cfg_profile"
+
+    if [ -f "$CONFIG" ]; then
+        t1=$(jq -r '.target_1 // empty' "$CONFIG" 2>/dev/null || true)
+        t2=$(jq -r '.target_2 // empty' "$CONFIG" 2>/dev/null || true)
+        [ -n "$t1" ] && target_1="$t1"
+        [ -n "$t2" ] && target_2="$t2"
+    fi
+
+    [ -n "${PING_PROFILE:-}" ] && profile_defaults "$PING_PROFILE"
+    [ -n "${PING_INTERVAL:-}" ] && interval_sec="$PING_INTERVAL" && profile="custom"
+    [ -n "${FAIL_SECS:-}" ] && fail_secs="$FAIL_SECS" && profile="custom"
+    [ -n "${RECOVER_SECS:-}" ] && recover_secs="$RECOVER_SECS" && profile="custom"
+    [ -n "${INTERCEPT_SECS:-}" ] && intercept_secs="$INTERCEPT_SECS" && profile="custom"
+    [ -n "${HISTORY_SECS:-}" ] && history_secs="$HISTORY_SECS" && profile="custom"
+    [ -n "${PING_TARGET_1:-}" ] && target_1="$PING_TARGET_1"
+    [ -n "${PING_TARGET_2:-}" ] && target_2="$PING_TARGET_2"
+
+    case "$interval_sec" in *[!0-9]*|''|0) interval_sec=5 ;; esac
+    case "$fail_secs" in *[!0-9]*|'') fail_secs=15 ;; esac
+    case "$recover_secs" in *[!0-9]*|'') recover_secs=10 ;; esac
+    case "$intercept_secs" in *[!0-9]*|'') intercept_secs=8 ;; esac
+    case "$history_secs" in *[!0-9]*|'') history_secs=300 ;; esac
+
+    fail_threshold=$(ceil_div "$fail_secs" "$interval_sec")
+    recover_threshold=$(ceil_div "$recover_secs" "$interval_sec")
+    history_size=$(ceil_div "$history_secs" "$interval_sec")
+    [ "$fail_threshold" -lt 1 ] 2>/dev/null && fail_threshold=1
+    [ "$recover_threshold" -lt 1 ] 2>/dev/null && recover_threshold=1
+    [ "$history_size" -lt 1 ] 2>/dev/null && history_size=1
+}
+
+host_from_target() {
+    host="$1"
+    host="${host#http://}"
+    host="${host#https://}"
+    host="${host%%/*}"
+    host="${host%%:*}"
+    case "$host" in
+        cp.cloudflare.com|cloudflare.com) host="1.1.1.1" ;;
+    esac
+    printf '%s' "$host"
+}
+
+get_target() {
+    if [ "$target_index" -eq 0 ]; then
+        printf '%s' "$target_1"
+    else
+        printf '%s' "$target_2"
+    fi
+    target_index=$(( (target_index + 1) % 2 ))
+}
+
+do_ping() {
+    host=$(host_from_target "$1")
+    [ -z "$host" ] && return 1
+    result=$(ping -c1 -W"$PING_TIMEOUT" "$host" 2>/dev/null) || return 1
+    rtt="${result##*time=}"
+    rtt="${rtt%% *}"
+    case "$rtt" in ''|*[!0-9.]*) return 1 ;; esac
+    printf '%s' "$rtt"
+}
+
+write_cache() {
+    rtt="$1"
+    used_target="$2"
+    now=$(date +%s)
+    during_recovery=false
+    [ -f "$RECOVERY_FLAG" ] && during_recovery=true
+    if [ "$reachable" = "true" ]; then
+        connectivity="connected"
+        down_reason=null
+    else
+        connectivity="disconnected"
+        down_reason="timeout"
+    fi
+
+    jq -n \
+        --argjson timestamp "$now" \
+        --arg target1 "$target_1" \
+        --arg target2 "$target_2" \
+        --argjson interval "$interval_sec" \
+        --argjson last_rtt "$rtt" \
+        --argjson reachable "$reachable" \
+        --argjson streak_s "$streak_success" \
+        --argjson streak_f "$streak_fail" \
+        --argjson during_rec "$during_recovery" \
+        --arg connectivity "$connectivity" \
+        --arg down_reason "$down_reason" \
+        --arg target_used "$used_target" \
+        --argjson fail_secs "$fail_secs" \
+        --argjson recover_secs "$recover_secs" \
+        --argjson intercept_secs "$intercept_secs" \
+        --arg profile "$profile" \
+        '{
+            timestamp: $timestamp,
+            targets: [$target1, $target2],
+            interval_sec: $interval,
+            last_rtt_ms: $last_rtt,
+            reachable: $reachable,
+            streak_success: $streak_s,
+            streak_fail: $streak_f,
+            during_recovery: $during_rec,
+            connectivity: $connectivity,
+            limited_reason: null,
+            down_reason: (if $down_reason == "null" then null else $down_reason end),
+            streak_limited: 0,
+            probe_target_used: $target_used,
+            http_code_seen: null,
+            tcp_reused: false,
+            fail_secs: $fail_secs,
+            recover_secs: $recover_secs,
+            intercept_secs: $intercept_secs,
+            profile: $profile
+        }' > "$CACHE_TMP" && mv "$CACHE_TMP" "$CACHE_FILE"
+}
+
+if [ -f "$PID_FILE" ]; then
+    old_pid=$(cat "$PID_FILE" 2>/dev/null || true)
+    if [ -n "$old_pid" ] && kill -0 "$old_pid" 2>/dev/null; then
+        qlog_error "Another ping daemon already running (PID $old_pid), exiting"
+        exit 1
+    fi
+    rm -f "$PID_FILE"
+fi
+echo $$ > "$PID_FILE"
+trap 'rm -f "$PID_FILE" "$CACHE_TMP"' EXIT INT TERM
+
+load_config
+qlog_info "QManager Casa shell ping daemon starting (PID $$)"
+qlog_info "Profile: $profile; targets: $target_1, $target_2; interval=${interval_sec}s"
+rm -f "$CACHE_TMP"
+: > "$HISTORY_FILE"
+
+while true; do
+    if [ -f "$RELOAD_FLAG" ]; then
+        old_profile="$profile"
+        load_config
+        rm -f "$RELOAD_FLAG"
+        qlog_state_change "profile" "$old_profile" "$profile"
+    fi
+
+    target=$(get_target)
+    rtt=$(do_ping "$target" || true)
+    if [ -n "$rtt" ]; then
+        streak_success=$((streak_success + 1))
+        streak_fail=0
+        if [ "$reachable" = "false" ] && [ "$streak_success" -ge "$recover_threshold" ]; then
+            reachable="true"
+            qlog_state_change "reachable" "false" "true"
+        fi
+        printf '%s\n' "$rtt" >> "$HISTORY_FILE"
+    else
+        rtt="null"
+        streak_fail=$((streak_fail + 1))
+        streak_success=0
+        if [ "$reachable" = "true" ] && [ "$streak_fail" -ge "$fail_threshold" ]; then
+            reachable="false"
+            qlog_state_change "reachable" "true" "false"
+            qlog_warn "Internet unreachable after $fail_threshold consecutive failures"
+        fi
+        printf 'null\n' >> "$HISTORY_FILE"
+    fi
+
+    history_count=$((history_count + 1))
+    if [ "$history_count" -gt "$history_size" ]; then
+        tail -n "$history_size" "$HISTORY_FILE" > "${HISTORY_FILE}.tmp" && mv "${HISTORY_FILE}.tmp" "$HISTORY_FILE"
+        history_count="$history_size"
+    fi
+
+    write_cache "$rtt" "$target" || qlog_error "Failed to write ping cache"
+    sleep "$interval_sec"
+done
+EOF
+chmod 755 "$BIN_DIR/qmanager_ping_shell"
+cat > "$BIN_DIR/qmanager_ping" << 'EOF'
+#!/bin/sh
+
+RUST="/usrdata/bin/qmanager_ping_rust"
+SHELL_FALLBACK="/usrdata/bin/qmanager_ping_shell"
+LOG="/tmp/qmanager.log"
+
+log_fallback() {
+    ts=$(date +%Y-%m-%dT%H:%M:%S%z 2>/dev/null || date)
+    echo "[$ts] WARN  [ping-wrapper:$$] $*" >> "$LOG" 2>/dev/null || true
+}
+
+if [ "${QM_PING_FORCE_SHELL:-0}" != "1" ] && [ -x "$RUST" ]; then
+    "$RUST"
+    rc=$?
+    case "$rc" in
+        0|143|130) exit "$rc" ;;
+    esac
+    log_fallback "Rust qmanager_ping exited rc=$rc; starting Casa shell fallback"
+fi
+
+exec "$SHELL_FALLBACK"
+EOF
+chmod 755 "$BIN_DIR/qmanager_ping"
+info "Casa qmanager_ping wrapper installed (Rust primary, shell fallback)"
+
 # --- Entware bootstrap (all under /usrdata/opt) ------------------------------
 
 step "Entware bootstrap (→ $OPT_DIR)"
@@ -864,6 +1140,51 @@ for f in "$SRC_SCRIPTS/etc/systemd/system"/qmanager*.service; do
 done
 info "qmanager service units installed"
 
+# Casa CFW-3212 note: keep the poller independent from qmanager-ping. The
+# installer starts both explicitly, and this prevents a future ping regression
+# from being pulled back in just because the poller restarts.
+if [ -f "$SYSTEMD_DIR/qmanager-poller.service" ]; then
+    sed -i \
+        -e 's/[[:space:]]*qmanager-ping\.service//g' \
+        -e '/^Wants=$/d' \
+        -e '/^After=$/d' \
+        "$SYSTEMD_DIR/qmanager-poller.service"
+fi
+if [ -f "$SYSTEMD_DIR/qmanager-ping.service" ]; then
+    sed -i 's/^Description=.*/Description=QManager Ping Daemon (Rust primary, Casa shell fallback)/' "$SYSTEMD_DIR/qmanager-ping.service"
+fi
+
+# Older Casa systemd ignores StartLimitIntervalSec= and falls back to a very
+# short default. Use the older key so any future crashing daemon rate-limits
+# over an hour instead of respawning forever every few seconds.
+for f in "$SYSTEMD_DIR"/qmanager*.service; do
+    [ -f "$f" ] || continue
+    sed -i 's/^StartLimitIntervalSec=/StartLimitInterval=/' "$f"
+done
+
+# Treat "no IMEI check is pending" as a clean skipped oneshot, not a failed
+# boot service. The jq-enabled check remains for the rare case where both
+# marker files exist but the saved setting is disabled.
+if [ -f "$SYSTEMD_DIR/qmanager-imei-check.service" ]; then
+    cat > "$SYSTEMD_DIR/qmanager-imei-check.service" << 'EOF'
+# /etc/systemd/system/qmanager-imei-check.service
+[Unit]
+Description=QManager IMEI Rejection Check (One-Shot)
+After=qmanager-setup.service
+ConditionPathExists=/etc/qmanager/imei_check_pending
+ConditionPathExists=/etc/qmanager/imei_backup.json
+
+[Service]
+Type=oneshot
+ExecStartPre=/bin/sh -c 'enabled=$(jq -r "(.enabled) | if . == null then \"false\" else tostring end" /etc/qmanager/imei_backup.json 2>/dev/null); [ "$enabled" = "true" ]'
+ExecStart=/usrdata/bin/qmanager_imei_check
+RemainAfterExit=no
+
+[Install]
+WantedBy=multi-user.target
+EOF
+fi
+
 # lighttpd.service — overrides the null-mask in squashfs.
 # Write a clean Casa-specific unit instead of trying to rewrite the upstream
 # one again after the earlier generic /opt -> /usrdata/opt patching pass.
@@ -929,7 +1250,9 @@ else
     warn "Debug: $LIGHTTPD_LAUNCHER -tt -f $LIGHTTPD_CONF"
 fi
 
-systemctl start qmanager-ping 2>/dev/null && info "qmanager-ping started" || true
+systemctl start qmanager-ping 2>/dev/null \
+    && info "qmanager-ping started" \
+    || warn "qmanager-ping failed — check: systemctl status qmanager-ping"
 pkill -f qmanager_poller 2>/dev/null || true
 sleep 1
 systemctl start qmanager-poller 2>/dev/null \
