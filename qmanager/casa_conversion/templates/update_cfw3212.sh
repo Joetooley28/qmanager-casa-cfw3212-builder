@@ -372,10 +372,14 @@ if [ "$REQUEST_METHOD" = "POST" ]; then
             '{status: $status, message: $message}' > "$STATUS_FILE"
         (
             sleep 1
-            if command -v run_reboot >/dev/null 2>&1; then
-                run_reboot
+            if command -v rdb_set >/dev/null 2>&1 && command -v rdb_get >/dev/null 2>&1 && rdb_get service.system.reset >/dev/null 2>&1; then
+                rdb_set service.system.reset_reason "QManager GUI update reboot"
+                rdb_set service.system.reset.delay 5
+                rdb_set service.system.reset 1
             else
-                reboot
+                _reboot_cmd="reboot"
+                command -v run_reboot >/dev/null 2>&1 && _reboot_cmd="run_reboot"
+                $_reboot_cmd
             fi
         ) </dev/null >/dev/null 2>&1 &
         exit 0
