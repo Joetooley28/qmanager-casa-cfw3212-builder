@@ -2,7 +2,8 @@
 
 ## Optional / Still Being Verified
 
-- Web Console, Tailscale, and Ookla Speedtest are optional helper-backed features and are expected to work when their helper files are installed/configured.
+- Web Console now auto-installs `ttyd` during internet-connected installs; if that download fails, QManager still installs and the console can be repaired later by installing `ttyd`.
+- Tailscale and Ookla Speedtest are optional helper-backed features and are expected to work when their helper files are installed/configured.
 - Email Alerts can install/remove `msmtp` through the Casa Entware package flow; Gmail app-password setup and live send behavior still need final verification.
 - Discord Bot support is visible in the UI but still needs its backend/helper wiring completed before it should be treated as fully functional on Casa.
 - Some upstream modem-management actions remain intentionally blocked or limited on Casa when they could change unsafe modem settings.
