@@ -5,6 +5,7 @@
 - Install and start the optional Web Console backend (`ttyd`) during internet-connected Casa installs so `/console/` works without a manual helper step.
 - Keep `ttyd` download failure non-fatal; the rest of QManager still installs and the Web Console page remains unavailable until `ttyd` can be installed.
 - Tighten `--purge` uninstall cleanup so QManager-installed optional tools such as Tailscale state/symlinks/services and Ookla CLI config are removed with the rest of the package.
+- During GUI updates, return the browser to the main QManager screen after service restart poll loss instead of reloading the stale Software Update route.
 
 ## v0.1.10-cfw3212.22
 

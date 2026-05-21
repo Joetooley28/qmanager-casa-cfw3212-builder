@@ -1650,18 +1650,18 @@ if "QManager services are restarting; reconnecting" not in hook_text:
     hook.write_text(hook_text.replace(old_catch, '''      } catch {
         // Casa restarts QManager/lighttpd during install. A failed poll here is
         // expected while services restart, so keep polling until the worker
-        // reports reboot_required or a real error. Schedule one plain browser
-        // reload as a fallback for users left on stale UI state.
+        // reports reboot_required or a real error. Navigate once to the UI
+        // root as a fallback for users left on a stale nested route.
         if (!sessionStorage.getItem("qm_update_reload_scheduled")) {
           sessionStorage.setItem("qm_update_reload_scheduled", "1");
           window.setTimeout(() => {
-            window.location.reload();
+            window.location.assign("/");
           }, 30000);
         }
         setError(null);
         setUpdateStatus({
           status: "installing",
-          message: "QManager services are restarting; reconnecting. This page will refresh automatically in about 30 seconds if the status does not recover.",
+          message: "QManager services are restarting; reconnecting. This page will return to the main QManager screen in about 30 seconds if the status does not recover.",
         });
       }
 ''', 1))
