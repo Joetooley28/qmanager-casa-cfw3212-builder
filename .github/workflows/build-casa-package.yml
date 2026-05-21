@@ -51,6 +51,7 @@ jobs:
       casa_tag: ${{ steps.resolve.outputs.casa_tag }}
       tar_name: ${{ steps.resolve.outputs.tar_name }}
       sha_name: ${{ steps.resolve.outputs.sha_name }}
+      changelog_name: ${{ steps.resolve.outputs.changelog_name }}
       sha256: ${{ steps.stage.outputs.sha256 }}
       dry_run: ${{ steps.inputs.outputs.dry_run }}
       create_release: ${{ steps.inputs.outputs.create_release }}
@@ -133,6 +134,7 @@ jobs:
           casa_tag="${upstream_tag}-cfw3212.${casa_build}"
           tar_name="qmanager-cfw3212-${upstream_tag}.tar.gz"
           sha_name="qmanager-cfw3212-${upstream_tag}.sha256"
+          changelog_name="qmanager-cfw3212-${casa_tag}-changelog.json"
 
           {
             echo "upstream_tag=$upstream_tag"
@@ -140,6 +142,7 @@ jobs:
             echo "casa_tag=$casa_tag"
             echo "tar_name=$tar_name"
             echo "sha_name=$sha_name"
+            echo "changelog_name=$changelog_name"
           } >> "$GITHUB_OUTPUT"
 
           printf 'Selected upstream app release: %s\n' "$upstream_tag"
@@ -492,6 +495,51 @@ jobs:
           subst qmanager/casa_conversion/templates/uninstall-qmanager-cfw3212.sh.tmpl \
                  "$bundle_dir/uninstall-qmanager-cfw3212.sh"
 
+      - name: Write updater changelog asset
+        if: steps.scheduled_check.outputs.should_build == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          changelog_src="qmanager/casa_conversion/CFW3212_JTOOLEY_CHANGELOG.md"
+          changelog_asset="$RUNNER_TEMP/casa-release-assets/${{ steps.resolve.outputs.changelog_name }}"
+          upstream_json="$RUNNER_TEMP/upstream-release-${{ steps.resolve.outputs.upstream_tag }}.json"
+
+          if [ ! -f "$changelog_src" ]; then
+            echo "Missing curated Casa changelog source: $changelog_src" >&2
+            exit 1
+          fi
+
+          gh api "repos/${UPSTREAM_REPO_SLUG}/releases/tags/${{ steps.resolve.outputs.upstream_tag }}" > "$upstream_json"
+
+          python3 - \
+            "$changelog_src" \
+            "$upstream_json" \
+            "$changelog_asset" \
+            "${{ steps.resolve.outputs.casa_tag }}" \
+            "${{ steps.resolve.outputs.upstream_tag }}" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          changelog_src = pathlib.Path(sys.argv[1])
+          upstream_json = pathlib.Path(sys.argv[2])
+          changelog_asset = pathlib.Path(sys.argv[3])
+          casa_tag = sys.argv[4]
+          upstream_tag = sys.argv[5]
+
+          upstream = json.loads(upstream_json.read_text())
+          payload = {
+              "casa_tag": casa_tag,
+              "upstream_tag": upstream_tag,
+              "joetooley_notes": changelog_src.read_text().strip(),
+              "upstream_notes": (upstream.get("body") or "").strip(),
+              "upstream_release_url": upstream.get("html_url") or f"https://github.com/dr-dolomite/QManager-RM520N/releases/tag/{upstream_tag}",
+          }
+          changelog_asset.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
+          PY
+
+          python3 -m json.tool "$changelog_asset" >/dev/null
+
       - name: Upload publish bundle
         if: steps.scheduled_check.outputs.should_build == 'true'
         uses: actions/upload-artifact@v4
@@ -503,6 +551,7 @@ jobs:
             ${{ runner.temp }}/casa-release-assets/install-qmanager-cfw3212.sh
             ${{ runner.temp }}/casa-release-assets/uninstall-qmanager-cfw3212.sh
             ${{ runner.temp }}/casa-release-assets/release-notes.md
+            ${{ runner.temp }}/casa-release-assets/${{ steps.resolve.outputs.changelog_name }}
           if-no-files-found: error
 
       - name: Dry-run summary
@@ -572,6 +621,7 @@ jobs:
           install_script="publish/install-qmanager-cfw3212.sh"
           uninstall_script="publish/uninstall-qmanager-cfw3212.sh"
           notes_file="publish/release-notes.md"
+          changelog_file="publish/${{ needs.build.outputs.changelog_name }}"
           force="${{ needs.build.outputs.force }}"
 
           require_file() {
@@ -588,6 +638,7 @@ jobs:
           require_file "$install_script"
           require_file "$uninstall_script"
           require_file "$notes_file"
+          require_file "$changelog_file"
 
           release_exists=false
           if gh release view "$casa_tag" --repo "$PACKAGE_REPO" >/dev/null 2>&1; then
@@ -601,6 +652,7 @@ jobs:
               "$sha_path"
               "$install_script"
               "$uninstall_script"
+              "$changelog_file"
               --repo "$PACKAGE_REPO"
             )
             if [ "$force" = "true" ]; then

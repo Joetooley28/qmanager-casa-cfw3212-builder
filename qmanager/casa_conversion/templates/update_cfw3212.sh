@@ -125,6 +125,11 @@ checksum_name_for_tag() {
     printf 'qmanager-cfw3212-%s.sha256' "$upstream"
 }
 
+changelog_name_for_tag() {
+    local tag="$1"
+    printf 'qmanager-cfw3212-%s-changelog.json' "$tag"
+}
+
 download_url_for_tag() {
     local tag="$1"
     printf 'https://github.com/%s/releases/download/%s/%s' \
@@ -135,6 +140,31 @@ checksum_url_for_tag() {
     local tag="$1"
     printf 'https://github.com/%s/releases/download/%s/%s' \
         "$PACKAGE_REPO" "$tag" "$(checksum_name_for_tag "$tag")"
+}
+
+changelog_url_for_tag() {
+    local tag="$1"
+    printf 'https://github.com/%s/releases/download/%s/%s' \
+        "$PACKAGE_REPO" "$tag" "$(changelog_name_for_tag "$tag")"
+}
+
+fetch_changelog_for_tag() {
+    local tag="$1" out_file="$2" tmp_body tmp_headers url
+    [ -n "$tag" ] || { printf '{}\n' > "$out_file"; return 0; }
+
+    tmp_body="/tmp/qm_cfw3212_changelog_${tag}.json"
+    tmp_headers="/tmp/qm_cfw3212_changelog_${tag}.headers"
+    url="$(changelog_url_for_tag "$tag")"
+    rm -f "$tmp_body" "$tmp_headers"
+
+    if http_api_fetch "$url" "$tmp_body" "$tmp_headers" 15 \
+        && jq -e 'type == "object"' "$tmp_body" >/dev/null 2>&1; then
+        cp "$tmp_body" "$out_file" 2>/dev/null || printf '{}\n' > "$out_file"
+    else
+        printf '{}\n' > "$out_file"
+    fi
+
+    rm -f "$tmp_body" "$tmp_headers"
 }
 
 start_update_worker() {
@@ -243,6 +273,21 @@ if [ "$REQUEST_METHOD" = "GET" ]; then
     changelog=$(printf '%s' "$releases" | jq -r '.[0].body // empty')
     current_changelog=$(printf '%s' "$releases" | jq -r --arg cv "$current_version" '[ .[] | select(.tag_name == $cv) ][0].body // empty')
 
+    latest_changelog_json="/tmp/qm_cfw3212_latest_changelog.json"
+    current_changelog_json="/tmp/qm_cfw3212_current_changelog.json"
+    fetch_changelog_for_tag "$latest_tag" "$latest_changelog_json"
+    if [ "$current_version" = "$latest_tag" ]; then
+        cp "$latest_changelog_json" "$current_changelog_json" 2>/dev/null || printf '{}\n' > "$current_changelog_json"
+    else
+        fetch_changelog_for_tag "$current_version" "$current_changelog_json"
+    fi
+    joetooley_changelog=$(jq -r '.joetooley_notes // empty' "$latest_changelog_json" 2>/dev/null)
+    upstream_changelog=$(jq -r '.upstream_notes // empty' "$latest_changelog_json" 2>/dev/null)
+    upstream_release_url=$(jq -r '.upstream_release_url // empty' "$latest_changelog_json" 2>/dev/null)
+    current_joetooley_changelog=$(jq -r '.joetooley_notes // empty' "$current_changelog_json" 2>/dev/null)
+    current_upstream_changelog=$(jq -r '.upstream_notes // empty' "$current_changelog_json" 2>/dev/null)
+    rm -f "$latest_changelog_json" "$current_changelog_json"
+
     download_state="null"
     if [ -f "$PID_FILE" ]; then
         pid=$(cat "$PID_FILE" 2>/dev/null)
@@ -290,6 +335,11 @@ if [ "$REQUEST_METHOD" = "GET" ]; then
         --argjson ua "$update_available" \
         --arg cl "$changelog" \
         --arg ccl "$current_changelog" \
+        --arg jcl "$joetooley_changelog" \
+        --arg ucl "$upstream_changelog" \
+        --arg cjcl "$current_joetooley_changelog" \
+        --arg cucl "$current_upstream_changelog" \
+        --arg uurl "$upstream_release_url" \
         --arg dl "$download_url" \
         --arg ds "$download_size" \
         --argjson av "$available_versions" \
@@ -303,6 +353,11 @@ if [ "$REQUEST_METHOD" = "GET" ]; then
             update_available: $ua,
             changelog: (if $cl == "" then null else $cl end),
             current_changelog: (if $ccl == "" then null else $ccl end),
+            joetooley_changelog: (if $jcl == "" then null else $jcl end),
+            upstream_changelog: (if $ucl == "" then null else $ucl end),
+            current_joetooley_changelog: (if $cjcl == "" then null else $cjcl end),
+            current_upstream_changelog: (if $cucl == "" then null else $cucl end),
+            upstream_release_url: (if $uurl == "" then null else $uurl end),
             download_url: (if $dl == "" then null else $dl end),
             download_size: (if $ds == "" then null else $ds end),
             available_versions: $av,

@@ -1533,6 +1533,12 @@ patch_software_update_reboot_required_cfw3212() {
     local hook="$TARGET/hooks/use-software-update.ts"
     local page="$TARGET/components/monitoring/software-update/software-update.tsx"
     local card="$TARGET/components/monitoring/software-update/update-status-card.tsx"
+    if [ ! -f "$page" ]; then
+        page="$TARGET/components/system-settings/software-update/software-update.tsx"
+    fi
+    if [ ! -f "$card" ]; then
+        card="$TARGET/components/system-settings/software-update/update-status-card.tsx"
+    fi
     [ -f "$hook" ] || fail "use-software-update.ts missing in target"
     [ -f "$page" ] || fail "software-update.tsx missing in target"
     [ -f "$card" ] || fail "update-status-card.tsx missing in target"
@@ -1553,29 +1559,37 @@ def replace_once(path: Path, old: str, new: str) -> None:
 
 replace_once(
     hook,
+    '  current_changelog: string | null;\n',
+    '  current_changelog: string | null;\n  joetooley_changelog: string | null;\n  upstream_changelog: string | null;\n  current_joetooley_changelog: string | null;\n  current_upstream_changelog: string | null;\n  upstream_release_url: string | null;\n',
+)
+
+replace_once(
+    hook,
     '  status: "idle" | "downloading" | "installing" | "rebooting" | "error";',
     '  status: "idle" | "downloading" | "installing" | "reboot_required" | "rebooting" | "error";',
 )
-replace_once(
-    hook,
-    '  installUpdate: () => Promise<void>;\n  togglePrerelease:',
-    '  installUpdate: () => Promise<void>;\n  rebootNow: () => Promise<void>;\n  togglePrerelease:',
-)
-replace_once(
-    hook,
-    '''        if (json.status === "rebooting") {
-          // Navigate to /reboot/ immediately so the static page loads from
-          // lighttpd before the OTA worker fires the reboot syscall. The
-          // worker waits for the page's reboot_ack before issuing reboot,
-          // so any delay here only widens the race.
-          if (pollRef.current) clearInterval(pollRef.current);
-          pollRef.current = null;
-          sessionStorage.setItem("qm_rebooting", "1");
-          document.cookie = "qm_logged_in=; Path=/; Max-Age=0";
-          window.location.href = "/reboot/";
-        }
+hook_text = hook.read_text()
+if '  rebootNow: () => Promise<void>;' not in hook_text:
+    if '  installUpdate: () => Promise<void>;\n  togglePrerelease:' in hook_text:
+        hook.write_text(hook_text.replace(
+            '  installUpdate: () => Promise<void>;\n  togglePrerelease:',
+            '  installUpdate: () => Promise<void>;\n  rebootNow: () => Promise<void>;\n  togglePrerelease:',
+            1,
+        ))
+    elif '  installUpdate: () => Promise<void>;\n  rebootDevice:' in hook_text:
+        hook.write_text(hook_text.replace(
+            '  installUpdate: () => Promise<void>;\n  rebootDevice:',
+            '  installUpdate: () => Promise<void>;\n  rebootNow: () => Promise<void>;\n  rebootDevice:',
+            1,
+        ))
+    else:
+        raise SystemExit("patch target not found in use-software-update.ts: installUpdate return type")
+hook_text = hook.read_text()
+if 'json.status === "reboot_required"' not in hook_text:
+    hook.write_text(hook_text.replace(
+        '''        if (json.status === "rebooting") {
 ''',
-    '''        if (json.status === "reboot_required") {
+        '''        if (json.status === "reboot_required") {
           if (pollRef.current) clearInterval(pollRef.current);
           pollRef.current = null;
           sessionStorage.removeItem("qm_update_reload_scheduled");
@@ -1584,17 +1598,12 @@ replace_once(
         }
 
         if (json.status === "rebooting") {
-          if (pollRef.current) clearInterval(pollRef.current);
-          pollRef.current = null;
-          sessionStorage.setItem("qm_rebooting", "1");
-          document.cookie = "qm_logged_in=; Path=/; Max-Age=0";
-          window.location.href = "/reboot/";
-        }
 ''',
-)
-replace_once(
-    hook,
-    '''      } catch {
+        1,
+    ))
+hook_text = hook.read_text()
+if "QManager services are restarting; reconnecting" not in hook_text:
+    old_catch = '''      } catch {
         // Fetch failed — device is likely rebooting already. Navigate
         // immediately; if the static page is uncached and lighttpd is
         // already gone the user will see a connection error, but waiting
@@ -1605,8 +1614,24 @@ replace_once(
         document.cookie = "qm_logged_in=; Path=/; Max-Age=0";
         window.location.href = "/reboot/";
       }
-''',
-    '''      } catch {
+'''
+    if old_catch not in hook_text:
+        old_catch = '''      } catch {
+        clearInstallStallTimer();
+        // Device may be rebooting — stop polling and redirect
+        if (pollRef.current) clearInterval(pollRef.current);
+        pollRef.current = null;
+
+        setTimeout(() => {
+          sessionStorage.setItem("qm_rebooting", "1");
+          document.cookie = "qm_logged_in=; Path=/; Max-Age=0";
+          window.location.href = "/reboot/";
+        }, 2000);
+      }
+'''
+    if old_catch not in hook_text:
+        raise SystemExit("patch target not found in use-software-update.ts: install status catch")
+    hook.write_text(hook_text.replace(old_catch, '''      } catch {
         // Casa restarts QManager/lighttpd during install. A failed poll here is
         // expected while services restart, so keep polling until the worker
         // reports reboot_required or a real error. Schedule one plain browser
@@ -1623,8 +1648,7 @@ replace_once(
           message: "QManager services are restarting; reconnecting. This page will refresh automatically in about 30 seconds if the status does not recover.",
         });
       }
-''',
-)
+''', 1))
 replace_once(
     hook,
     '  const togglePrerelease = useCallback(async (enabled: boolean) => {\n',
@@ -1645,11 +1669,22 @@ replace_once(
   const togglePrerelease = useCallback(async (enabled: boolean) => {
 ''',
 )
-replace_once(
-    hook,
-    '    installStaged,\n    installUpdate,\n    togglePrerelease,\n',
-    '    installStaged,\n    installUpdate,\n    rebootNow,\n    togglePrerelease,\n',
-)
+hook_text = hook.read_text()
+if '\n    rebootNow,\n' not in hook_text:
+    if '    installStaged,\n    installUpdate,\n    togglePrerelease,\n' in hook_text:
+        hook.write_text(hook_text.replace(
+            '    installStaged,\n    installUpdate,\n    togglePrerelease,\n',
+            '    installStaged,\n    installUpdate,\n    rebootNow,\n    togglePrerelease,\n',
+            1,
+        ))
+    elif '    installStaged,\n    installUpdate,\n    rebootDevice,\n' in hook_text:
+        hook.write_text(hook_text.replace(
+            '    installStaged,\n    installUpdate,\n    rebootDevice,\n',
+            '    installStaged,\n    installUpdate,\n    rebootNow,\n    rebootDevice,\n',
+            1,
+        ))
+    else:
+        raise SystemExit("patch target not found in use-software-update.ts: returned installUpdate block")
 
 replace_once(
     page,
@@ -1670,9 +1705,36 @@ replace_once(
     '          installStaged={hookData.installStaged}\n',
     '          installStaged={hookData.installStaged}\n          rebootNow={hookData.rebootNow}\n',
 )
-replace_once(
-    page,
-    '''  if (isUpdating && updateStatus.status !== "error") {
+page_text = page.read_text()
+if 'updateStatus.status === "reboot_required"' not in page_text.split('export function StatusBadge', 1)[1].split('if (isDownloading)', 1)[0]:
+    old_badge = '''  if (isUpdating && updateStatus.status !== "error") {
+    return (
+      <Badge variant="outline" className="bg-info/15 text-info hover:bg-info/20 border-info/30">
+        <DownloadIcon className="size-3" />
+        {t("software_update.badge_updating")}
+      </Badge>
+    );
+  }
+'''
+    new_badge = '''  if (updateStatus.status === "reboot_required") {
+    return (
+      <Badge variant="outline" className="bg-warning/15 text-warning hover:bg-warning/20 border-warning/30">
+        <TriangleAlertIcon className="size-3" />
+        Reboot required
+      </Badge>
+    );
+  }
+  if (isUpdating && updateStatus.status !== "error") {
+    return (
+      <Badge variant="outline" className="bg-info/15 text-info hover:bg-info/20 border-info/30">
+        <DownloadIcon className="size-3" />
+        {t("software_update.badge_updating")}
+      </Badge>
+    );
+  }
+'''
+    if old_badge not in page_text:
+        old_badge = '''  if (isUpdating && updateStatus.status !== "error") {
     return (
       <Badge variant="outline" className="bg-info/15 text-info hover:bg-info/20 border-info/30">
         <DownloadIcon className="h-3 w-3" />
@@ -1680,8 +1742,8 @@ replace_once(
       </Badge>
     );
   }
-''',
-    '''  if (updateStatus.status === "reboot_required") {
+'''
+        new_badge = '''  if (updateStatus.status === "reboot_required") {
     return (
       <Badge variant="outline" className="bg-warning/15 text-warning hover:bg-warning/20 border-warning/30">
         <TriangleAlertIcon className="h-3 w-3" />
@@ -1697,13 +1759,130 @@ replace_once(
       </Badge>
     );
   }
-''',
-)
+'''
+    if old_badge not in page_text:
+        raise SystemExit("patch target not found in software-update.tsx: StatusBadge updating block")
+    page.write_text(page_text.replace(old_badge, new_badge, 1))
 
 replace_once(card, '  RefreshCwIcon,\n', '  RefreshCwIcon,\n  RotateCwIcon,\n')
 replace_once(card, '  installStaged: () => Promise<void>;\n', '  installStaged: () => Promise<void>;\n  rebootNow: () => Promise<void>;\n')
 replace_once(card, '  installStaged,\n}: UpdateStatusCardProps) {\n', '  installStaged,\n  rebootNow,\n}: UpdateStatusCardProps) {\n')
-replace_once(card, '  const displayError = updateInfo?.check_error || error;\n', '  const displayError = updateInfo?.check_error || error;\n  const rebootRequired = updateStatus.status === "reboot_required";\n')
+replace_once(card, '  const [showInstallDialog, setShowInstallDialog] = useState(false);\n  const [showChangelog, setShowChangelog] = useState(false);\n', '  const [showInstallDialog, setShowInstallDialog] = useState(false);\n  const [showChangelog, setShowChangelog] = useState(false);\n  const [releaseNotesSource, setReleaseNotesSource] = useState<"joetooley" | "upstream">("joetooley");\n')
+replace_once(
+    card,
+    '''  const updateAvailable = updateInfo?.update_available ?? false;
+  const displayError = updateInfo?.check_error || error;
+''',
+    '''  const updateAvailable = updateInfo?.update_available ?? false;
+  const displayError = updateInfo?.check_error || error;
+  const rebootRequired = updateStatus.status === "reboot_required";
+  const releaseNotes = (() => {
+    if (!updateInfo) {
+      return { body: null as string | null, hasStructuredNotes: false };
+    }
+    const joetooleyBody = updateAvailable
+      ? updateInfo.joetooley_changelog
+      : updateInfo.current_joetooley_changelog;
+    const upstreamBody = updateAvailable
+      ? updateInfo.upstream_changelog
+      : updateInfo.current_upstream_changelog;
+    const fallbackBody = updateAvailable
+      ? updateInfo.changelog
+      : updateInfo.current_changelog;
+    const hasStructuredNotes = Boolean(joetooleyBody || upstreamBody);
+
+    if (releaseNotesSource === "upstream") {
+      const upstreamLink = updateInfo.upstream_release_url
+        ? `[View upstream release notes](${updateInfo.upstream_release_url})`
+        : null;
+      return {
+        body: upstreamBody || upstreamLink || fallbackBody,
+        hasStructuredNotes,
+      };
+    }
+
+    return {
+      body: joetooleyBody || fallbackBody,
+      hasStructuredNotes,
+    };
+  })();
+''',
+)
+card_text = card.read_text()
+if "releaseNotes.hasStructuredNotes" not in card_text:
+    start = card_text.find('            {/* ── Inline release notes (clickable → dialog) ────────── */}')
+    end = card_text.find('            {/* ── Download progress', start)
+    if start == -1 or end == -1:
+        raise SystemExit("patch target not found in update-status-card.tsx: release notes block")
+    new_release_notes = '''            {/* ── Inline release notes (clickable → dialog) ────────── */}
+            {releaseNotes.body && (
+              <>
+                <Separator />
+                <motion.div variants={itemVariants} className="flex flex-col gap-2 min-w-0">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="font-semibold text-sm">
+                      {updateAvailable
+                        ? "Release Notes"
+                        : "Current Release Notes"}
+                    </p>
+                    <div className="flex flex-wrap items-center gap-2">
+                      {releaseNotes.hasStructuredNotes && (
+                        <div className="inline-flex rounded-md border bg-background p-0.5">
+                          <Button
+                            type="button"
+                            variant={releaseNotesSource === "joetooley" ? "secondary" : "ghost"}
+                            size="sm"
+                            className="h-7 px-2 text-xs"
+                            onClick={() => setReleaseNotesSource("joetooley")}
+                          >
+                            Joetooley
+                          </Button>
+                          <Button
+                            type="button"
+                            variant={releaseNotesSource === "upstream" ? "secondary" : "ghost"}
+                            size="sm"
+                            className="h-7 px-2 text-xs"
+                            onClick={() => setReleaseNotesSource("upstream")}
+                          >
+                            Dr. D
+                          </Button>
+                        </div>
+                      )}
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="text-xs text-muted-foreground"
+                        onClick={() => setShowChangelog(true)}
+                      >
+                        <FileTextIcon className="size-3.5" />
+                        View full
+                      </Button>
+                    </div>
+                  </div>
+                  <div
+                    role="region"
+                    aria-label="Release notes"
+                    tabIndex={0}
+                    className={`max-h-64 overflow-y-auto overflow-x-hidden wrap-break-word rounded-lg border bg-muted/50 p-4 ${PROSE_CLASSES}`}
+                  >
+                    <Markdown>{releaseNotes.body}</Markdown>
+                  </div>
+                </motion.div>
+              </>
+            )}
+'''
+    card.write_text(card_text[:start] + new_release_notes + card_text[end:])
+replace_once(
+    card,
+    '''            <Markdown>
+              {(updateAvailable ? updateInfo?.changelog : updateInfo?.current_changelog) ?? ""}
+            </Markdown>
+''',
+    '''            <Markdown>
+              {releaseNotes.body ?? ""}
+            </Markdown>
+''',
+)
 replace_once(
     card,
     '''          <motion.div
@@ -1733,16 +1912,15 @@ replace_once(
             className="grid gap-2 min-w-0"
 ''',
 )
-replace_once(
-    card,
-    '''              The device will reboot automatically after installation. Do not
+card_text = card.read_text()
+old_auto_reboot_text = '''              The device will reboot automatically after installation. Do not
               power off the device during the update.
-''',
-    '''              QManager will restart its services after installation and then
+'''
+if old_auto_reboot_text in card_text and "QManager will restart its services after installation" not in card_text:
+    card.write_text(card_text.replace(old_auto_reboot_text, '''              QManager will restart its services after installation and then
               ask you to reboot when ready. Do not power off the device during
               the update.
-''',
-)
+''', 1))
 
 for path in (hook, page, card):
     if "reboot_required" not in path.read_text():
