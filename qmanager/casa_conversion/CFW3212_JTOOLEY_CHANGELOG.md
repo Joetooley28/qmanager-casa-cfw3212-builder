@@ -1,14 +1,10 @@
 # Casa CFW-3212 Joetooley Changelog
 
-Short public notes for the Casa CFW-3212 package updater UI. Keep this file
-focused on Joetooley's Casa conversion/package changes only. Do not add private
-router access details, device captures, screenshots, or private notes.
+## v0.1.10-cfw3212.22
 
-## Rolling Latest
-
-- v22 candidate: add a compact Software Update changelog toggle so the router UI can show Casa-specific Joetooley notes separately from upstream QManager notes.
-- v22 candidate: create `/opt -> /usrdata/opt` during install so Entware setuid tools such as `sudo` can use their native loader and library paths.
-- v22 candidate: adapt the QManager health-check worker for Casa paths, remapped lighttpd ports, Casa service names, and `/usrdata/opt/bin` CGI paths.
+- Add a compact Software Update changelog toggle so the router UI can show Casa-specific Joetooley notes separately from upstream QManager notes.
+- Create `/opt -> /usrdata/opt` during install so Entware setuid tools such as `sudo` can use their native loader and library paths.
+- Adapt the QManager health-check worker for Casa paths, remapped lighttpd ports, Casa service names, and `/usrdata/opt/bin` CGI paths.
 - v21 follow-up: preserve Rust ELF binaries during install by normalizing CRLF only on shebang text files, preventing `qmanager_ping` corruption.
 - v21: vendor the Casa-tested Rust `qmanager_ping` binary and verify the packaged binary SHA in CI before publishing.
 - v20/v21: keep `qmanager-ping` enabled with a bounded Rust-first wrapper and shell fallback, while retrying modem identity reads during boot.

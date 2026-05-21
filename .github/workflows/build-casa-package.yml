@@ -508,6 +508,17 @@ jobs:
             echo "Missing curated Casa changelog source: $changelog_src" >&2
             exit 1
           fi
+          if ! grep -Fq "${{ steps.resolve.outputs.casa_tag }}" "$changelog_src"; then
+            cat >&2 <<EOF
+          Changelog source must be updated before building ${{ steps.resolve.outputs.casa_tag }}.
+
+          Add a short public section for this exact Casa tag to:
+            $changelog_src
+
+          This prevents the router UI changelog from showing stale Joetooley notes.
+          EOF
+            exit 1
+          fi
 
           gh api "repos/${UPSTREAM_REPO_SLUG}/releases/tags/${{ steps.resolve.outputs.upstream_tag }}" > "$upstream_json"
 
