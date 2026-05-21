@@ -1363,6 +1363,377 @@ PY
         || fail "Could not apply Casa RDB reboot delay"
 }
 
+patch_email_alerts_casa_msmtp() {
+    local cgi="$TARGET/scripts/www/cgi-bin/quecmanager/monitoring/email_alerts.sh"
+    local lib="$TARGET/scripts/usr/lib/qmanager/email_alerts.sh"
+    local card="$TARGET/components/monitoring/email-alerts/email-alerts-settings-card.tsx"
+
+    [ -f "$cgi" ] || return 0
+
+    python3 - "$cgi" "$lib" "$card" <<'PY'
+from pathlib import Path
+import sys
+
+cgi_path = Path(sys.argv[1])
+lib_path = Path(sys.argv[2])
+card_path = Path(sys.argv[3])
+
+cgi = cgi_path.read_text()
+
+old_detect = '''# Detect package manager (Entware on RM520N-GL, system opkg on OpenWRT)
+if [ -x /opt/bin/opkg ]; then
+    OPKG="/opt/bin/opkg"
+else
+    OPKG="opkg"
+fi
+'''
+
+new_detect = '''# Casa CFW-3212 does not ship Entware opkg. Install msmtp the same way
+# the package installer handles Entware tools: download the IPK and extract it
+# under /usrdata/opt, then expose a tiny wrapper in /usrdata/bin for CGI/PATH use.
+ENTWARE_BASE="${ENTWARE_BASE:-http://bin.entware.net/armv7sf-k3.2}"
+ENTWARE_PACKAGES_GZ="/tmp/qmanager_msmtp_packages.gz"
+ENTWARE_PACKAGES_TXT="/tmp/qmanager_msmtp_packages.txt"
+ENTWARE_STATE_DIR="/usrdata/opt/var/lib/qmanager-entware"
+MSMTP_BIN="/usrdata/opt/bin/msmtp"
+MSMTP_WRAPPER="/usrdata/bin/msmtp"
+
+msmtp_available() {
+    command -v msmtp >/dev/null 2>&1 || [ -x "$MSMTP_WRAPPER" ] || [ -x "$MSMTP_BIN" ]
+}
+
+fetch_url() {
+    local url="$1"
+    local out="$2"
+    wget -q "$url" -O "$out" \\
+        || curl -fsSL "$url" -o "$out" \\
+        || return 1
+}
+
+entware_refresh_index() {
+    fetch_url "$ENTWARE_BASE/Packages.gz" "$ENTWARE_PACKAGES_GZ" || return 1
+    gzip -dc "$ENTWARE_PACKAGES_GZ" > "$ENTWARE_PACKAGES_TXT" || return 1
+}
+
+entware_pkg_field() {
+    local pkg="$1"
+    local field="$2"
+    awk -v pkg="$pkg" -v field="$field" '
+        $0 == "Package: " pkg { in_pkg=1; next }
+        in_pkg && $0 == "" { exit }
+        in_pkg && index($0, field ": ") == 1 {
+            sub("^" field ": ", "", $0)
+            print
+            exit
+        }
+    ' "$ENTWARE_PACKAGES_TXT"
+}
+
+entware_pkg_marker() {
+    printf "%s/%s.version" "$ENTWARE_STATE_DIR" "$1"
+}
+
+extract_ipk_to_usrdata() {
+    local ipk="$1"
+    local tmpdir data_tar
+
+    tmpdir="$(mktemp -d /tmp/qm-msmtp-ipk.XXXXXX)" || return 1
+    data_tar="$tmpdir/data.tar.gz"
+
+    tar xzf "$ipk" -C "$tmpdir" ./data.tar.gz >/dev/null 2>&1 \\
+        || { rm -rf "$tmpdir"; return 1; }
+    tar xzf "$data_tar" -C /usrdata >/dev/null 2>&1 \\
+        || { rm -rf "$tmpdir"; return 1; }
+
+    rm -rf "$tmpdir"
+    return 0
+}
+
+entware_install_pkg() {
+    local pkg="$1"
+    local version filename installed marker deps dep cleaned dep_filename tmp_ipk old_ifs
+
+    version="$(entware_pkg_field "$pkg" Version)"
+    filename="$(entware_pkg_field "$pkg" Filename)"
+    [ -n "$version" ] || return 1
+    [ -n "$filename" ] || return 1
+
+    marker="$(entware_pkg_marker "$pkg")"
+    installed=""
+    [ -f "$marker" ] && installed="$(cat "$marker" 2>/dev/null)"
+    if [ "$installed" = "$version" ]; then
+        return 0
+    fi
+
+    deps="$(entware_pkg_field "$pkg" Depends)"
+    if [ -n "$deps" ]; then
+        old_ifs="$IFS"
+        IFS=','
+        for dep in $deps; do
+            cleaned="$(printf '%s' "$dep" | sed 's/ *(.*//; s/^ *//; s/ *$//')"
+            [ -n "$cleaned" ] || continue
+            dep_filename="$(entware_pkg_field "$cleaned" Filename)"
+            [ -n "$dep_filename" ] || continue
+            if ! entware_install_pkg "$cleaned"; then
+                IFS="$old_ifs"
+                return 1
+            fi
+        done
+        IFS="$old_ifs"
+    fi
+
+    tmp_ipk="/tmp/$(basename "$filename")"
+    fetch_url "$ENTWARE_BASE/$filename" "$tmp_ipk" || return 1
+    extract_ipk_to_usrdata "$tmp_ipk" || { rm -f "$tmp_ipk"; return 1; }
+    rm -f "$tmp_ipk"
+
+    mkdir -p "$ENTWARE_STATE_DIR"
+    printf '%s\\n' "$version" > "$marker"
+    return 0
+}
+
+write_msmtp_wrapper() {
+    mkdir -p /usrdata/bin
+    cat > "$MSMTP_WRAPPER" <<'EOF'
+#!/bin/sh
+export LD_LIBRARY_PATH="/usrdata/opt/lib:/usrdata/opt/usr/lib:${LD_LIBRARY_PATH:-}"
+exec /usrdata/opt/bin/msmtp "$@"
+EOF
+    chmod 755 "$MSMTP_WRAPPER"
+}
+'''
+
+if old_detect in cgi:
+    cgi = cgi.replace(old_detect, new_detect, 1)
+elif "ENTWARE_PACKAGES_TXT=\"/tmp/qmanager_msmtp_packages.txt\"" not in cgi:
+    raise SystemExit("email alert package-manager detection block not found")
+
+old_install = '''    # -------------------------------------------------------------------------
+    # action: install — install msmtp via opkg (background)
+    # -------------------------------------------------------------------------
+    if [ "$ACTION" = "install" ]; then
+        MSMTP_INSTALL_RESULT="/tmp/qmanager_msmtp_install.json"
+        MSMTP_INSTALL_PID="/tmp/qmanager_msmtp_install.pid"
+
+        # Check if already running
+        if [ -f "$MSMTP_INSTALL_PID" ] && pid_alive "$(cat "$MSMTP_INSTALL_PID" 2>/dev/null)"; then
+            cgi_error "already_running" "Installation already in progress"
+            exit 0
+        fi
+
+        # Already installed?
+        if command -v msmtp >/dev/null 2>&1; then
+            cgi_error "already_installed" "msmtp is already installed"
+            exit 0
+        fi
+
+        qlog_info "Starting msmtp installation via opkg"
+
+        # Spawn background installer
+        (
+            echo $$ > "$MSMTP_INSTALL_PID"
+            trap 'rm -f "$MSMTP_INSTALL_PID"' EXIT
+
+            printf '{"success":true,"status":"running","message":"Updating package lists..."}' > "$MSMTP_INSTALL_RESULT"
+            if ! $OPKG update >/dev/null 2>&1; then
+                printf '{"success":false,"status":"error","message":"Failed to update package lists","detail":"Check internet connection and package manager feeds"}' > "$MSMTP_INSTALL_RESULT"
+                exit 1
+            fi
+
+            printf '{"success":true,"status":"running","message":"Installing msmtp..."}' > "$MSMTP_INSTALL_RESULT"
+            if ! $OPKG install msmtp >/dev/null 2>&1; then
+                printf '{"success":false,"status":"error","message":"Package manager install failed","detail":"Package may not be available for this architecture"}' > "$MSMTP_INSTALL_RESULT"
+                exit 1
+            fi
+
+            # Verify
+            if command -v msmtp >/dev/null 2>&1; then
+                printf '{"success":true,"status":"complete","message":"msmtp installed successfully"}' > "$MSMTP_INSTALL_RESULT"
+            else
+                printf '{"success":false,"status":"error","message":"Package installed but binary not found"}' > "$MSMTP_INSTALL_RESULT"
+            fi
+        ) </dev/null >/dev/null 2>&1 &
+
+        cgi_success
+        exit 0
+    fi
+'''
+
+new_install = '''    # -------------------------------------------------------------------------
+    # action: install — install msmtp via Casa Entware IPK extraction (background)
+    # -------------------------------------------------------------------------
+    if [ "$ACTION" = "install" ]; then
+        MSMTP_INSTALL_RESULT="/tmp/qmanager_msmtp_install.json"
+        MSMTP_INSTALL_PID="/tmp/qmanager_msmtp_install.pid"
+
+        # Check if already running
+        if [ -f "$MSMTP_INSTALL_PID" ] && pid_alive "$(cat "$MSMTP_INSTALL_PID" 2>/dev/null)"; then
+            cgi_error "already_running" "Installation already in progress"
+            exit 0
+        fi
+
+        # Already installed?
+        if msmtp_available; then
+            cgi_error "already_installed" "msmtp is already installed"
+            exit 0
+        fi
+
+        qlog_info "Starting msmtp installation via Casa Entware IPK extraction"
+
+        # Spawn background installer
+        (
+            echo $$ > "$MSMTP_INSTALL_PID"
+            trap 'rm -f "$MSMTP_INSTALL_PID"' EXIT
+
+            printf '{"success":true,"status":"running","message":"Downloading Entware package index..."}' > "$MSMTP_INSTALL_RESULT"
+            if ! entware_refresh_index >/dev/null 2>&1; then
+                printf '{"success":false,"status":"error","message":"Failed to download Entware package index","detail":"Check internet connectivity from the modem"}' > "$MSMTP_INSTALL_RESULT"
+                exit 1
+            fi
+
+            printf '{"success":true,"status":"running","message":"Installing msmtp and dependencies..."}' > "$MSMTP_INSTALL_RESULT"
+            if ! entware_install_pkg msmtp >/dev/null 2>&1; then
+                printf '{"success":false,"status":"error","message":"Failed to install msmtp","detail":"Entware package download or extraction failed"}' > "$MSMTP_INSTALL_RESULT"
+                exit 1
+            fi
+
+            if ! write_msmtp_wrapper >/dev/null 2>&1; then
+                printf '{"success":false,"status":"error","message":"Failed to create msmtp launcher","detail":"Could not write /usrdata/bin/msmtp"}' > "$MSMTP_INSTALL_RESULT"
+                exit 1
+            fi
+
+            # Verify
+            if msmtp_available; then
+                printf '{"success":true,"status":"complete","message":"msmtp installed successfully"}' > "$MSMTP_INSTALL_RESULT"
+            else
+                printf '{"success":false,"status":"error","message":"Package installed but binary not found"}' > "$MSMTP_INSTALL_RESULT"
+            fi
+        ) </dev/null >/dev/null 2>&1 &
+
+        cgi_success
+        exit 0
+    fi
+'''
+
+if old_install in cgi:
+    cgi = cgi.replace(old_install, new_install, 1)
+elif "Casa Entware IPK extraction" not in cgi:
+    raise SystemExit("email alert install action block not found")
+
+old_uninstall = '''    # -------------------------------------------------------------------------
+    # action: uninstall — remove msmtp package from the device
+    # -------------------------------------------------------------------------
+    if [ "$ACTION" = "uninstall" ]; then
+        # Safety: refuse if email alerts are still enabled
+        if [ -f "$CONFIG" ]; then
+            ea_enabled=$(jq -r '(.enabled) | if . == null then "false" else tostring end' "$CONFIG" 2>/dev/null)
+            if [ "$ea_enabled" = "true" ]; then
+                cgi_error "still_enabled" "Disable email alerts before uninstalling msmtp"
+                exit 0
+            fi
+        fi
+
+        qlog_info "Uninstalling msmtp package"
+
+        # Remove package
+        $OPKG remove msmtp 2>/dev/null
+
+        # Clean up generated msmtp config
+        rm -f "$MSMTP_CONFIG"
+
+        # Verify removal
+        if command -v msmtp >/dev/null 2>&1; then
+            qlog_error "msmtp binary still present after package manager remove"
+            cgi_error "uninstall_failed" "Failed to remove msmtp package"
+            exit 0
+        fi
+
+        qlog_info "msmtp uninstalled successfully"
+        cgi_success
+        exit 0
+    fi
+'''
+
+new_uninstall = '''    # -------------------------------------------------------------------------
+    # action: uninstall — remove the Casa-installed msmtp launcher and binary
+    # -------------------------------------------------------------------------
+    if [ "$ACTION" = "uninstall" ]; then
+        # Safety: refuse if email alerts are still enabled
+        if [ -f "$CONFIG" ]; then
+            ea_enabled=$(jq -r '(.enabled) | if . == null then "false" else tostring end' "$CONFIG" 2>/dev/null)
+            if [ "$ea_enabled" = "true" ]; then
+                cgi_error "still_enabled" "Disable email alerts before uninstalling msmtp"
+                exit 0
+            fi
+        fi
+
+        qlog_info "Removing Casa-installed msmtp files"
+
+        # Clean up generated config and the package files QManager installs.
+        rm -f "$MSMTP_CONFIG" "$MSMTP_WRAPPER" "$MSMTP_BIN" "$(entware_pkg_marker msmtp)"
+
+        # Verify removal. A system-provided msmtp would still be reported.
+        if [ -x "$MSMTP_WRAPPER" ] || [ -x "$MSMTP_BIN" ]; then
+            qlog_error "Casa msmtp files still present after removal"
+            cgi_error "uninstall_failed" "Failed to remove msmtp package"
+            exit 0
+        fi
+
+        qlog_info "msmtp uninstalled successfully"
+        cgi_success
+        exit 0
+    fi
+'''
+
+if old_uninstall in cgi:
+    cgi = cgi.replace(old_uninstall, new_uninstall, 1)
+elif "Removing Casa-installed msmtp files" not in cgi:
+    raise SystemExit("email alert uninstall action block not found")
+
+cgi_path.write_text(cgi)
+
+if lib_path.exists():
+    lib = lib_path.read_text()
+    old = "for _p in /opt/bin/msmtp /usr/bin/msmtp; do"
+    new = "for _p in /usrdata/bin/msmtp /usrdata/opt/bin/msmtp /opt/bin/msmtp /usr/bin/msmtp; do"
+    if old in lib:
+        lib = lib.replace(old, new, 1)
+    elif new not in lib:
+        raise SystemExit("email alert msmtp binary search path not found")
+    lib_path.write_text(lib)
+
+if card_path.exists():
+    card = card_path.read_text()
+    card = card.replace('import { CopyableCommand } from "@/components/ui/copyable-command";\n', '')
+    card = card.replace(
+        "Install automatically or run the command manually.",
+        "Install automatically using the Casa Entware package flow.",
+    )
+    manual = '''            <div className="w-full flex items-center gap-3 text-xs text-muted-foreground">
+              <div className="h-px flex-1 bg-border" />
+              <span>or install manually</span>
+              <div className="h-px flex-1 bg-border" />
+            </div>
+
+            <CopyableCommand command="opkg update && opkg install msmtp" />
+'''
+    if manual in card:
+        card = card.replace(manual, "", 1)
+    elif 'opkg update && opkg install msmtp' in card:
+        raise SystemExit("email alert manual opkg command still present")
+    card_path.write_text(card)
+PY
+
+    grep -q 'ENTWARE_PACKAGES_TXT="/tmp/qmanager_msmtp_packages.txt"' "$cgi" \
+        || fail "Could not apply Casa msmtp Entware installer patch"
+    grep -q 'Casa Entware IPK extraction' "$cgi" \
+        || fail "Could not apply Casa msmtp install action patch"
+    if [ -f "$card" ]; then
+        ! grep -q 'opkg update && opkg install msmtp' "$card" \
+            || fail "Email alerts UI still references opkg msmtp install"
+    fi
+}
+
 patch_package_version() {
     local pkg="$TARGET/package.json"
     [ -f "$pkg" ] || fail "package.json missing in target"
@@ -2066,6 +2437,7 @@ apply_casa_overlays() {
     patch_qmanager_display_version
     patch_casa_display_name
     patch_casa_reboot
+    patch_email_alerts_casa_msmtp
     patch_ping_profile_service_toggle_cfw3212
     patch_software_update_reboot_required_cfw3212
 

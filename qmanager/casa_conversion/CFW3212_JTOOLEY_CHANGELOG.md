@@ -6,6 +6,7 @@
 - Keep `ttyd` download failure non-fatal; the rest of QManager still installs and the Web Console page remains unavailable until `ttyd` can be installed.
 - Tighten `--purge` uninstall cleanup so QManager-installed optional tools such as Tailscale state/symlinks/services and Ookla CLI config are removed with the rest of the package.
 - During GUI updates, return the browser to the main QManager screen after service restart poll loss instead of reloading the stale Software Update route.
+- Adapt Email Alerts `msmtp` install/uninstall for Casa by using the direct Entware IPK extraction flow instead of a missing `opkg` command, and remove the misleading manual `opkg` command from the UI.
 
 ## v0.1.10-cfw3212.22
 
