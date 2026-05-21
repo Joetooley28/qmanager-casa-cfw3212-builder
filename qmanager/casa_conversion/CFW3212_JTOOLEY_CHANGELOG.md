@@ -1,11 +1,9 @@
 # Casa CFW-3212 Joetooley Changelog
 
-## Not Fully Installed / Optional
+## Optional / Still Being Verified
 
-- Web Console depends on the optional `ttyd` helper. New internet-connected installs try to install it automatically; if the download fails, QManager still installs and the Web Console remains unavailable until `ttyd` is installed.
-- Email Alerts depend on optional `msmtp`. The UI can install/remove it using the Casa Entware package flow, but alerts still need Gmail app-password settings before they can send mail.
-- Tailscale is optional and may be installed but logged out until the user completes Tailscale login.
-- Ookla Speedtest is optional; speed-test features need the bundled or installed `speedtest` helper to be present.
+- Web Console, Tailscale, and Ookla Speedtest are optional helper-backed features and are expected to work when their helper files are installed/configured.
+- Email Alerts can install/remove `msmtp` through the Casa Entware package flow; Gmail app-password setup and live send behavior still need final verification.
 - Discord Bot support is visible in the UI but still needs its backend/helper wiring completed before it should be treated as fully functional on Casa.
 - Some upstream modem-management actions remain intentionally blocked or limited on Casa when they could change unsafe modem settings.
 
