@@ -2231,7 +2231,7 @@ if "releaseNotes.hasStructuredNotes" not in card_text:
                             className="h-7 px-2 text-xs"
                             onClick={() => setReleaseNotesSource("upstream")}
                           >
-                            Dr. D
+                            Rus | Ame / Dr. D
                           </Button>
                         </div>
                       )}
