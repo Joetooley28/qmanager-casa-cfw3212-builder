@@ -379,7 +379,7 @@ jobs:
 
           QManager is built and maintained by **Rus | Ame** (`misuzu__` on Discord), GitHub **[dr-dolomite](https://github.com/dr-dolomite)**. Huge thanks to Rus for all the hard work building, maintaining, and sharing QManager with the community.
 
-          Joetooley built only the Casa CFW-3212 converter/package flow for making QManager installable on the Casa CFW-3212.
+          Joetooley built only the Casa CFW-3212 converter/package flow and small UI compatibility changes needed to make QManager installable and usable on the Casa CFW-3212.
 
           Actions-built prerelease. Not yet live-router verified by JTooley.
 
