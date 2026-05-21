@@ -694,6 +694,24 @@ jobs:
               exit 1
             fi
 
+            release_id="$(gh release view "$casa_tag" --repo "$PACKAGE_REPO" --json databaseId --jq '.databaseId')"
+            title="QManager ${casa_tag} for Casa CFW-3212 (Actions-built, unverified)"
+            python3 -c 'import json, pathlib, sys; title, notes = sys.argv[1:3]; print(json.dumps({"name": title, "body": pathlib.Path(notes).read_text(), "prerelease": True, "make_latest": "false"}))' \
+              "$title" "$notes_file" > "$RUNNER_TEMP/update-release.json"
+            if ! gh api --method PATCH "repos/${PACKAGE_REPO}/releases/${release_id}" \
+                -H "Content-Type: application/json" \
+                --input "$RUNNER_TEMP/update-release.json" \
+                > "$RUNNER_TEMP/update-release-response.json" \
+                2> "$RUNNER_TEMP/update-release.err"; then
+              echo "Failed to update release notes for $casa_tag in $PACKAGE_REPO." >&2
+              cat "$RUNNER_TEMP/update-release.err" >&2
+              if [ -s "$RUNNER_TEMP/update-release-response.json" ]; then
+                cat "$RUNNER_TEMP/update-release-response.json" >&2
+              fi
+              exit 1
+            fi
+            echo "Updated package prerelease body for $casa_tag."
+
             upload_assets
           else
             title="QManager ${casa_tag} for Casa CFW-3212 (Actions-built, unverified)"
