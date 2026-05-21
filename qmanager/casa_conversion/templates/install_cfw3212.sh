@@ -1294,6 +1294,28 @@ systemctl start qmanager-poller 2>/dev/null \
     && info "qmanager-poller started" \
     || warn "qmanager-poller failed — check: systemctl status qmanager-poller"
 
+# --- Web Console (ttyd) ------------------------------------------------------
+# Upstream ships qmanager_console_mgr as an optional downloader for ttyd. The
+# Casa installer already stages the console script and qmanager-console unit;
+# run the helper best-effort so /console works on internet-connected installs.
+TTYD_BIN="$QMANAGER_ROOT/console/ttyd"
+
+step "Installing web console (ttyd)"
+if [ -x "$TTYD_BIN" ]; then
+    systemctl start qmanager-console 2>/dev/null \
+        && info "web console already installed and started" \
+        || warn "ttyd exists, but qmanager-console failed — check: systemctl status qmanager-console"
+elif [ -x "$BIN_DIR/qmanager_console_mgr" ]; then
+    if "$BIN_DIR/qmanager_console_mgr" install >/tmp/qmanager_console_install.log 2>&1; then
+        info "web console installed and started"
+    else
+        warn "ttyd download/install failed — web console page will show unavailable"
+        warn "Details: /tmp/qmanager_console_install.log"
+    fi
+else
+    warn "qmanager_console_mgr missing — web console page will show unavailable"
+fi
+
 # --- Ookla Speedtest CLI -----------------------------------------------------
 # The QManager speedtest CGIs (speedtest_start.sh / speedtest_status.sh etc.)
 # use `command -v speedtest` to locate the binary. /usrdata/bin is first in

@@ -1,5 +1,11 @@
 # Casa CFW-3212 Joetooley Changelog
 
+## v0.1.10-cfw3212.23
+
+- Install and start the optional Web Console backend (`ttyd`) during internet-connected Casa installs so `/console/` works without a manual helper step.
+- Keep `ttyd` download failure non-fatal; the rest of QManager still installs and the Web Console page remains unavailable until `ttyd` can be installed.
+- Tighten `--purge` uninstall cleanup so QManager-installed optional tools such as Tailscale state/symlinks/services and Ookla CLI config are removed with the rest of the package.
+
 ## v0.1.10-cfw3212.22
 
 - Add a compact Software Update changelog toggle so the router UI can show Casa-specific Joetooley notes separately from upstream QManager notes.

@@ -386,6 +386,22 @@ rm -rf /tmp/qmanager_install \
 info "Temporary files removed"
 
 if [ "$PURGE" = "1" ]; then
+    step "Purging optional QManager-installed tools"
+    systemctl stop --no-block tailscaled 2>/dev/null || true
+    rm -f /etc/systemd/system/tailscaled.service \
+        /etc/systemd/system/multi-user.target.wants/tailscaled.service \
+        /usr/bin/tailscale \
+        /usrdata/root/bin/tailscale \
+        /usrdata/overlay/rwdata/data/usr/bin/tailscale 2>/dev/null || true
+    rm -rf /usrdata/tailscale \
+        /etc/tailscale \
+        /usrdata/overlay/rwdata/data/var/lib/tailscale \
+        /usrdata/overlay/rwdata/data/root/.config/ookla \
+        /tmp/tailscaled-log-* 2>/dev/null || true
+    systemctl daemon-reload 2>/dev/null || true
+    systemctl reset-failed tailscaled 2>/dev/null || true
+    info "Optional Tailscale/Ookla state removed"
+
     step "Purging preserved config and bundled Entware state"
     rm -rf /etc/qmanager /usrdata/opt
     rm -f /etc/sudoers.d/qmanager /usrdata/opt/etc/sudoers.d/qmanager 2>/dev/null || true

@@ -460,7 +460,7 @@ jobs:
 
           ### Purge
 
-          Add `--purge` only when you want to remove preserved QManager config and bundled Entware state too:
+          Add `--purge` only when you want to remove preserved QManager config, bundled Entware state, and optional QManager-installed tools too. Purge also removes Tailscale service/state/symlinks installed by QManager, root Ookla CLI config, and transient Tailscale logs:
 
               curl -fsSL https://github.com/Joetooley28/qmanager-casa-cfw3212-package/releases/download/CASA_TAG_PLACEHOLDER/uninstall-qmanager-cfw3212.sh | sh -s -- --purge
 
