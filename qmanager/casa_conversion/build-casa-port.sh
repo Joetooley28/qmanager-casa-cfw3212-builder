@@ -1116,6 +1116,206 @@ PY
         || fail "Could not disable watchdog failover profile auto-apply"
 }
 
+patch_casa_iccid_and_staleness_cfw3212() {
+    local profile_mgr="$TARGET/scripts/usr/lib/qmanager/profile_mgr.sh"
+    local poller="$TARGET/scripts/usr/bin/qmanager_poller"
+    local table="$TARGET/components/cellular/custom-profiles/custom-profile-table.tsx"
+    local modem_hook="$TARGET/hooks/use-modem-status.ts"
+
+    [ -f "$profile_mgr" ] || fail "Target missing profile_mgr.sh"
+    [ -f "$poller" ] || fail "Target missing qmanager_poller"
+    [ -f "$table" ] || fail "Target missing custom-profile-table.tsx"
+    [ -f "$modem_hook" ] || fail "Target missing use-modem-status.ts"
+
+    python3 - "$profile_mgr" "$poller" "$table" "$modem_hook" <<'PY'
+from pathlib import Path
+import sys
+
+profile_mgr, poller, table, modem_hook = map(Path, sys.argv[1:5])
+
+text = profile_mgr.read_text()
+if "_normalize_iccid()" not in text:
+    text = text.replace(
+        '# Ensure profile directory exists\nmkdir -p "$PROFILE_DIR" 2>/dev/null\n',
+        '''# Ensure profile directory exists
+mkdir -p "$PROFILE_DIR" 2>/dev/null
+
+# Casa/RG520N may report ICCID with a trailing hexadecimal padding nibble
+# ("F"). QManager profile matching should compare the decimal ICCID only.
+_normalize_iccid() {
+    printf '%s' "$1" | tr -d ' \\r\\n' | sed 's/[Ff]$//'
+}
+''',
+        1,
+    )
+if 'sim_iccid=$(_normalize_iccid "$sim_iccid")' not in text:
+    text = text.replace(
+        '    sim_iccid=$(printf \'%s\' "$input" | jq -r \'.sim_iccid // empty\')\n',
+        '    sim_iccid=$(printf \'%s\' "$input" | jq -r \'.sim_iccid // empty\')\n    sim_iccid=$(_normalize_iccid "$sim_iccid")\n',
+        1,
+    )
+if 'iccid=$(_normalize_iccid "$1")' not in text:
+    text = text.replace(
+        '''find_profile_by_iccid() {
+    local iccid="$1"
+    [ -z "$iccid" ] && return 1
+    local pf pf_iccid
+''',
+        '''find_profile_by_iccid() {
+    local iccid
+    iccid=$(_normalize_iccid "$1")
+    [ -z "$iccid" ] && return 1
+    local pf pf_iccid
+''',
+        1,
+    )
+    text = text.replace(
+        '''        pf_iccid=$(jq -r '(.sim_iccid) | if . == null then empty else . end' "$pf" 2>/dev/null)
+        if [ "$pf_iccid" = "$iccid" ]; then
+''',
+        '''        pf_iccid=$(jq -r '(.sim_iccid) | if . == null then empty else . end' "$pf" 2>/dev/null)
+        pf_iccid=$(_normalize_iccid "$pf_iccid")
+        if [ "$pf_iccid" = "$iccid" ]; then
+''',
+        1,
+    )
+profile_mgr.write_text(text)
+
+text = poller.read_text()
+if "_normalize_iccid()" not in text:
+    text = text.replace(
+        'qcmd_exec() {\n',
+        '''_normalize_iccid() {
+    printf '%s' "$1" | tr -d ' \\r\\n' | sed 's/[Ff]$//'
+}
+
+qcmd_exec() {
+''',
+        1,
+    )
+if 'boot_iccid=$(_normalize_iccid "$boot_iccid")' not in text:
+    text = text.replace(
+        '''        # QCCID: prefixed
+        boot_iccid=$(printf '%s\\n' "$result" | grep '+QCCID:' | sed 's/+QCCID: //g' | tr -d '\\r ')
+''',
+        '''        # QCCID: prefixed. Strip Casa/RG520N trailing ICCID padding nibble.
+        boot_iccid=$(printf '%s\\n' "$result" | grep '+QCCID:' | sed 's/+QCCID: //g' | tr -d '\\r ')
+        boot_iccid=$(_normalize_iccid "$boot_iccid")
+''',
+        1,
+    )
+if 'stored_iccid=$(_normalize_iccid "$stored_iccid")' not in text:
+    text = text.replace(
+        '            stored_iccid=$(cat "$LAST_ICCID_FILE" 2>/dev/null | tr -d \' \\r\\n\')\n',
+        '            stored_iccid=$(cat "$LAST_ICCID_FILE" 2>/dev/null | tr -d \' \\r\\n\')\n            stored_iccid=$(_normalize_iccid "$stored_iccid")\n',
+        1,
+    )
+if 'pf_iccid=$(_normalize_iccid "$pf_iccid")' not in text:
+    text = text.replace(
+        '''                    pf_iccid=$(jq -r '(.sim_iccid) | if . == null then empty else . end' "$pf" 2>/dev/null)
+                    if [ "$pf_iccid" = "$boot_iccid" ]; then
+''',
+        '''                    pf_iccid=$(jq -r '(.sim_iccid) | if . == null then empty else . end' "$pf" 2>/dev/null)
+                    pf_iccid=$(_normalize_iccid "$pf_iccid")
+                    if [ "$pf_iccid" = "$boot_iccid" ]; then
+''',
+        1,
+    )
+if '_ap_iccid=$(_normalize_iccid "$_ap_iccid")' not in text:
+    text = text.replace(
+        '''                _ap_iccid=$(jq -r '(.sim_iccid) | if . == null then empty else . end' "/etc/qmanager/profiles/${_ap_id}.json" 2>/dev/null)
+                if [ -n "$_ap_iccid" ] && [ "$_ap_iccid" != "$boot_iccid" ]; then
+''',
+        '''                _ap_iccid=$(jq -r '(.sim_iccid) | if . == null then empty else . end' "/etc/qmanager/profiles/${_ap_id}.json" 2>/dev/null)
+                _ap_iccid=$(_normalize_iccid "$_ap_iccid")
+                if [ -n "$_ap_iccid" ] && [ "$_ap_iccid" != "$boot_iccid" ]; then
+''',
+        1,
+    )
+poller.write_text(text)
+
+text = table.read_text()
+if "normalizeIccid" not in text:
+    marker = 'import { formatProfileDate } from "@/types/sim-profile";\n'
+    if marker not in text:
+        raise SystemExit("custom-profile-table.tsx import marker not found")
+    text = text.replace(
+        marker,
+        marker + '''
+function normalizeIccid(value: string | null | undefined): string {
+  return (value ?? "").trim().replace(/[Ff]$/, "");
+}
+''',
+        1,
+    )
+if 'normalizeIccid(row.original.sim_iccid)' not in text:
+    text = text.replace(
+        '''            const profileIccid = row.original.sim_iccid;
+            const isMismatch =
+              profileIccid && currentIccid && profileIccid !== currentIccid;
+''',
+        '''            const profileIccid = normalizeIccid(row.original.sim_iccid);
+            const liveIccid = normalizeIccid(currentIccid);
+            const isMismatch =
+              profileIccid && liveIccid && profileIccid !== liveIccid;
+''',
+        1,
+    )
+table.write_text(text)
+
+text = modem_hook.read_text()
+if "lastTimestampRef" not in text:
+    text = text.replace(
+        '''  // Use ref for the interval so we can clear it
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+''',
+        '''  // Use ref for the interval so we can clear it
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const lastTimestampRef = useRef<number | null>(null);
+  const lastTimestampAdvanceMsRef = useRef<number>(Date.now());
+''',
+        1,
+    )
+if "timestampAdvanced" not in text:
+    text = text.replace(
+        '''      // Check staleness: compare the JSON timestamp to current time
+      const now = Math.floor(Date.now() / 1000);
+      const age = now - json.timestamp;
+      setIsStale(age > STALE_THRESHOLD_SECONDS);
+''',
+        '''      // Check staleness. Prefer an advancing router timestamp because
+      // some Casa units can boot with an incorrect wall clock until time sync.
+      const nowMs = Date.now();
+      const previousTimestamp = lastTimestampRef.current;
+      const timestampAdvanced =
+        typeof previousTimestamp !== "number" || json.timestamp > previousTimestamp;
+      if (timestampAdvanced) {
+        lastTimestampRef.current = json.timestamp;
+        lastTimestampAdvanceMsRef.current = nowMs;
+        setIsStale(false);
+      } else {
+        const stalledAge =
+          (nowMs - lastTimestampAdvanceMsRef.current) / 1000;
+        setIsStale(stalledAge > STALE_THRESHOLD_SECONDS);
+      }
+''',
+        1,
+    )
+modem_hook.write_text(text)
+PY
+
+    grep -q "_normalize_iccid" "$profile_mgr" \
+        || fail "profile_mgr.sh missing ICCID normalization"
+    grep -q "_normalize_iccid" "$poller" \
+        || fail "qmanager_poller missing ICCID normalization"
+    grep -q "normalizeIccid" "$table" \
+        || fail "custom-profile-table.tsx missing ICCID normalization"
+    grep -q "function normalizeIccid" "$table" \
+        || fail "custom-profile-table.tsx missing normalizeIccid function"
+    grep -q "lastTimestampAdvanceMsRef" "$modem_hook" \
+        || fail "use-modem-status.ts missing Casa timestamp staleness patch"
+}
+
 patch_logging_cfw3212() {
     local qlog="$TARGET/scripts/usr/lib/qmanager/qlog.sh"
     local logs_card="$TARGET/components/monitoring/logs/system-logs-card.tsx"
@@ -2448,6 +2648,7 @@ apply_casa_overlays() {
     patch_qmanager_health_check_paths_cfw3212
     patch_qmanager_poller
     patch_disable_profile_auto_apply
+    patch_casa_iccid_and_staleness_cfw3212
     patch_logging_cfw3212
     patch_qmanager_display_version
     patch_casa_display_name
