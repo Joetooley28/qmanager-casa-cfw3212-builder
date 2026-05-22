@@ -8,6 +8,13 @@
 - Discord Bot support is visible in the UI but still needs its backend/helper wiring completed before it should be treated as fully functional on Casa.
 - Some upstream modem-management actions remain intentionally blocked or limited on Casa when they could change unsafe modem settings.
 
+## v0.1.10-cfw3212.24
+
+- Clarify the public changelog's optional-feature section: Web Console now auto-installs `ttyd` during internet-connected installs, while Tailscale and Ookla Speedtest are expected to work when installed/configured.
+- Note that Email Alerts can install/remove `msmtp` through the Casa Entware package flow, with Gmail app-password setup and live send behavior still needing final verification.
+- Update the Software Update upstream changelog toggle label to `Rus | Ame / Dr. D`.
+- Clarify the generated GitHub release credit line to mention Joetooley's Casa converter/package flow and small UI compatibility changes, while keeping upstream QManager credit with Rus | Ame / Dr. D.
+
 ## v0.1.10-cfw3212.23
 
 - Install and start the optional Web Console backend (`ttyd`) during internet-connected Casa installs so `/console/` works without a manual helper step.
