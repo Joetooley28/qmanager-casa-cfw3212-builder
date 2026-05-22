@@ -12,6 +12,8 @@ UPSTREAM_REPO="${UPSTREAM_REPO:-https://github.com/dr-dolomite/QManager-RM520N.g
 UPSTREAM_API="${UPSTREAM_API:-https://api.github.com/repos/dr-dolomite/QManager-RM520N/releases}"
 WORK_PREFIX="${WORK_PREFIX:-qmanager_work}"
 CASA_BUILD="${CASA_BUILD:-1}"
+CASA_PROFILE_AUTO_APPLY="${CASA_PROFILE_AUTO_APPLY:-0}"
+export CASA_PROFILE_AUTO_APPLY
 
 VERSION=""
 REF_DIR="$DEFAULT_REF_DIR"
@@ -43,6 +45,9 @@ Environment:
   UPSTREAM_API          GitHub releases API. Default: dr-dolomite/QManager-RM520N.
   WORK_PREFIX           Folder prefix. Default: qmanager_work.
   CASA_BUILD            Casa build number suffix. Default: 1.
+  CASA_PROFILE_AUTO_APPLY
+                        Set to 1 to leave upstream ICCID-matched SIM profile
+                        auto-apply enabled. Default: 0, disabled for Casa.
 EOF
 }
 
@@ -674,12 +679,14 @@ patch_qmanager_poller() {
     py_bin="$(command -v python3 || command -v python || true)"
     [ -n "$py_bin" ] || fail "python3/python is required to patch qmanager_poller safely"
     "$py_bin" - "$poller" <<'PY'
+import os
 from pathlib import Path
 import sys
 import re
 
 path = Path(sys.argv[1])
 text = path.read_text()
+disable_profile_auto_apply = os.environ.get("CASA_PROFILE_AUTO_APPLY", "0") != "1"
 
 old = '''# Group A: Identity reads — compound AT (7 → 1 call)
     # CVERSION, CGMM, CGSN, CIMI return bare responses (no +PREFIX:).
@@ -808,7 +815,8 @@ new = '''
     boot_ippt_dhcpv4dns="disabled"'''
 text = text.replace(old, new)
 
-old = '''# Active profile auto-apply at boot
+if disable_profile_auto_apply:
+    old = '''# Active profile auto-apply at boot
     # =========================================================================
     # If ICCID matches a saved profile, (re-)apply all its settings.
     # The apply script skips any setting that already matches — no-op if
@@ -819,26 +827,24 @@ old = '''# Active profile auto-apply at boot
     if [ -n "$boot_iccid" ]; then
         auto_apply_profile "$boot_iccid" "boot"
     fi'''
-new = '''# Casa CFW-3212 safety: profile auto-apply disabled
+    new = '''# Casa CFW-3212 safety: profile auto-apply disabled
     # =========================================================================
-    # QManager SIM profiles can change APN/TTL/IMEI state. The Casa public build
-    # keeps those write paths disabled until they are mapped and validated for
-    # this platform.
+    # Manual SIM profile apply is enabled, including APN, TTL/HL, IMEI, and
+    # AT+CFUN=1,1. Blind ICCID-matched boot auto-apply stays off by default.
     # =========================================================================
     qlog_info "Casa profile auto-apply disabled"'''
-text = text.replace(old, new)
+    text = text.replace(old, new)
 
-if "Casa profile auto-apply disabled" not in text:
-    text = re.sub(
-        r'''    # --- Auto-apply profile matching current SIM \(boot\) ---\n    if \[ -n "\$boot_iccid" \]; then\n        \( \. /usr/lib/qmanager/profile_mgr\.sh && auto_apply_profile "\$boot_iccid" "boot" \)\n    fi''',
-        '''    # --- Casa CFW-3212 safety: profile auto-apply disabled ---
-    # QManager SIM profiles can change APN/TTL/IMEI state. The Casa public build
-    # keeps those write paths disabled until they are mapped and validated for
-    # this platform.
+    if "Casa profile auto-apply disabled" not in text:
+        text = re.sub(
+            r'''    # --- Auto-apply profile matching current SIM \(boot\) ---\n    if \[ -n "\$boot_iccid" \]; then\n        \( \. /usr/lib/qmanager/profile_mgr\.sh && auto_apply_profile "\$boot_iccid" "boot" \)\n    fi''',
+            '''    # --- Casa CFW-3212 safety: profile auto-apply disabled ---
+    # Manual SIM profile apply is enabled, including APN, TTL/HL, IMEI, and
+    # AT+CFUN=1,1. Blind ICCID-matched boot auto-apply stays off by default.
     qlog_info "Casa profile auto-apply disabled"''',
-        text,
-        count=1,
-    )
+            text,
+            count=1,
+        )
 
 if "boot_qmanager_version=$(cat /etc/qmanager/VERSION" not in text:
     marker = '    log_info "Boot data: FW=$boot_firmware BUILD=$boot_build_date MFG=$boot_manufacturer MODEL=$boot_model"'
@@ -871,8 +877,12 @@ PY
         || fail "Could not apply Casa MIMO poller patch"
     grep -q "Do not query upstream MPDN/QMAP/QCFG usbnet status here" "$poller" \
         || fail "Could not apply Casa IPPT poller patch"
-    grep -q "Casa profile auto-apply disabled" "$poller" \
-        || fail "Could not apply Casa profile auto-apply poller patch"
+    if [ "$CASA_PROFILE_AUTO_APPLY" = "1" ]; then
+        warn "CASA_PROFILE_AUTO_APPLY=1: leaving boot SIM profile auto-apply enabled"
+    else
+        grep -q "Casa profile auto-apply disabled" "$poller" \
+            || fail "Could not apply Casa profile auto-apply poller patch"
+    fi
     grep -q "qmanager_version: \$qmanager_version" "$poller" \
         || fail "Could not apply Casa QManager version poller patch"
 }
@@ -1040,6 +1050,11 @@ PY
 }
 
 patch_disable_profile_auto_apply() {
+    if [ "$CASA_PROFILE_AUTO_APPLY" = "1" ]; then
+        warn "CASA_PROFILE_AUTO_APPLY=1: leaving upstream SIM profile auto-apply enabled"
+        return 0
+    fi
+
     local settings_sh="$TARGET/scripts/www/cgi-bin/quecmanager/cellular/settings.sh"
     local watchcat="$TARGET/scripts/usr/bin/qmanager_watchcat"
 
@@ -2493,7 +2508,10 @@ Build: @VERSION_NAME@-cfw3212.1
 - Confirm package update checks Casa package releases only.
 - Confirm auto-update remains disabled and no qmanager_auto_update cron entry exists.
 - Confirm package download verifies SHA-256 before install is useful.
-- Confirm profile apply/save/delete endpoints report unsupported for POST.
+- Confirm manual SIM Profile save/apply/delete/deactivate works.
+- Confirm SIM Profile apply can set APN, TTL/HL, IMEI, and AT+CFUN=1,1.
+- Confirm boot/SIM-switch/watchdog profile auto-apply remains disabled unless
+  intentionally building with CASA_PROFILE_AUTO_APPLY=1.
 
 ## Rollback
 
@@ -2624,8 +2642,12 @@ safety_checks() {
     require_rg_clean "dr-dolomite/QManager|QManager-RM520N|dr-dolomite" \
         "$TARGET/scripts/usr/bin/qmanager_update" \
         "qmanager_update must not use upstream QManager releases directly"
-    require_rg_present "Casa profile auto-apply disabled" "$TARGET/scripts/usr/bin/qmanager_poller" \
-        "qmanager_poller must disable boot profile auto-apply"
+    if [ "$CASA_PROFILE_AUTO_APPLY" = "1" ]; then
+        warn "CASA_PROFILE_AUTO_APPLY=1: safety check allows boot profile auto-apply"
+    else
+        require_rg_present "Casa profile auto-apply disabled" "$TARGET/scripts/usr/bin/qmanager_poller" \
+            "qmanager_poller must disable boot profile auto-apply"
+    fi
 
     if [ -f "$TARGET/dependencies/atcli_smd11" ]; then
         local actual

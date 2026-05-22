@@ -8,7 +8,15 @@
 - Ookla Speedtest is wired and works when the `speedtest` helper is installed.
 - Email Alerts can install/remove `msmtp` through the Casa Entware package flow. Gmail app-password setup and live send behavior are the remaining user-side verification steps.
 - Discord Bot backend is now installed by the Casa package so users can test the UI with their own Discord bot token and user ID.
+- SIM Profiles are enabled for manual save/apply/delete/deactivate on Casa, including APN, TTL/HL, IMEI, and modem reboot apply behavior. Blind ICCID-matched profile auto-apply remains disabled by default.
 - Some upstream modem-management actions remain intentionally blocked or limited on Casa when they could change unsafe modem settings.
+
+## v0.1.10-cfw3212.25
+
+- Enable manual SIM Profile save/apply/delete/deactivate on Casa now that the profile path has been reviewed against Casa modem safety boundaries.
+- Manual SIM Profile apply can set APN, QManager TTL/HL firewall state, and IMEI followed by `AT+CFUN=1,1`.
+- Keep blind SIM Profile auto-apply disabled by default on boot, SIM-switch, and watchdog paths; builder maintainers can intentionally opt into upstream auto-apply later with `CASA_PROFILE_AUTO_APPLY=1`.
+- Continue blocking upstream USB composition/IP Passthrough modem-write paths such as ECM, MBIM, RNDIS, `AT+QCFG="usbnet"`, and upstream QMAP MPDN/IPPT controls.
 
 ## v0.1.10-cfw3212.24
 

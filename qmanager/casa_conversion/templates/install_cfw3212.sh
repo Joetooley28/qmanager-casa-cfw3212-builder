@@ -619,23 +619,11 @@ EOF
 chmod 755 "$SRC_SCRIPTS/www/cgi-bin/quecmanager/network/ip_passthrough.sh" 2>/dev/null || true
 info "Casa IP Passthrough mapped to ip_handover with usbnet control still blocked"
 
-# Casa already has a working QMI/rmnet data path with its own APN/profile state.
-# The remaining hard safety line is upstream IP Passthrough / usbnet control.
-# Profile-engine writes stay blocked for now because they are a separate layer
-# above direct AT handlers and need more Casa-specific review.
-disable_post_endpoint \
-    "$SRC_SCRIPTS/www/cgi-bin/quecmanager/profiles/apply.sh" \
-    "Profile apply is disabled on Casa CFW-3212"
-disable_post_endpoint \
-    "$SRC_SCRIPTS/www/cgi-bin/quecmanager/profiles/save.sh" \
-    "Profile save is disabled on Casa CFW-3212"
-disable_post_endpoint \
-    "$SRC_SCRIPTS/www/cgi-bin/quecmanager/profiles/delete.sh" \
-    "Profile deletion is disabled on Casa CFW-3212"
-disable_post_endpoint \
-    "$SRC_SCRIPTS/www/cgi-bin/quecmanager/profiles/deactivate.sh" \
-    "Profile deactivation is disabled on Casa CFW-3212"
-info "Casa modem/network write endpoints switched to read-only mode"
+# Casa keeps the upstream SIM Profile UI/manual apply path enabled. Profiles
+# can save/delete JSON state and, when manually applied by the user, can set APN,
+# QManager TTL/HL firewall state, and IMEI followed by AT+CFUN=1,1. Blind
+# profile auto-apply remains disabled in the Casa build patches.
+info "Casa unsafe modem/network write endpoints switched to read-only mode"
 
 # --- Users and groups --------------------------------------------------------
 
