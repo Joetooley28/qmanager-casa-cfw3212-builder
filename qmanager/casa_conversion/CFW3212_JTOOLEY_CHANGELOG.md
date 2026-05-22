@@ -1,10 +1,13 @@
 # Casa CFW-3212 Joetooley Changelog
 
-## Optional / Still Being Verified
+## Verified / Wired / Working
 
-- Web Console now auto-installs `ttyd` during internet-connected installs; if that download fails, QManager still installs and the console can be repaired later by installing `ttyd`.
-- Tailscale and Ookla Speedtest are optional helper-backed features and are expected to work when their helper files are installed/configured.
-- Email Alerts can install/remove `msmtp` through the Casa Entware package flow; Gmail app-password setup and live send behavior still need final verification.
+- Web Console is wired: internet-connected installs auto-install/start `ttyd`, and `/console/` works once the helper is present.
+- System Health Check is wired for Casa paths, services, lighttpd ports, and `/usrdata/opt/bin` helper locations.
+- Tailscale is wired through the QManager UI; users still need to complete their own Tailscale login.
+- Ookla Speedtest is wired and works when the `speedtest` helper is installed.
+- Email Alerts can install/remove `msmtp` through the Casa Entware package flow. Gmail app-password setup and live send behavior are the remaining user-side verification steps.
+- Discord Bot backend is now installed by the Casa package so users can test the UI with their own Discord bot token and user ID.
 - Some upstream modem-management actions remain intentionally blocked or limited on Casa when they could change unsafe modem settings.
 
 ## v0.1.10-cfw3212.24
