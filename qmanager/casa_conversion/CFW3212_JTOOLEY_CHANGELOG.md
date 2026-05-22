@@ -11,6 +11,10 @@
 - SIM Profiles are enabled for manual save/apply/delete/deactivate on Casa, including APN, TTL/HL, IMEI, and modem reboot apply behavior. Blind ICCID-matched profile auto-apply remains disabled by default.
 - Some upstream modem-management actions remain intentionally blocked or limited on Casa when they could change unsafe modem settings.
 
+## v0.1.11-cfw3212.1
+
+- Build upstream QManager v0.1.11 release for Casa CFW-3212.
+
 ## v0.1.10-cfw3212.26
 
 - Normalize Casa/RG520N ICCID values with a trailing `F` padding nibble so SIM Profiles do not show a false SIM mismatch after apply.
