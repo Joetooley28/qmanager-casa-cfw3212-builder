@@ -5,7 +5,6 @@
 - Web Console now auto-installs `ttyd` during internet-connected installs; if that download fails, QManager still installs and the console can be repaired later by installing `ttyd`.
 - Tailscale and Ookla Speedtest are optional helper-backed features and are expected to work when their helper files are installed/configured.
 - Email Alerts can install/remove `msmtp` through the Casa Entware package flow; Gmail app-password setup and live send behavior still need final verification.
-- Discord Bot support is visible in the UI but still needs its backend/helper wiring completed before it should be treated as fully functional on Casa.
 - Some upstream modem-management actions remain intentionally blocked or limited on Casa when they could change unsafe modem settings.
 
 ## v0.1.10-cfw3212.24
@@ -14,6 +13,7 @@
 - Note that Email Alerts can install/remove `msmtp` through the Casa Entware package flow, with Gmail app-password setup and live send behavior still needing final verification.
 - Update the Software Update upstream changelog toggle label to `Rus | Ame / Dr. D`.
 - Clarify the generated GitHub release credit line to mention Joetooley's Casa converter/package flow and small UI compatibility changes, while keeping upstream QManager credit with Rus | Ame / Dr. D.
+- Install the built `qmanager_discord` helper from the Casa package so the Discord Bot UI can enable/start the backend for users who want to test Discord DM alerts.
 
 ## v0.1.10-cfw3212.23
 

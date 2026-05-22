@@ -656,7 +656,7 @@ step "Installing binaries to $BIN_DIR"
 
 mkdir -p "$BIN_DIR"
 
-for bin in atcli_smd11 sms_tool; do
+for bin in atcli_smd11 sms_tool qmanager_discord; do
     if [ -f "$SRC_DEPS/$bin" ]; then
         copy_if_changed "$SRC_DEPS/$bin" "$BIN_DIR/$bin" 755 || true
         info "$bin installed"
