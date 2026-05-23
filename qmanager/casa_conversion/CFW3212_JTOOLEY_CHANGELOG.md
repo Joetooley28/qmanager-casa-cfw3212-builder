@@ -11,6 +11,11 @@
 - SIM Profiles are enabled for manual save/apply/delete/deactivate on Casa, including APN, TTL/HL, IMEI, and modem reboot apply behavior. Blind ICCID-matched profile auto-apply remains disabled by default.
 - Some upstream modem-management actions remain intentionally blocked or limited on Casa when they could change unsafe modem settings.
 
+## v0.1.11-cfw3212.2
+
+- Fix Custom DNS (Local Network → Custom DNS) so the feature is actually usable on Casa CFW-3212. The upstream availability check looked for `<DNSMode>` in `mobileap_cfg.xml`, which Casa firmware does not provide, so the page was permanently marked "Unavailable" on v0.1.11-cfw3212.1. Availability is now derived from live dnsmasq state on `bridge0`.
+- Wire IP Passthrough bypass detection to Casa's real source of truth (`link.profile.1.ip_handover.*` RDB keys) so the Custom DNS page can correctly signal that an IP-passthrough client receives carrier DNS directly and bypasses the modem's resolver.
+
 ## v0.1.11-cfw3212.1
 
 - Build upstream QManager v0.1.11 release for Casa CFW-3212.

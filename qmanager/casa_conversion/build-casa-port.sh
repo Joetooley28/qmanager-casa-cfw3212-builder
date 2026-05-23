@@ -1578,6 +1578,82 @@ PY
         || fail "Could not apply Casa RDB reboot delay"
 }
 
+patch_casa_custom_dns_cfw3212() {
+    # Upstream QManager v0.1.11+ Custom DNS feature gates the UI on:
+    #   1. get_dns_mode()           — expects <DNSMode> in mobileap_cfg.xml
+    #   2. get_passthrough_bypass() — TODO stub, always returns "false"
+    # Neither works on Casa CFW-3212:
+    #   - Casa's mobileap_cfg.xml has no <DNSMode> element, so the function
+    #     always returns "UNKNOWN" and the frontend hides the feature.
+    #   - Casa stores IP passthrough state in RDB
+    #     (link.profile.1.ip_handover.*), not in the QCMAP XML.
+    # This patch rewrites both functions for Casa semantics.
+    local dns_cgi="$TARGET/scripts/www/cgi-bin/quecmanager/network/custom_dns.sh"
+    [ -f "$dns_cgi" ] || return 0
+
+    python3 - "$dns_cgi" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+
+new_get_dns_mode = '''get_dns_mode() {
+    # Casa CFW-3212: mobileap_cfg.xml has no <DNSMode> element. Detect
+    # liveness of the dnsmasq DNS proxy on bridge0 — that is the actual
+    # condition the frontend cares about.
+    if pgrep -x dnsmasq >/dev/null 2>&1 \\
+       && grep -q "^interface=bridge0" /var/run/data/dnsmasq.conf.bridge0.updated 2>/dev/null; then
+        printf "PROXY"
+    else
+        printf "UNKNOWN"
+    fi
+}'''
+
+new_get_passthrough_bypass = '''get_passthrough_bypass() {
+    # Casa CFW-3212: IP passthrough state lives in RDB, not mobileap_cfg.xml.
+    # Mirrors the keys QManager ip_passthrough.sh authoritatively writes.
+    local enable mode svc
+    enable=$(rdb get link.profile.1.ip_handover.enable 2>/dev/null)
+    mode=$(rdb get link.profile.1.ip_handover.mode 2>/dev/null)
+    svc=$(rdb get service.ip_handover.enable 2>/dev/null)
+    if [ "$enable" = "1" ] && [ "$svc" = "1" ] && [ "$mode" = "eth" ]; then
+        printf "true"
+    else
+        printf "false"
+    fi
+}'''
+
+# Sentinel so re-runs are idempotent.
+if "Casa CFW-3212: mobileap_cfg.xml has no <DNSMode>" in text:
+    sys.exit(0)
+
+dns_pattern = re.compile(
+    r"get_dns_mode\(\)\s*\{.*?\n\}",
+    re.DOTALL,
+)
+ippt_pattern = re.compile(
+    r"get_passthrough_bypass\(\)\s*\{.*?\n\}",
+    re.DOTALL,
+)
+
+if not dns_pattern.search(text):
+    raise SystemExit("get_dns_mode() not found in custom_dns.sh")
+if not ippt_pattern.search(text):
+    raise SystemExit("get_passthrough_bypass() not found in custom_dns.sh")
+
+text = dns_pattern.sub(new_get_dns_mode, text, count=1)
+text = ippt_pattern.sub(new_get_passthrough_bypass, text, count=1)
+path.write_text(text)
+PY
+
+    grep -q 'Casa CFW-3212: mobileap_cfg.xml has no <DNSMode>' "$dns_cgi" \
+        || fail "Could not apply Casa Custom DNS get_dns_mode patch"
+    grep -q 'link.profile.1.ip_handover.enable' "$dns_cgi" \
+        || fail "Could not apply Casa Custom DNS get_passthrough_bypass patch"
+}
+
 patch_email_alerts_casa_msmtp() {
     local cgi="$TARGET/scripts/www/cgi-bin/quecmanager/monitoring/email_alerts.sh"
     local lib="$TARGET/scripts/usr/lib/qmanager/email_alerts.sh"
@@ -2653,6 +2729,7 @@ apply_casa_overlays() {
     patch_qmanager_display_version
     patch_casa_display_name
     patch_casa_reboot
+    patch_casa_custom_dns_cfw3212
     patch_email_alerts_casa_msmtp
     patch_ping_profile_service_toggle_cfw3212
     patch_software_update_reboot_required_cfw3212
