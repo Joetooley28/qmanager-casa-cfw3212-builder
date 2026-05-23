@@ -1578,6 +1578,119 @@ PY
         || fail "Could not apply Casa RDB reboot delay"
 }
 
+patch_casa_poller_boot_identity_cfw3212() {
+    # Upstream qmanager_poller's boot-identity gate has a broken OK/QCCID
+    # detection: it pipes the compound AT response through `tr -d '<newline>'`
+    # which collapses the multi-line response into one long line, and then
+    # tries to match `^OK$` and `^+QCCID:` — neither can match after the
+    # newlines are gone. The gate therefore fails all 6 retries on a healthy
+    # CFW-3212 and the poller caches empty IMEI/IMSI/ICCID/manufacturer/model
+    # for the whole session. The actual problem is `\r` from the modem
+    # confusing `^OK$`, not `\n`. Stripping `\r` instead preserves line
+    # boundaries so the anchored greps match.
+    local poller="$TARGET/scripts/usr/bin/qmanager_poller"
+    [ -f "$poller" ] || fail "Target missing qmanager_poller"
+
+    python3 - "$poller" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+
+old = "tr -d '\n'"
+new = "tr -d '\\r'"
+
+count = text.count(old)
+if count == 0:
+    # Already patched in a previous run, or upstream changed shape.
+    if "Casa CFW-3212 boot-identity tr fix" in text:
+        sys.exit(0)
+    sys.exit("expected tr -d '\\n' literal not found in qmanager_poller")
+if count > 4:
+    sys.exit(f"too many tr -d '\\n' matches ({count}); refusing to patch blindly")
+
+# Leave a sentinel comment near the top of the file (after shebang/header) so
+# we can detect prior runs without re-scanning the whole file.
+patched = text.replace(old, new)
+sentinel = "# Casa CFW-3212 boot-identity tr fix applied by build-casa-port.sh\n"
+lines = patched.splitlines(keepends=True)
+for i, line in enumerate(lines):
+    if line.startswith("#!"):
+        lines.insert(i + 1, sentinel)
+        break
+else:
+    lines.insert(0, sentinel)
+path.write_text("".join(lines))
+print(f"patched {count} occurrence(s)")
+PY
+
+    grep -q "Casa CFW-3212 boot-identity tr fix" "$poller" \
+        || fail "Could not apply Casa boot-identity tr fix to qmanager_poller"
+}
+
+patch_casa_ippt_disable_clears_service_cfw3212() {
+    # Casa IP Passthrough disable left service.ip_handover.enable=1 and
+    # service.ip_handover.last_wwan_ip=192.0.0.2 stuck across reboots
+    # because they were marked persistent (`p` flag) but never cleared.
+    # The data session stayed bound to the Casa handover placeholder so the
+    # router had no real WAN until manual recovery.
+    local ippt="$TARGET/scripts/www/cgi-bin/quecmanager/network/ip_passthrough.sh"
+    [ -f "$ippt" ] || return 0
+    # Only patch the v0.1.9-Casa-style script (the one that uses
+    # rdb set / link.profile / writeflag). The inline fallback in
+    # write_ippt_backend_cfw3212 already clears the service flag.
+    grep -q 'PROFILE_WRITEFLAG_RDB' "$ippt" || return 0
+
+    python3 - "$ippt" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+
+if "Casa CFW-3212 ippt service-clear" in text:
+    sys.exit(0)
+
+# Add a SERVICE_ENABLE_RDB definition near the other RDB key constants.
+text = text.replace(
+    'SERVICE_ENABLE_RDB="service.ip_handover.enable"',
+    'SERVICE_ENABLE_RDB="service.ip_handover.enable"\n'
+    'SERVICE_LAST_IP_RDB="service.ip_handover.last_wwan_ip"',
+)
+
+# After the PROFILE_ENABLE_RDB write that may fail, inject a clear of the
+# service-level flag and the cached last WAN IP when disabling.
+target = (
+    'if ! rdb set "$PROFILE_ENABLE_RDB" "$ENABLED" 2>/dev/null; then\n'
+    '        cgi_error "rdb_write_failed" "Failed to write Casa ip_handover flag"\n'
+    '        exit 0\n'
+    '    fi\n'
+)
+inject = (
+    target
+    + '\n'
+    + '    # Casa CFW-3212 ippt service-clear: when disabling, also clear the\n'
+    + '    # service-level handover flag and cached last WAN IP so the data\n'
+    + '    # session stops binding to the Casa handover placeholder across\n'
+    + '    # reboots. Keys are persistent (`p` flag) so we set them, not unset.\n'
+    + '    if [ "$ENABLED" = "0" ]; then\n'
+    + '        rdb set "$SERVICE_ENABLE_RDB" 0 2>/dev/null || true\n'
+    + '        rdb setflags "$SERVICE_ENABLE_RDB" p 2>/dev/null || true\n'
+    + '        rdb set "$SERVICE_LAST_IP_RDB" "" 2>/dev/null || true\n'
+    + '        rdb setflags "$SERVICE_LAST_IP_RDB" p 2>/dev/null || true\n'
+    + '    fi\n'
+)
+if target not in text:
+    sys.exit("expected PROFILE_ENABLE_RDB write block not found in ip_passthrough.sh")
+text = text.replace(target, inject, 1)
+path.write_text(text)
+PY
+
+    grep -q "Casa CFW-3212 ippt service-clear" "$ippt" \
+        || fail "Could not apply Casa IPPT disable service-clear patch"
+}
+
 patch_casa_custom_dns_cfw3212() {
     # Upstream QManager v0.1.11+ Custom DNS feature gates the UI on:
     #   1. get_dns_mode()           — expects <DNSMode> in mobileap_cfg.xml
@@ -2730,6 +2843,8 @@ apply_casa_overlays() {
     patch_casa_display_name
     patch_casa_reboot
     patch_casa_custom_dns_cfw3212
+    patch_casa_poller_boot_identity_cfw3212
+    patch_casa_ippt_disable_clears_service_cfw3212
     patch_email_alerts_casa_msmtp
     patch_ping_profile_service_toggle_cfw3212
     patch_software_update_reboot_required_cfw3212
