@@ -1545,6 +1545,36 @@ import sys
 path = Path(sys.argv[1])
 text = path.read_text()
 
+old_reconnect = '''    reconnect)
+        qlog_info "Network reconnect requested (AT+COPS=2 then AT+COPS=0)"
+        qcmd 'AT+COPS=2' >/dev/null 2>&1
+        sleep 2
+        qcmd 'AT+COPS=0' >/dev/null 2>&1
+        jq -n '{"success":true,"detail":"Network reconnect initiated"}'
+        ;;
+'''
+new_reconnect = '''    reconnect)
+        qlog_info "Network reconnect requested via Casa RDB connection manager"
+        if command -v rdb_set >/dev/null 2>&1 && command -v rdb_get >/dev/null 2>&1 && rdb_get link.profile.1.writeflag >/dev/null 2>&1; then
+            current_enable=$(rdb_get link.policy.1.enable 2>/dev/null)
+            [ -z "$current_enable" ] && current_enable=1
+            rdb_set link.profile.1.writeflag 1
+            rdb_set link.policy.1.trigger_connect "$current_enable"
+            jq -n '{"success":true,"detail":"Network reconnect requested through Casa connection manager"}'
+        else
+            qlog_info "Casa RDB reconnect keys unavailable; falling back to AT+COPS=2/0"
+            qcmd 'AT+COPS=2' >/dev/null 2>&1
+            sleep 2
+            qcmd 'AT+COPS=0' >/dev/null 2>&1
+            jq -n '{"success":true,"detail":"Network reconnect initiated"}'
+        fi
+        ;;
+'''
+if "Network reconnect requested via Casa RDB connection manager" not in text:
+    if old_reconnect not in text:
+        raise SystemExit("reconnect command block not found")
+    text = text.replace(old_reconnect, new_reconnect, 1)
+
 old = '''        qlog_info "Device reboot requested via system menu"
         echo '{"success":true}'
         _reboot_cmd="reboot"
@@ -1580,6 +1610,8 @@ PY
         || fail "Could not apply Casa RDB reboot patch"
     grep -q 'service.system.reset.delay 5' "$reboot_sh" \
         || fail "Could not apply Casa RDB reboot delay"
+    grep -q 'link.policy.1.trigger_connect' "$reboot_sh" \
+        || fail "Could not apply Casa RDB reconnect patch"
 }
 
 patch_casa_poller_boot_identity_cfw3212() {
