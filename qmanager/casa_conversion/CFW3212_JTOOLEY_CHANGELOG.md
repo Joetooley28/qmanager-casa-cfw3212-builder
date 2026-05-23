@@ -9,15 +9,21 @@
 - Email Alerts can install and remove `msmtp` through the Casa Entware package flow. The Gmail app-password setup and an actual test send are the last things you have to confirm on your end.
 - Discord Bot backend is now part of the Casa package, so you can plug in your own Discord bot token and user ID and try the UI.
 - SIM Profiles can be saved, applied, deleted, and deactivated by hand on Casa. That includes APN, TTL/HL, IMEI, and the modem reboot apply step. The blind "auto-apply by ICCID" behavior is still off by default.
+- Custom DNS works from the QManager UI, including custom upstream resolvers for LAN clients without changing DHCP leases or rebooting the router.
 - A handful of upstream modem-management actions stay blocked or limited on Casa because they'd let you push the modem into a state we don't want it in.
+
+## v0.1.11-cfw3212.3
+
+- Custom DNS availability detection is more reliable on Casa CFW-3212, so the page correctly unlocks when the router's DNS proxy is available.
+- Saving Custom DNS settings is more reliable on Casa CFW-3212 and no longer fails with a staging-file error on affected installs.
+- The IP Passthrough disable cleanup is now applied to the installer-written Casa CGI too, so turning IP Passthrough off clears both the profile flag and the persistent service handover state.
 
 ## v0.1.11-cfw3212.2
 
-- Custom DNS (Local Network → Custom DNS) actually works on Casa CFW-3212 now. The upstream availability check was looking for `<DNSMode>` in `mobileap_cfg.xml`, which Casa firmware just doesn't write, so the page was stuck showing "Unavailable" on v0.1.11-cfw3212.1. We now look at whether dnsmasq is alive on `bridge0` instead, which is the real signal.
+- Custom DNS (Local Network → Custom DNS) works on Casa CFW-3212 now. You can set custom upstream DNS resolvers for LAN clients from the QManager UI without changing DHCP leases or rebooting the router.
 - IP Passthrough bypass detection is hooked up to the right place on Casa (`link.profile.1.ip_handover.*` RDB keys). The Custom DNS page can now correctly tell you when a device in IP Passthrough mode is getting carrier DNS straight from the modem and skipping the resolver settings.
 - Fixed the long-running "device info missing after boot" problem (blank IMEI, IMSI, ICCID, manufacturer, model, firmware in the dashboard). The poller's boot-identity AT check was stripping newlines and then trying to match `^OK$`, which can never match a multi-line modem response. It now strips carriage returns instead, so the anchored matches work and the dashboard fills in on the first try.
 - Turning off IP Passthrough now also clears `service.ip_handover.enable` and the cached last WAN IP. Before this fix, those flags stayed set across reboots and the modem kept its data session bound to the Casa handover placeholder (`192.0.0.1`), which left the router with no real WAN until a manual reconnect.
-- Rewrote this changelog so it reads more like a person wrote it. Nothing was dropped, just cleaned up.
 
 ## v0.1.11-cfw3212.1
 

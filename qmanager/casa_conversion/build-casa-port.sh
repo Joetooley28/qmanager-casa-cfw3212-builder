@@ -454,6 +454,7 @@ CONFIG="/etc/qmanager/ippt_config.json"
 PROFILE_ENABLE_RDB="link.profile.${PROFILE_ID}.ip_handover.enable"
 PROFILE_MODE_RDB="link.profile.${PROFILE_ID}.ip_handover.mode"
 SERVICE_ENABLE_RDB="service.ip_handover.enable"
+SERVICE_LAST_IP_RDB="service.ip_handover.last_wwan_ip"
 
 rdb_read() {
     rdb_get "$1" 2>/dev/null || echo ""
@@ -486,6 +487,9 @@ if [ "$REQUEST_METHOD" = "POST" ]; then
         disabled)
             rdb_write "$PROFILE_ENABLE_RDB" 0 || { cgi_error "rdb_write_failed" "Failed to disable Casa ip_handover"; exit 0; }
             rdb_write "$SERVICE_ENABLE_RDB" 0 || true
+            rdb_setflags "$SERVICE_ENABLE_RDB" p 2>/dev/null || true
+            rdb_write "$SERVICE_LAST_IP_RDB" "" || true
+            rdb_setflags "$SERVICE_LAST_IP_RDB" p 2>/dev/null || true
             ;;
         eth)
             rdb_write "$PROFILE_ENABLE_RDB" 1 || { cgi_error "rdb_write_failed" "Failed to enable Casa ip_handover"; exit 0; }
@@ -1637,11 +1641,6 @@ patch_casa_ippt_disable_clears_service_cfw3212() {
     # router had no real WAN until manual recovery.
     local ippt="$TARGET/scripts/www/cgi-bin/quecmanager/network/ip_passthrough.sh"
     [ -f "$ippt" ] || return 0
-    # Only patch the v0.1.9-Casa-style script (the one that uses
-    # rdb set / link.profile / writeflag). The inline fallback in
-    # write_ippt_backend_cfw3212 already clears the service flag.
-    grep -q 'PROFILE_WRITEFLAG_RDB' "$ippt" || return 0
-
     python3 - "$ippt" <<'PY'
 from pathlib import Path
 import sys
@@ -1652,37 +1651,48 @@ text = path.read_text()
 if "Casa CFW-3212 ippt service-clear" in text:
     sys.exit(0)
 
-# Add a SERVICE_ENABLE_RDB definition near the other RDB key constants.
-text = text.replace(
-    'SERVICE_ENABLE_RDB="service.ip_handover.enable"',
-    'SERVICE_ENABLE_RDB="service.ip_handover.enable"\n'
-    'SERVICE_LAST_IP_RDB="service.ip_handover.last_wwan_ip"',
-)
+if 'SERVICE_LAST_IP_RDB="service.ip_handover.last_wwan_ip"' not in text:
+    text = text.replace(
+        'SERVICE_ENABLE_RDB="service.ip_handover.enable"',
+        'SERVICE_ENABLE_RDB="service.ip_handover.enable"\n'
+        'SERVICE_LAST_IP_RDB="service.ip_handover.last_wwan_ip"',
+        1,
+    )
 
-# After the PROFILE_ENABLE_RDB write that may fail, inject a clear of the
-# service-level flag and the cached last WAN IP when disabling.
-target = (
-    'if ! rdb set "$PROFILE_ENABLE_RDB" "$ENABLED" 2>/dev/null; then\n'
-    '        cgi_error "rdb_write_failed" "Failed to write Casa ip_handover flag"\n'
-    '        exit 0\n'
-    '    fi\n'
-)
-inject = (
-    target
-    + '\n'
-    + '    # Casa CFW-3212 ippt service-clear: when disabling, also clear the\n'
-    + '    # service-level handover flag and cached last WAN IP so the data\n'
-    + '    # session stops binding to the Casa handover placeholder across\n'
-    + '    # reboots. Keys are persistent (`p` flag) so we set them, not unset.\n'
-    + '    if [ "$ENABLED" = "0" ]; then\n'
-    + '        rdb set "$SERVICE_ENABLE_RDB" 0 2>/dev/null || true\n'
-    + '        rdb setflags "$SERVICE_ENABLE_RDB" p 2>/dev/null || true\n'
-    + '        rdb set "$SERVICE_LAST_IP_RDB" "" 2>/dev/null || true\n'
-    + '        rdb setflags "$SERVICE_LAST_IP_RDB" p 2>/dev/null || true\n'
-    + '    fi\n'
-)
+if 'PROFILE_WRITEFLAG_RDB' in text:
+    target = (
+        'if ! rdb set "$PROFILE_ENABLE_RDB" "$ENABLED" 2>/dev/null; then\n'
+        '        cgi_error "rdb_write_failed" "Failed to write Casa ip_handover flag"\n'
+        '        exit 0\n'
+        '    fi\n'
+    )
+    inject = (
+        target
+        + '\n'
+        + '    # Casa CFW-3212 ippt service-clear: when disabling, also clear the\n'
+        + '    # service-level handover flag and cached last WAN IP so the data\n'
+        + '    # session stops binding to the Casa handover placeholder across\n'
+        + '    # reboots. Keys are persistent (`p` flag) so we set them, not unset.\n'
+        + '    if [ "$ENABLED" = "0" ]; then\n'
+        + '        rdb set "$SERVICE_ENABLE_RDB" 0 2>/dev/null || true\n'
+        + '        rdb setflags "$SERVICE_ENABLE_RDB" p 2>/dev/null || true\n'
+        + '        rdb set "$SERVICE_LAST_IP_RDB" "" 2>/dev/null || true\n'
+        + '        rdb setflags "$SERVICE_LAST_IP_RDB" p 2>/dev/null || true\n'
+        + '    fi\n'
+    )
+else:
+    target = '            rdb_write "$SERVICE_ENABLE_RDB" 0 || true\n'
+    inject = (
+        target
+        + '            # Casa CFW-3212 ippt service-clear: clear service state that\n'
+        + '            # persists across reboots after disabling IP Passthrough.\n'
+        + '            rdb_setflags "$SERVICE_ENABLE_RDB" p 2>/dev/null || true\n'
+        + '            rdb_write "$SERVICE_LAST_IP_RDB" "" || true\n'
+        + '            rdb_setflags "$SERVICE_LAST_IP_RDB" p 2>/dev/null || true\n'
+    )
+
 if target not in text:
-    sys.exit("expected PROFILE_ENABLE_RDB write block not found in ip_passthrough.sh")
+    sys.exit("expected IPPT disable write block not found in ip_passthrough.sh")
 text = text.replace(target, inject, 1)
 path.write_text(text)
 PY
@@ -1716,7 +1726,7 @@ new_get_dns_mode = '''get_dns_mode() {
     # Casa CFW-3212: mobileap_cfg.xml has no <DNSMode> element. Detect
     # liveness of the dnsmasq DNS proxy on bridge0 — that is the actual
     # condition the frontend cares about.
-    if pgrep -x dnsmasq >/dev/null 2>&1 \\
+    if ps | grep "[ /]dnsmasq .*dnsmasq.conf.bridge0.updated" >/dev/null 2>&1 \\
        && grep -q "^interface=bridge0" /var/run/data/dnsmasq.conf.bridge0.updated 2>/dev/null; then
         printf "PROXY"
     else
@@ -1738,10 +1748,6 @@ new_get_passthrough_bypass = '''get_passthrough_bypass() {
     fi
 }'''
 
-# Sentinel so re-runs are idempotent.
-if "Casa CFW-3212: mobileap_cfg.xml has no <DNSMode>" in text:
-    sys.exit(0)
-
 dns_pattern = re.compile(
     r"get_dns_mode\(\)\s*\{.*?\n\}",
     re.DOTALL,
@@ -1758,6 +1764,10 @@ if not ippt_pattern.search(text):
 
 text = dns_pattern.sub(new_get_dns_mode, text, count=1)
 text = ippt_pattern.sub(new_get_passthrough_bypass, text, count=1)
+text = text.replace(
+    'STAGING_FILE="/etc/data/qmanager/dnsmasq.conf.new"',
+    'STAGING_FILE="/tmp/qmanager-dnsmasq.conf.new"',
+)
 path.write_text(text)
 PY
 
@@ -1765,6 +1775,8 @@ PY
         || fail "Could not apply Casa Custom DNS get_dns_mode patch"
     grep -q 'link.profile.1.ip_handover.enable' "$dns_cgi" \
         || fail "Could not apply Casa Custom DNS get_passthrough_bypass patch"
+    grep -q 'STAGING_FILE="/tmp/qmanager-dnsmasq.conf.new"' "$dns_cgi" \
+        || fail "Could not apply Casa Custom DNS staging path patch"
 }
 
 patch_email_alerts_casa_msmtp() {
