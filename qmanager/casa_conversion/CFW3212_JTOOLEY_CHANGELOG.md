@@ -1,68 +1,69 @@
 # Casa CFW-3212 Joetooley Changelog
 
-## Verified / Wired / Working
+## What's Working
 
-- Web Console is wired: internet-connected installs auto-install/start `ttyd`, and `/console/` works once the helper is present.
-- System Health Check is wired for Casa paths, services, lighttpd ports, and `/usrdata/opt/bin` helper locations.
-- Tailscale is wired through the QManager UI; users still need to complete their own Tailscale login.
-- Ookla Speedtest is wired and works when the `speedtest` helper is installed.
-- Email Alerts can install/remove `msmtp` through the Casa Entware package flow. Gmail app-password setup and live send behavior are the remaining user-side verification steps.
-- Discord Bot backend is now installed by the Casa package so users can test the UI with their own Discord bot token and user ID.
-- SIM Profiles are enabled for manual save/apply/delete/deactivate on Casa, including APN, TTL/HL, IMEI, and modem reboot apply behavior. Blind ICCID-matched profile auto-apply remains disabled by default.
-- Some upstream modem-management actions remain intentionally blocked or limited on Casa when they could change unsafe modem settings.
+- Web Console works. On installs with internet, `ttyd` gets pulled in and started automatically, and `/console/` is live once that helper is in place.
+- System Health Check has been pointed at the Casa paths, services, lighttpd ports, and the `/usrdata/opt/bin` helper locations it actually needs to look at.
+- Tailscale runs from the QManager UI. You still have to do your own Tailscale login.
+- Ookla Speedtest works once the `speedtest` helper is installed.
+- Email Alerts can install and remove `msmtp` through the Casa Entware package flow. The Gmail app-password setup and an actual test send are the last things you have to confirm on your end.
+- Discord Bot backend is now part of the Casa package, so you can plug in your own Discord bot token and user ID and try the UI.
+- SIM Profiles can be saved, applied, deleted, and deactivated by hand on Casa. That includes APN, TTL/HL, IMEI, and the modem reboot apply step. The blind "auto-apply by ICCID" behavior is still off by default.
+- A handful of upstream modem-management actions stay blocked or limited on Casa because they'd let you push the modem into a state we don't want it in.
 
 ## v0.1.11-cfw3212.2
 
-- Fix Custom DNS (Local Network → Custom DNS) so the feature is actually usable on Casa CFW-3212. The upstream availability check looked for `<DNSMode>` in `mobileap_cfg.xml`, which Casa firmware does not provide, so the page was permanently marked "Unavailable" on v0.1.11-cfw3212.1. Availability is now derived from live dnsmasq state on `bridge0`.
-- Wire IP Passthrough bypass detection to Casa's real source of truth (`link.profile.1.ip_handover.*` RDB keys) so the Custom DNS page can correctly signal that an IP-passthrough client receives carrier DNS directly and bypasses the modem's resolver.
+- Custom DNS (Local Network → Custom DNS) actually works on Casa CFW-3212 now. The upstream availability check was looking for `<DNSMode>` in `mobileap_cfg.xml`, which Casa firmware just doesn't write, so the page was stuck showing "Unavailable" on v0.1.11-cfw3212.1. We now look at whether dnsmasq is alive on `bridge0` instead, which is the real signal.
+- IP Passthrough bypass detection is hooked up to the right place on Casa (`link.profile.1.ip_handover.*` RDB keys). The Custom DNS page can now correctly tell you when a device in IP Passthrough mode is getting carrier DNS straight from the modem and skipping the resolver settings.
+- Rewrote this changelog so it reads more like a person wrote it. Nothing was dropped, just cleaned up.
 
 ## v0.1.11-cfw3212.1
 
-- Build upstream QManager v0.1.11 release for Casa CFW-3212.
+- First Casa CFW-3212 build of upstream QManager v0.1.11.
 
 ## v0.1.10-cfw3212.26
 
-- Normalize Casa/RG520N ICCID values with a trailing `F` padding nibble so SIM Profiles do not show a false SIM mismatch after apply.
-- Normalize profile ICCID matching in both the backend profile manager and the router status UI.
-- Make dashboard data freshness tolerate Casa units with an incorrect wall clock by treating an advancing router status timestamp as fresh.
+- Casa/RG520N ICCID values now get a trailing `F` padding nibble added when needed, so SIM Profiles stop showing a fake SIM mismatch right after apply.
+- The same ICCID matching cleanup is applied in both the backend profile manager and the router status UI, so they agree on what the SIM is.
+- The dashboard's "is this data fresh?" check tolerates Casa boxes with a wrong wall clock. As long as the router status timestamp is still moving forward, we treat the data as fresh.
 
 ## v0.1.10-cfw3212.25
 
-- Enable manual SIM Profile save/apply/delete/deactivate on Casa now that the profile path has been reviewed against Casa modem safety boundaries.
-- Manual SIM Profile apply can set APN, QManager TTL/HL firewall state, and IMEI followed by `AT+CFUN=1,1`.
-- Keep blind SIM Profile auto-apply disabled by default on boot, SIM-switch, and watchdog paths; builder maintainers can intentionally opt into upstream auto-apply later with `CASA_PROFILE_AUTO_APPLY=1`.
-- Continue blocking upstream USB composition/IP Passthrough modem-write paths such as ECM, MBIM, RNDIS, `AT+QCFG="usbnet"`, and upstream QMAP MPDN/IPPT controls.
+- Manual SIM Profile save/apply/delete/deactivate is turned on for Casa now that we've walked the profile apply path against the Casa modem safety rules.
+- A manual SIM Profile apply can set APN, the QManager TTL/HL firewall state, and IMEI, followed by `AT+CFUN=1,1`.
+- The blind "auto-apply by ICCID" behavior stays off by default on boot, SIM switch, and watchdog paths. Builder maintainers who want the upstream auto-apply behavior back can flip `CASA_PROFILE_AUTO_APPLY=1`.
+- Upstream USB composition / IP Passthrough modem-write paths stay blocked: ECM, MBIM, RNDIS, `AT+QCFG="usbnet"`, and the upstream QMAP MPDN/IPPT controls.
 
 ## v0.1.10-cfw3212.24
 
-- Clarify the public changelog's optional-feature section: Web Console now auto-installs `ttyd` during internet-connected installs, while Tailscale and Ookla Speedtest are expected to work when installed/configured.
-- Note that Email Alerts can install/remove `msmtp` through the Casa Entware package flow, with Gmail app-password setup and live send behavior still needing final verification.
-- Update the Software Update upstream changelog toggle label to `Rus | Ame / Dr. D`.
-- Clarify the generated GitHub release credit line to mention Joetooley's Casa converter/package flow and small UI compatibility changes, while keeping upstream QManager credit with Rus | Ame / Dr. D.
-- Install the built `qmanager_discord` helper from the Casa package so the Discord Bot UI can enable/start the backend for users who want to test Discord DM alerts.
+- Tightened up the public changelog's optional-feature section: Web Console now auto-installs `ttyd` on internet-connected installs, and Tailscale and Ookla Speedtest are expected to work once they're installed/configured.
+- Said clearly that Email Alerts can install and remove `msmtp` through the Casa Entware flow, and that the Gmail app-password setup plus an actual send are still on the user to verify.
+- Software Update's upstream changelog toggle is now labeled `Rus | Ame / Dr. D`.
+- Cleaned up the generated GitHub release credit line so it mentions Joetooley's Casa converter/package flow and the small UI compatibility changes, while leaving upstream QManager credit with Rus | Ame / Dr. D.
+- The Casa package now installs the built `qmanager_discord` helper so the Discord Bot UI can enable and start the backend for anyone who wants to try Discord DM alerts.
 
 ## v0.1.10-cfw3212.23
 
-- Install and start the optional Web Console backend (`ttyd`) during internet-connected Casa installs so `/console/` works without a manual helper step.
-- Keep `ttyd` download failure non-fatal; the rest of QManager still installs and the Web Console page remains unavailable until `ttyd` can be installed.
-- Tighten `--purge` uninstall cleanup so QManager-installed optional tools such as Tailscale state/symlinks/services and Ookla CLI config are removed with the rest of the package.
-- During GUI updates, return the browser to the main QManager screen after service restart poll loss instead of reloading the stale Software Update route.
-- Adapt Email Alerts `msmtp` install/uninstall for Casa by using the direct Entware IPK extraction flow instead of a missing `opkg` command, and remove the misleading manual `opkg` command from the UI.
-- Rename the Software Update upstream changelog toggle from `Dr. D` to `Rus | Ame / Dr. D` while keeping the same upstream release notes.
+- The optional Web Console backend (`ttyd`) gets installed and started during internet-connected Casa installs, so `/console/` works without a separate manual helper step.
+- If the `ttyd` download fails, the rest of QManager still installs cleanly. You just don't get the Web Console page until `ttyd` can be pulled.
+- The `--purge` uninstall cleans up more thoroughly: QManager-installed optional tools like Tailscale state/symlinks/services and the Ookla CLI config get removed with the rest of the package.
+- During GUI updates, after the service restart drops the poll, the browser goes back to the main QManager screen instead of trying to reload the stale Software Update route.
+- Email Alerts `msmtp` install/uninstall on Casa uses the direct Entware IPK extraction flow instead of relying on a missing `opkg` command, and the misleading manual `opkg` command is gone from the UI.
+- Renamed the Software Update upstream changelog toggle from `Dr. D` to `Rus | Ame / Dr. D`. The upstream release notes it shows are unchanged.
 
 ## v0.1.10-cfw3212.22
 
-- Add a compact Software Update changelog toggle so the router UI can show Casa-specific Joetooley notes separately from upstream QManager notes.
-- Create `/opt -> /usrdata/opt` during install so Entware setuid tools such as `sudo` can use their native loader and library paths.
-- Adapt the QManager health-check worker for Casa paths, remapped lighttpd ports, Casa service names, and `/usrdata/opt/bin` CGI paths.
-- v21 follow-up: preserve Rust ELF binaries during install by normalizing CRLF only on shebang text files, preventing `qmanager_ping` corruption.
-- v21: vendor the Casa-tested Rust `qmanager_ping` binary and verify the packaged binary SHA in CI before publishing.
-- v20/v21: keep `qmanager-ping` enabled with a bounded Rust-first wrapper and shell fallback, while retrying modem identity reads during boot.
+- Added a small Software Update changelog toggle so the router UI can show Casa-specific Joetooley notes separately from the upstream QManager notes.
+- The install now creates `/opt -> /usrdata/opt` so Entware setuid tools like `sudo` find their native loader and library paths.
+- The QManager health-check worker was reworked for Casa paths, the remapped lighttpd ports, Casa service names, and the `/usrdata/opt/bin` CGI paths.
+- v21 follow-up: install now only normalizes CRLF on shebang text files, leaving Rust ELF binaries alone. This stops `qmanager_ping` from getting corrupted on install.
+- v21: the Casa-tested Rust `qmanager_ping` binary is now vendored, and CI verifies the packaged binary's SHA before publishing.
+- v20/v21: `qmanager-ping` stays on with a bounded Rust-first wrapper and a shell fallback, and the boot path retries modem identity reads.
 
 ## Earlier Highlights
 
-- Added Casa package releases through the two-repo builder/package flow, with protected prerelease publishing and router-verified release marking.
-- Reduced router flash churn by skipping unchanged frontend payloads, comparing before copy, pacing fresh installs, and avoiding duplicate tarball extraction in online install/update paths.
-- Changed GUI updates to finish with a reboot-required state instead of automatic reboot, leaving reboot timing under operator control.
-- Mapped QManager install paths to Casa writable storage under `/usrdata` and `/etc/systemd/system`, with lighttpd on HTTP `9080` and HTTPS `9000`.
-- Kept Casa safety boundaries around USB composition, upstream IP Passthrough modem writes, and blind SIM profile auto-apply.
+- Casa package releases go out through the two-repo builder/package flow, with protected prerelease publishing and a router-verified mark on releases.
+- Cut down on router flash churn: skip frontend payloads that haven't changed, compare before copying, pace fresh installs, and don't extract the tarball twice during online installs/updates.
+- GUI updates now end in a reboot-required state instead of rebooting on their own. You decide when the reboot happens.
+- QManager install paths are mapped to Casa's writable storage at `/usrdata` and `/etc/systemd/system`, with lighttpd on HTTP `9080` and HTTPS `9000`.
+- Kept the Casa safety lines drawn around USB composition, upstream IP Passthrough modem writes, and blind SIM profile auto-apply.
