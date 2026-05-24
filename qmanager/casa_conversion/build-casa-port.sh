@@ -1614,6 +1614,73 @@ PY
         || fail "Could not apply Casa RDB reconnect patch"
 }
 
+patch_casa_watchcat_tiers() {
+    # Reroute the qmanager_watchcat recovery daemon so its automatic Tier 1
+    # (reconnect) and Tier 4 (reboot) actions use the Casa RDB connection-
+    # manager and service-aware reset paths, falling back to the upstream
+    # AT+COPS / bare reboot behavior when those RDB keys are unavailable.
+    # This matches what patch_casa_reboot does for the manual UI buttons.
+    local watchcat="$TARGET/scripts/usr/bin/qmanager_watchcat"
+    [ -f "$watchcat" ] || return 0
+
+    python3 - "$watchcat" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+
+old_tier1 = '''    qcmd 'AT+COPS=2' 2>/dev/null
+    sleep 2
+    qcmd 'AT+COPS=0' 2>/dev/null
+'''
+new_tier1 = '''    if command -v rdb_set >/dev/null 2>&1 && command -v rdb_get >/dev/null 2>&1 && rdb_get link.profile.1.writeflag >/dev/null 2>&1; then
+        current_enable=$(rdb_get link.policy.1.enable 2>/dev/null)
+        [ -z "$current_enable" ] && current_enable=1
+        rdb_set link.profile.1.writeflag 1 2>/dev/null
+        rdb_set link.policy.1.trigger_connect "$current_enable" 2>/dev/null
+    else
+        qcmd 'AT+COPS=2' 2>/dev/null
+        sleep 2
+        qcmd 'AT+COPS=0' 2>/dev/null
+    fi
+'''
+if "link.policy.1.trigger_connect" not in text:
+    if old_tier1 not in text:
+        raise SystemExit("tier1 AT+COPS block not found")
+    text = text.replace(old_tier1, new_tier1, 1)
+
+old_tier4 = '''    # Reboot after flushing state
+    ( sleep 1 && reboot ) &
+'''
+new_tier4 = '''    # Reboot after flushing state - Casa RDB reset path with reboot fallback
+    (
+        sleep 1
+        if command -v rdb_set >/dev/null 2>&1 && command -v rdb_get >/dev/null 2>&1 && rdb_get service.system.reset >/dev/null 2>&1; then
+            rdb_set service.system.reset_reason "QManager watchcat tier4 recovery"
+            rdb_set service.system.reset.delay 5
+            rdb_set service.system.reset 1
+        else
+            _reboot_cmd="reboot"
+            command -v run_reboot >/dev/null 2>&1 && _reboot_cmd="run_reboot"
+            $_reboot_cmd
+        fi
+    ) </dev/null >/dev/null 2>&1 &
+'''
+if "QManager watchcat tier4 recovery" not in text:
+    if old_tier4 not in text:
+        raise SystemExit("tier4 reboot block not found")
+    text = text.replace(old_tier4, new_tier4, 1)
+
+path.write_text(text)
+PY
+
+    grep -q 'link.policy.1.trigger_connect' "$watchcat" \
+        || fail "Could not apply Casa watchcat tier1 reconnect patch"
+    grep -q 'QManager watchcat tier4 recovery' "$watchcat" \
+        || fail "Could not apply Casa watchcat tier4 reboot patch"
+}
+
 patch_casa_poller_boot_identity_cfw3212() {
     # Upstream qmanager_poller's boot-identity gate has a broken OK/QCCID
     # detection: it pipes the compound AT response through `tr -d '<newline>'`
@@ -2886,6 +2953,7 @@ apply_casa_overlays() {
     patch_qmanager_display_version
     patch_casa_display_name
     patch_casa_reboot
+    patch_casa_watchcat_tiers
     copy_template_or_fallback "components/nav-user.tsx" "$TEMPLATE_DIR/components/nav-user.tsx"
     copy_template_or_fallback "components/monitoring/software-update/update-preferences-card.tsx" "$TEMPLATE_DIR/components/monitoring/software-update/update-preferences-card.tsx"
     copy_template_or_fallback "components/monitoring/software-update/software-update.tsx" "$TEMPLATE_DIR/components/monitoring/software-update/software-update.tsx"
