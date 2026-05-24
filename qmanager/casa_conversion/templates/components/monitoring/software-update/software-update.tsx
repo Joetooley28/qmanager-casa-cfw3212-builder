@@ -364,6 +364,7 @@ const SoftwareUpdateComponent = () => {
           downloadState={downloadState}
           downloadUpdate={hookData.downloadUpdate}
           installStaged={hookData.installStaged}
+          clearStaged={hookData.clearStaged}
           togglePrerelease={hookData.togglePrerelease}
           saveAutoUpdate={hookData.saveAutoUpdate}
         />

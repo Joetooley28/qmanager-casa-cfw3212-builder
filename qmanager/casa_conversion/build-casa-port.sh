@@ -2889,6 +2889,8 @@ apply_casa_overlays() {
     copy_template_or_fallback "components/nav-user.tsx" "$TEMPLATE_DIR/components/nav-user.tsx"
     copy_template_or_fallback "components/monitoring/software-update/update-preferences-card.tsx" "$TEMPLATE_DIR/components/monitoring/software-update/update-preferences-card.tsx"
     copy_template_or_fallback "components/monitoring/software-update/software-update.tsx" "$TEMPLATE_DIR/components/monitoring/software-update/software-update.tsx"
+    copy_template_or_fallback "hooks/use-software-update.ts" "$TEMPLATE_DIR/hooks/use-software-update.ts"
+    copy_template_or_fallback "components/reboot/reboot-countdown.tsx" "$TEMPLATE_DIR/components/reboot/reboot-countdown.tsx"
     patch_casa_custom_dns_cfw3212
     patch_casa_poller_boot_identity_cfw3212
     patch_casa_ippt_disable_clears_service_cfw3212

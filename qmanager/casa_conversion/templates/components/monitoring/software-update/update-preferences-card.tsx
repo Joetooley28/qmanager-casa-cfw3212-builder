@@ -47,6 +47,7 @@ interface UpdatePreferencesCardProps {
   downloadState: DownloadState | null;
   downloadUpdate: (version: string) => Promise<void>;
   installStaged: () => Promise<void>;
+  clearStaged: () => Promise<void>;
   togglePrerelease: (enabled: boolean) => Promise<void>;
   saveAutoUpdate: (enabled: boolean, time: string) => Promise<void>;
 }
@@ -73,6 +74,7 @@ export function UpdatePreferencesCard({
   downloadState,
   downloadUpdate,
   installStaged,
+  clearStaged,
   togglePrerelease,
   saveAutoUpdate,
 }: UpdatePreferencesCardProps) {
@@ -113,17 +115,21 @@ export function UpdatePreferencesCard({
     downloadState?.status === "ready" &&
     downloadState?.version === selectedVersion;
 
-  // Auto-select the staged version on mount/when staging completes so the
-  // Install button can transition to "Install Now" without user reselection.
-  useEffect(() => {
-    if (
-      !selectedVersion &&
-      downloadState?.status === "ready" &&
-      downloadState.version
-    ) {
-      setSelectedVersion(downloadState.version);
+  const [showDiscardDialog, setShowDiscardDialog] = useState(false);
+  const [isDiscarding, setIsDiscarding] = useState(false);
+
+  const handleDiscardStaged = useCallback(async () => {
+    setShowDiscardDialog(false);
+    setIsDiscarding(true);
+    try {
+      await clearStaged();
+      toast.success("Staged download discarded");
+    } catch {
+      toast.error("Failed to discard staged download");
+    } finally {
+      setIsDiscarding(false);
     }
-  }, [downloadState, selectedVersion]);
+  }, [clearStaged]);
 
   const handleVersionInstall = useCallback(async () => {
     setShowInstallDialog(false);
@@ -317,6 +323,41 @@ export function UpdatePreferencesCard({
             <Separator />
             <motion.div variants={itemVariants} className="flex flex-col gap-2">
               <p className="font-semibold text-sm">Version Management</p>
+              {downloadState?.status === "ready" && downloadState.version && (
+                <div className="flex flex-col @sm/card:flex-row @sm/card:items-center gap-2 @sm/card:justify-between rounded-lg border border-primary/40 bg-primary/5 p-3">
+                  <div className="flex flex-col gap-0.5 min-w-0">
+                    <span className="text-xs font-semibold text-primary">
+                      Staged and ready to install
+                    </span>
+                    <span className="text-xs text-muted-foreground">
+                      <strong>{downloadState.version}</strong>
+                      {downloadState.size ? ` (${downloadState.size})` : ""}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <Button
+                      variant="default"
+                      size="sm"
+                      onClick={() => {
+                        setSelectedVersion(downloadState.version);
+                        setShowInstallDialog(true);
+                      }}
+                      disabled={isUpdating || isDiscarding}
+                    >
+                      <DownloadIcon className="size-4" />
+                      Install Now
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setShowDiscardDialog(true)}
+                      disabled={isUpdating || isDiscarding}
+                    >
+                      Discard
+                    </Button>
+                  </div>
+                </div>
+              )}
               <div className="flex flex-col gap-2 rounded-lg border bg-muted/50 p-3">
                 <span className="text-xs text-muted-foreground">
                   Select a version to install, reinstall, or rollback.
@@ -420,6 +461,28 @@ export function UpdatePreferencesCard({
               {selectedVersion === updateInfo?.current_version
                 ? "Reinstall Now"
                 : "Install Now"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog
+        open={showDiscardDialog}
+        onOpenChange={setShowDiscardDialog}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Discard Staged Download?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will delete the staged{" "}
+              <strong>{downloadState?.version}</strong> package from the router.
+              You can re-download it any time from Version Management.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleDiscardStaged}>
+              Discard
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

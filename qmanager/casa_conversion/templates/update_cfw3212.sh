@@ -419,6 +419,13 @@ if [ "$REQUEST_METHOD" = "POST" ]; then
         exit 0
     fi
 
+    if [ "$ACTION" = "clear_staged" ]; then
+        check_lock
+        rm -f "$STAGED_TARBALL" "$STAGED_VERSION" "$STATUS_FILE"
+        jq -n '{"success":true,"status":"cleared"}'
+        exit 0
+    fi
+
     if [ "$ACTION" = "reboot_now" ]; then
         jq -n '{"success":true,"status":"rebooting"}'
         jq -n \
