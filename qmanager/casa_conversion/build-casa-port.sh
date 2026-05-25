@@ -1019,6 +1019,54 @@ PY
         || fail "Could not apply Speedtest poller pause cleanup to speedtest_status.sh"
 }
 
+patch_disable_orientation_probe_cfw3212() {
+    local poller="$TARGET/scripts/usr/bin/qmanager_poller"
+    [ -f "$poller" ] || return 0
+
+    if ! grep -q 'start_orientation_probe' "$poller" 2>/dev/null; then
+        log "No upstream orientation probe present; skipping Casa orientation gate"
+        return 0
+    fi
+
+    log "Disabling upstream orientation probe for Casa CFW-3212"
+
+    python3 - "$poller" <<'PY'
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+text = path.read_text()
+
+start = text.find('start_orientation_probe() {')
+if start >= 0:
+    next_func = text.find('\n\napply_orientation_result()', start)
+    if next_func > start:
+        new_body = "start_orientation_probe() {\n"
+        new_body += "    # Casa CFW-3212: orientation probe disabled.\n"
+        new_body += "    # The CFW-3212/RG520N-NA does not exhibit flipped upload/download\n"
+        new_body += "    # counters in normal use, so the live 5 MB Cloudflare probe is\n"
+        new_body += "    # unnecessary and adds CPU/network contention during install/startup.\n"
+        new_body += "    # Upload/download display relies on default /proc/net/dev field\n"
+        new_body += "    # assignments (field 2=download, field 10=upload) — correct for\n"
+        new_body += "    # CFW-3212/RG520N-NA firmware.\n"
+        new_body += "    orientation_probe_attempted=true\n"
+        new_body += "    printf '%s\\n' \"fallback:casa_cfw3212_disabled\" > \"${ORIENTATION_STATE_FILE}.tmp\" \\\n"
+        new_body += "        && mv \"${ORIENTATION_STATE_FILE}.tmp\" \"$ORIENTATION_STATE_FILE\"\n"
+        new_body += "    rm -f \"$ORIENTATION_PROBE_PIDFILE\"\n"
+        new_body += "}"
+        text = text[:start] + new_body + text[next_func:]
+    else:
+        raise SystemExit("orientation probe patching failed: apply_orientation_result not found")
+else:
+    raise SystemExit("orientation probe patching failed: start_orientation_probe not found")
+
+path.write_text(text)
+PY
+
+    grep -q "Casa CFW-3212: orientation probe disabled" "$poller" \
+        || fail "Could not apply Casa orientation probe disable to qmanager_poller"
+}
+
 pin_casa_stable_ping_rust() {
     local ref_ping="$REF_DIR/scripts/usr/bin/qmanager_ping"
     local target_ping="$TARGET/scripts/usr/bin/qmanager_ping"
@@ -3136,6 +3184,7 @@ apply_casa_overlays() {
     patch_qmanager_health_check_paths_cfw3212
     patch_qmanager_poller
     patch_speedtest_poller_pause_cfw3212
+    patch_disable_orientation_probe_cfw3212
     patch_disable_profile_auto_apply
     patch_casa_iccid_and_staleness_cfw3212
     patch_logging_cfw3212

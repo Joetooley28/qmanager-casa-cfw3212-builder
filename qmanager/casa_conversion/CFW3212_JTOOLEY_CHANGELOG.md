@@ -15,6 +15,11 @@
 - Software Update → Version Management can now install a different version (including rollbacks). After the download verifies, the Install button switches to "Install Now" so the staged package actually gets applied instead of being left on disk.
 - A handful of upstream modem-management actions stay blocked or limited on Casa because they'd let you push the modem into a state we don't want it in.
 
+## v0.1.12-cfw3212.3
+
+- **Orientation probe gated off for Casa CFW-3212.** The upstream v0.1.12 Cloudflare download probe (~5 MB, up to 90 s timeout) that tries to detect flipped upload/download counters on some Quectel firmwares is now disabled at the converter level for CFW-3212/RG520N-NA builds. Our upload/download counters are not flipped in normal use, and the probe caused unnecessary CPU/network contention around install and first WAN-up.
+- The probe's fallback defaults (field 2 = download, field 10 = upload) match the correct CFW-3212 behavior, so upload/download display is unchanged.
+
 ## v0.1.12-cfw3212.2
 
 - Installer cleanup: optional Ookla Speedtest helper download failures are now handled as best-effort, so a temporary internet/CDN problem should no longer make the whole QManager install report failure after the new version has already been installed.
