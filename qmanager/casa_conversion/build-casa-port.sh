@@ -11,7 +11,7 @@ TEMPLATE_DIR="$SCRIPT_DIR/templates"
 UPSTREAM_REPO="${UPSTREAM_REPO:-https://github.com/dr-dolomite/QManager-RM520N.git}"
 UPSTREAM_API="${UPSTREAM_API:-https://api.github.com/repos/dr-dolomite/QManager-RM520N/releases}"
 WORK_PREFIX="${WORK_PREFIX:-qmanager_work}"
-CASA_BUILD="${CASA_BUILD:-8}"
+CASA_BUILD="${CASA_BUILD:-1}"
 CASA_PROFILE_AUTO_APPLY="${CASA_PROFILE_AUTO_APPLY:-0}"
 export CASA_PROFILE_AUTO_APPLY
 
@@ -2569,6 +2569,56 @@ card.write_text(text)
 PY
 }
 
+patch_speedtest_latency_iqm_guard_cfw3212() {
+    local dialog="$TARGET/components/dashboard/speedtest-dialog.tsx"
+    [ -f "$dialog" ] || fail "speedtest-dialog.tsx missing in target"
+
+    python3 - "$dialog" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+
+replacements = [
+    (
+        '''            {result.download.latency.iqm.toFixed(1)} ms
+''',
+        '''            {result.download.latency?.iqm !== undefined
+              ? `${result.download.latency.iqm.toFixed(1)} ms`
+              : "-"}
+''',
+    ),
+    (
+        '''            {result.upload.latency.iqm.toFixed(1)} ms
+''',
+        '''            {result.upload.latency?.iqm !== undefined
+              ? `${result.upload.latency.iqm.toFixed(1)} ms`
+              : "-"}
+''',
+    ),
+]
+
+for old, new in replacements:
+    if new in text:
+        continue
+    if old not in text:
+        raise SystemExit(f"patch target not found in {path}: {old.strip()!r}")
+    text = text.replace(old, new, 1)
+
+path.write_text(text)
+PY
+
+    grep -Fq 'result.download.latency?.iqm !== undefined' "$dialog" \
+        || fail "Could not apply DL latency iqm guard to speedtest-dialog.tsx"
+    grep -Fq 'result.upload.latency?.iqm !== undefined' "$dialog" \
+        || fail "Could not apply UL latency iqm guard to speedtest-dialog.tsx"
+    ! grep -Fq '            {result.download.latency.iqm.toFixed(1)} ms' "$dialog" \
+        || fail "speedtest-dialog.tsx still has unsafe DL latency iqm read"
+    ! grep -Fq '            {result.upload.latency.iqm.toFixed(1)} ms' "$dialog" \
+        || fail "speedtest-dialog.tsx still has unsafe UL latency iqm read"
+}
+
 patch_software_update_reboot_required_cfw3212() {
     local hook="$TARGET/hooks/use-software-update.ts"
     local page="$TARGET/components/monitoring/software-update/software-update.tsx"
@@ -3103,6 +3153,7 @@ apply_casa_overlays() {
     patch_casa_ippt_disable_clears_service_cfw3212
     patch_email_alerts_casa_msmtp
     patch_ping_profile_service_toggle_cfw3212
+    patch_speedtest_latency_iqm_guard_cfw3212
     patch_software_update_reboot_required_cfw3212
 
     write_qmanager_update_cfw3212
