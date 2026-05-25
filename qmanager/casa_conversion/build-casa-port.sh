@@ -1171,8 +1171,13 @@ PY
         || fail "Health-check worker _svc_check still has || echo unknown bug"
     grep -qE '\[ -z "\$active" \] && active="unknown"' "$worker" \
         || fail "Health-check worker _svc_check fallback patch did not apply"
-    grep -q "_svc_check qmanager-console.service 0" "$worker" \
-        || fail "Health-check worker did not mark qmanager-console optional"
+    # Same pattern as qmanager-traffic below: only verify the optional-mark
+    # when upstream still ships the service. If upstream removes ttyd/console
+    # support, the str.replace becomes a no-op and there's nothing to verify.
+    if grep -q "qmanager-console.service" "$worker"; then
+        grep -q "_svc_check qmanager-console.service 0" "$worker" \
+            || fail "Health-check worker did not mark qmanager-console optional"
+    fi
     # Upstream v0.1.12 removed qmanager-traffic.service entirely (Live Traffic
     # widget dropped because IPA hardware offload bypassed the kernel). Only
     # verify the optional-mark when the upstream worker still references it.
