@@ -1173,8 +1173,13 @@ PY
         || fail "Health-check worker _svc_check fallback patch did not apply"
     grep -q "_svc_check qmanager-console.service 0" "$worker" \
         || fail "Health-check worker did not mark qmanager-console optional"
-    grep -q "_svc_check qmanager-traffic.service 0" "$worker" \
-        || fail "Health-check worker did not mark qmanager-traffic optional"
+    # Upstream v0.1.12 removed qmanager-traffic.service entirely (Live Traffic
+    # widget dropped because IPA hardware offload bypassed the kernel). Only
+    # verify the optional-mark when the upstream worker still references it.
+    if grep -q "qmanager-traffic.service" "$worker"; then
+        grep -q "_svc_check qmanager-traffic.service 0" "$worker" \
+            || fail "Health-check worker did not mark qmanager-traffic optional"
+    fi
     grep -q "local cgi_base=/usrdata/qmanager/lib/cgi_base.sh" "$worker" \
         || fail "Health-check worker still has upstream /usr/lib/qmanager/cgi_base.sh path"
     grep -q "lighttpd CGI PATH includes /usrdata/opt/bin" "$worker" \
