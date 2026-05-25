@@ -11,7 +11,7 @@ TEMPLATE_DIR="$SCRIPT_DIR/templates"
 UPSTREAM_REPO="${UPSTREAM_REPO:-https://github.com/dr-dolomite/QManager-RM520N.git}"
 UPSTREAM_API="${UPSTREAM_API:-https://api.github.com/repos/dr-dolomite/QManager-RM520N/releases}"
 WORK_PREFIX="${WORK_PREFIX:-qmanager_work}"
-CASA_BUILD="${CASA_BUILD:-1}"
+CASA_BUILD="${CASA_BUILD:-8}"
 CASA_PROFILE_AUTO_APPLY="${CASA_PROFILE_AUTO_APPLY:-0}"
 export CASA_PROFILE_AUTO_APPLY
 
@@ -261,7 +261,7 @@ step "Copying Casa install & uninstall scripts..."
 cp "$ROOT_DIR/install_cfw3212.sh" "$STAGING_DIR/install_cfw3212.sh"
 cp "$ROOT_DIR/uninstall_cfw3212.sh" "$STAGING_DIR/uninstall_cfw3212.sh"
 
-CASA_BUILD="${CASA_BUILD:-1}"
+CASA_BUILD="${CASA_BUILD:-8}"
 PKG_VERSION=$(sed -n 's/.*"version":[[:space:]]*"\([^"]*\)".*/\1/p' "$ROOT_DIR/package.json" | head -n1)
 [ -n "$PKG_VERSION" ] || fail "Could not read version from package.json"
 PKG_CASA_VERSION="${PKG_VERSION}-cfw3212.${CASA_BUILD}"
@@ -889,6 +889,134 @@ PY
     fi
     grep -q "qmanager_version: \$qmanager_version" "$poller" \
         || fail "Could not apply Casa QManager version poller patch"
+}
+
+patch_speedtest_poller_pause_cfw3212() {
+    local poller="$TARGET/scripts/usr/bin/qmanager_poller"
+    local speedtest_start="$TARGET/scripts/www/cgi-bin/quecmanager/at_cmd/speedtest_start.sh"
+    local speedtest_status="$TARGET/scripts/www/cgi-bin/quecmanager/at_cmd/speedtest_status.sh"
+    [ -f "$poller" ] || fail "Target missing qmanager_poller"
+    [ -f "$speedtest_start" ] || fail "Target missing speedtest_start.sh"
+    [ -f "$speedtest_status" ] || fail "Target missing speedtest_status.sh"
+
+    python3 - "$poller" "$speedtest_start" "$speedtest_status" <<'PY'
+from pathlib import Path
+import sys
+
+poller = Path(sys.argv[1])
+start = Path(sys.argv[2])
+status = Path(sys.argv[3])
+
+text = poller.read_text()
+if 'SPEEDTEST_PAUSE_FLAG="/tmp/qmanager_speedtest_polling_pause"' not in text:
+    text = text.replace(
+        'LONG_FLAG="/tmp/qmanager_long_running"\n',
+        'LONG_FLAG="/tmp/qmanager_long_running"\n'
+        'SPEEDTEST_PAUSE_FLAG="/tmp/qmanager_speedtest_polling_pause"\n',
+        1,
+    )
+text = text.replace(
+    'if [ -f "$LONG_FLAG" ]; then\n'
+    '        local _lf_mtime _lf_now _lf_age\n'
+    '        _lf_mtime=$(stat -c %Y "$LONG_FLAG" 2>/dev/null || echo 0)',
+    'if [ -f "$LONG_FLAG" ] || [ -f "$SPEEDTEST_PAUSE_FLAG" ]; then\n'
+    '        local _lf_mtime _lf_now _lf_age\n'
+    '        if [ -f "$LONG_FLAG" ]; then\n'
+    '            _lf_mtime=$(stat -c %Y "$LONG_FLAG" 2>/dev/null || echo 0)\n'
+    '        else\n'
+    '            _lf_mtime=$(stat -c %Y "$SPEEDTEST_PAUSE_FLAG" 2>/dev/null || echo 0)\n'
+    '        fi',
+    1,
+)
+text = text.replace(
+    'qlog_warn "LONG_FLAG stale (age=${_lf_age}s > ${LONG_FLAG_MAX_AGE}s) — removing"\n'
+    '            rm -f "$LONG_FLAG"',
+    'qlog_warn "poller pause flag stale (age=${_lf_age}s > ${LONG_FLAG_MAX_AGE}s) — removing"\n'
+    '            rm -f "$LONG_FLAG" "$SPEEDTEST_PAUSE_FLAG"',
+    1,
+)
+text = text.replace(
+    'if [ -f "$LONG_FLAG" ]; then\n'
+    '        if [ "$system_state" != "scan_in_progress" ]; then',
+    'if [ -f "$LONG_FLAG" ] || [ -f "$SPEEDTEST_PAUSE_FLAG" ]; then\n'
+    '        if [ "$system_state" != "scan_in_progress" ]; then',
+    1,
+)
+poller.write_text(text)
+
+text = start.read_text()
+if 'POLLER_PAUSE_FLAG="/tmp/qmanager_speedtest_polling_pause"' not in text:
+    text = text.replace(
+        'WRAPPER_SCRIPT="/tmp/qmanager_speedtest_run.sh"\n',
+        'WRAPPER_SCRIPT="/tmp/qmanager_speedtest_run.sh"\n'
+        'POLLER_PAUSE_FLAG="/tmp/qmanager_speedtest_polling_pause"\n',
+        1,
+    )
+text = text.replace(
+    '# Safety net: explicitly set critical vars if profile didn\'t cover them\n'
+    'export HOME="${HOME:-/root}"',
+    '# Safety net: explicitly set critical vars if profile didn\'t cover them.\n'
+    '# Use /tmp for Ookla config; /home/root is read-only on CFW-3212.\n'
+    'export HOME="/tmp/qmanager-ookla-home"\n'
+    'mkdir -p "$HOME/.config/ookla"',
+    1,
+)
+text = text.replace(
+    '# Safety net: explicitly set critical vars if profile didn\'t cover them\n'
+    'export HOME=/tmp/qmanager-ookla-home\n'
+    'mkdir -p "$HOME"',
+    '# Safety net: explicitly set critical vars if profile didn\'t cover them.\n'
+    '# Use /tmp for Ookla config; /home/root is read-only on CFW-3212.\n'
+    'export HOME=/tmp/qmanager-ookla-home\n'
+    'mkdir -p "$HOME/.config/ookla"',
+    1,
+)
+text = text.replace(
+    '# exec replaces this shell with speedtest — PID stays the same\n'
+    'exec __SPEEDTEST_BIN__',
+    '# Pause the poller while Ookla saturates the link. qmanager_poller treats this\n'
+    '# as a long-running operation and skips modem AT polling/event detection until\n'
+    '# the flag disappears.\n'
+    'touch __POLLER_PAUSE_FLAG__\n'
+    "trap 'rm -f __POLLER_PAUSE_FLAG__' EXIT INT TERM\n\n"
+    '__SPEEDTEST_BIN__',
+    1,
+)
+if 's|__POLLER_PAUSE_FLAG__|' not in text:
+    text = text.replace(
+        'sed -i "s|__SPEEDTEST_BIN__|${SPEEDTEST_BIN}|" "$WRAPPER_SCRIPT"\n',
+        'sed -i "s|__SPEEDTEST_BIN__|${SPEEDTEST_BIN}|" "$WRAPPER_SCRIPT"\n'
+        'sed -i "s|__POLLER_PAUSE_FLAG__|${POLLER_PAUSE_FLAG}|" "$WRAPPER_SCRIPT"\n',
+        1,
+    )
+start.write_text(text)
+
+text = status.read_text()
+if 'POLLER_PAUSE_FLAG="/tmp/qmanager_speedtest_polling_pause"' not in text:
+    text = text.replace(
+        'RESULT_FILE="/tmp/qmanager_speedtest_result.json"\n',
+        'RESULT_FILE="/tmp/qmanager_speedtest_result.json"\n'
+        'POLLER_PAUSE_FLAG="/tmp/qmanager_speedtest_polling_pause"\n',
+        1,
+    )
+if 'rm -f "$POLLER_PAUSE_FLAG"' not in text:
+    text = text.replace(
+        '        rm -f "$PID_FILE"\n',
+        '        rm -f "$PID_FILE"\n'
+        '        rm -f "$POLLER_PAUSE_FLAG"\n',
+        1,
+    )
+status.write_text(text)
+PY
+
+    grep -q 'SPEEDTEST_PAUSE_FLAG="/tmp/qmanager_speedtest_polling_pause"' "$poller" \
+        || fail "Could not apply Speedtest poller pause flag to qmanager_poller"
+    grep -q 'touch __POLLER_PAUSE_FLAG__' "$speedtest_start" \
+        || fail "Could not apply Speedtest poller pause flag to speedtest_start.sh"
+    grep -q '/tmp/qmanager-ookla-home' "$speedtest_start" \
+        || fail "Could not apply Casa Ookla HOME path to speedtest_start.sh"
+    grep -q 'rm -f "$POLLER_PAUSE_FLAG"' "$speedtest_status" \
+        || fail "Could not apply Speedtest poller pause cleanup to speedtest_status.sh"
 }
 
 pin_casa_stable_ping_rust() {
@@ -2947,6 +3075,7 @@ apply_casa_overlays() {
     pin_casa_stable_ping_rust
     patch_qmanager_health_check_paths_cfw3212
     patch_qmanager_poller
+    patch_speedtest_poller_pause_cfw3212
     patch_disable_profile_auto_apply
     patch_casa_iccid_and_staleness_cfw3212
     patch_logging_cfw3212
