@@ -15,6 +15,10 @@
 - Software Update → Version Management can now install a different version (including rollbacks). After the download verifies, the Install button switches to "Install Now" so the staged package actually gets applied instead of being left on disk.
 - A handful of upstream modem-management actions stay blocked or limited on Casa because they'd let you push the modem into a state we don't want it in.
 
+## v0.1.12-cfw3212.2
+
+- Installer cleanup: optional Ookla Speedtest helper download failures are now handled as best-effort, so a temporary internet/CDN problem should no longer make the whole QManager install report failure after the new version has already been installed.
+
 ## v0.1.12-cfw3212.1
 
 - Ookla Speedtest dashboard no longer crashes when the test result is missing Download or Upload latency stats (which Ookla omits when packet loss is high enough that those numbers wouldn't be meaningful). The DL Latency and UL Latency fields now render `—` instead of throwing a JavaScript error that took the dashboard down.

@@ -1331,9 +1331,9 @@ if [ -x "$OOKLA_BIN" ]; then
 elif command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1; then
     OOKLA_TMP=$(mktemp /tmp/ookla_speedtest_XXXXXX.tgz)
     if command -v curl >/dev/null 2>&1; then
-        curl -sL --max-time 60 "$OOKLA_URL" -o "$OOKLA_TMP" 2>/dev/null
+        curl -sL --max-time 60 "$OOKLA_URL" -o "$OOKLA_TMP" 2>/dev/null || true
     else
-        wget -qO "$OOKLA_TMP" -T 60 "$OOKLA_URL" 2>/dev/null
+        wget -qO "$OOKLA_TMP" -T 60 "$OOKLA_URL" 2>/dev/null || true
     fi
     if [ -s "$OOKLA_TMP" ]; then
         tar -xzf "$OOKLA_TMP" -C /tmp speedtest 2>/dev/null \
