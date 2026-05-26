@@ -77,6 +77,12 @@ The Casa installer entrypoints live in `templates/`:
 The converter copies these templates into each generated Casa work tree when
 the reference tree does not already provide a newer Casa overlay.
 
+On fresh install and reinstall, `install_cfw3212.sh` idempotently creates
+`/opt -> /usrdata/opt` (brief root remount read-write, then read-only) so
+Entware helpers such as `sudo` resolve their baked-in `/opt/...` ELF paths.
+It never overwrites existing `/usrdata/opt` contents. Uninstall leaves the
+symlink in place; only `--purge` removes `/usrdata/opt` itself.
+
 ## Installer update behavior
 
 The Casa installer is intentionally conservative about flash writes:

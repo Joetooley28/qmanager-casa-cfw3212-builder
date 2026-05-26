@@ -11,7 +11,7 @@
 #   - /opt does NOT exist in squashfs — Entware goes to /usrdata/opt directly
 #   - Daemons       → /usrdata/bin
 #   - Libraries     → /usrdata/qmanager/lib
-#   - Entware       → /usrdata/opt  (no bind mount to /opt needed)
+#   - Entware       → /usrdata/opt  (/opt -> /usrdata/opt symlink for ELF paths)
 #   - Systemd units → /etc/systemd/system  (writable via overlay)
 #   - Wants symlinks→ /etc/systemd/system/multi-user.target.wants
 #   - lighttpd on port 9000 (HTTPS) — port 80 is Casa's turbontc
@@ -33,7 +33,7 @@ CERT_DIR="/usrdata/qmanager/certs"
 LIGHTTPD_CONF="/usrdata/qmanager/lighttpd.conf"
 SESSION_DIR="/tmp/qmanager_sessions"
 
-# Entware lives entirely under /usrdata/opt — no /opt bind mount needed
+# Entware lives under /usrdata/opt; installer ensures /opt -> /usrdata/opt for sudo ELF paths
 OPT_DIR="/usrdata/opt"
 LIGHTTPD_MODULE_DIR="$OPT_DIR/lib/lighttpd"
 LIGHTTPD_LAUNCHER="$OPT_DIR/lib/ld-linux.so.3 --library-path $OPT_DIR/lib $OPT_DIR/sbin/lighttpd -m $LIGHTTPD_MODULE_DIR"
@@ -359,23 +359,40 @@ available_kb=$(df /usrdata | awk 'NR==2{print $4}')
 [ "$available_kb" -gt 30000 ] || die "/usrdata < 30MB free"
 info "/usrdata has $((available_kb/1024))MB free"
 
+# Ensure /opt -> /usrdata/opt symlink exists (needed for Entware helpers like sudo).
 # Entware sudo has its ELF interpreter and RPATH baked to /opt/lib/...
 # Without /opt -> /usrdata/opt, the setuid sudo at /usrdata/opt/bin/sudo
 # cannot find its loader, and the ld-linux wrapper at /usrdata/bin/sudo
 # loses setuid privileges (kernel strips them when the loader is named
 # explicitly). Every CGI that uses `sudo -n` then silently fails.
+# Does not create or modify /usrdata/opt — only the root-level symlink.
 if [ ! -e /opt ]; then
+    opt_root_remounted_rw=0
     if mount -o remount,rw / 2>/dev/null; then
-        ln -s /usrdata/opt /opt 2>/dev/null || true
-        mount -o remount,ro / 2>/dev/null || true
+        opt_root_remounted_rw=1
+    else
+        warn "Could not remount / read-write for /opt symlink"
+    fi
+    if ln -sf /usrdata/opt /opt 2>/dev/null; then
+        :
+    else
+        warn "/opt symlink could not be created — Entware sudo may not work"
+    fi
+    if [ "$opt_root_remounted_rw" = 1 ]; then
+        mount -o remount,ro / 2>/dev/null \
+            || warn "Could not remount / read-only after /opt symlink"
     fi
     if [ -L /opt ]; then
         info "/opt -> /usrdata/opt symlink created"
     else
         warn "/opt symlink could not be created — Entware sudo may not work"
     fi
+elif [ ! -L /opt ]; then
+    warn "/opt exists but is not a symlink — skipping (Entware sudo may not work)"
+elif [ "$(readlink /opt 2>/dev/null || true)" = "/usrdata/opt" ]; then
+    info "/opt -> /usrdata/opt symlink already present"
 else
-    info "/opt already present"
+    warn "/opt is a symlink but does not point at /usrdata/opt — leaving unchanged"
 fi
 
 # --- Extract -----------------------------------------------------------------

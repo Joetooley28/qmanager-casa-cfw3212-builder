@@ -101,6 +101,8 @@ if [ "$PURGE" = "1" ]; then
     info "Optional Tailscale/Ookla state removed"
 
     step "Purging preserved config and bundled Entware state"
+    # /opt -> /usrdata/opt is created by install_cfw3212.sh on the rootfs; leave it
+    # in place so a later reinstall can still use Entware ELF paths if /usrdata/opt returns.
     rm -rf /etc/qmanager /usrdata/opt
     rm -f /etc/sudoers.d/qmanager /usrdata/opt/etc/sudoers.d/qmanager 2>/dev/null || true
     info "Purge cleanup complete"
