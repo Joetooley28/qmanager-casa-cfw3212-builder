@@ -195,7 +195,8 @@ if [ "$MODE" = "install_staged" ]; then
         || die "Casa installer not found after extraction"
 
     log "Running install_cfw3212.sh"
-    if ! sh /tmp/qmanager_update_install/qmanager_install/install_cfw3212.sh >> "$LOG_FILE" 2>&1; then
+    if ! QMANAGER_UPDATE_STATUS_FILE="$STATUS_FILE" QMANAGER_UPDATE_VERSION="$VERSION" \
+        sh /tmp/qmanager_update_install/qmanager_install/install_cfw3212.sh >> "$LOG_FILE" 2>&1; then
         die "Installation failed. Check /tmp/qmanager_update.log."
     fi
 

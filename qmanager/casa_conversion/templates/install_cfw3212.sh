@@ -64,6 +64,19 @@ warn()  { printf "  ${YELLOW}!${NC}  %s\n" "$1"; }
 die()   { printf "  ${RED}✗${NC}  %s\n" "$1" >&2; exit 1; }
 step()  { printf "\n${BLUE}${BOLD}▶ %s${NC}\n" "$1"; }
 
+write_update_status() {
+    [ -n "${QMANAGER_UPDATE_STATUS_FILE:-}" ] || return 0
+    command -v jq >/dev/null 2>&1 || return 0
+
+    jq -n \
+        --arg status "installing" \
+        --arg message "$1" \
+        --arg version "${QMANAGER_UPDATE_VERSION:-$VERSION}" \
+        --arg size "" \
+        '{status: $status, message: $message, version: $version, size: $size}' \
+        > "$QMANAGER_UPDATE_STATUS_FILE" 2>/dev/null || true
+}
+
 copy_if_changed() {
     local src="$1"
     local dst="$2"
@@ -1266,6 +1279,7 @@ find "$LIB_DIR" -name "*.sh" -exec chmod 644 {} \; 2>/dev/null || true
 # --- Start services ----------------------------------------------------------
 
 step "Starting QManager services"
+write_update_status "Restarting QManager services..."
 
 systemctl start qmanager-setup 2>/dev/null \
     && info "qmanager-setup done" \
