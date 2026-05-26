@@ -4,6 +4,7 @@
 
 - Web Console works. On installs with internet, `ttyd` gets pulled in and started automatically, and `/console/` is live once that helper is in place.
 - System Health Check has been pointed at the Casa paths, services, lighttpd ports, and the `/usrdata/opt/bin` helper locations it actually needs to look at.
+- The Casa installer now idempotently ensures `/opt -> /usrdata/opt` on every install (with an explicit root remount when needed) so Entware helpers such as `sudo` resolve correctly on clean routers without manual symlink setup.
 - Tailscale runs from the QManager UI. You do your own Tailscale login from the UI.
 - Ookla Speedtest works once the `speedtest` helper is installed. install handles if connected to internet.
 - Email Alerts can install and remove `msmtp` through the Casa Entware package flow. The Gmail app-password setup and an actual test send are the last things to confirm working on your end. (wired up, not tested yet) 
@@ -14,6 +15,10 @@
 - Reconnect Network now keeps a small progress window open so you can watch elapsed time, network registration, WAN IP, and internet status while the router comes back online.
 - Software Update → Version Management can now install a different version (including rollbacks). After the download verifies, the Install button switches to "Install Now" so the staged package actually gets applied instead of being left on disk.
 - A handful of upstream modem-management actions stay blocked or limited on Casa because they'd let you push the modem into a state we don't want it in.
+
+## v0.1.12-cfw3212.7
+
+- Casa installer now idempotently creates `/opt -> /usrdata/opt` when missing (brief read-write remount of `/`, then read-only again). Reinstalls leave an existing correct symlink untouched; a non-symlink `/opt` is warned and skipped so `/usrdata/opt` is never overwritten.
 
 ## v0.1.12-cfw3212.6
 
