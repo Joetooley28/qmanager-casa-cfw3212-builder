@@ -1124,6 +1124,7 @@ rules = [
     # Cosmetic strings tied to the port test — labels and result messages.
     ("lighttpd listening on 80/443",  "lighttpd listening on 9080/9000"),
     ("listening on 80 and 443",       "listening on 9080 and 9000"),
+    ("listening on only one of 80/443", "listening on only one of 9080/9000"),
     ("not listening on 80 or 443",    "not listening on 9080 or 9000"),
     # qmanager-console (ttyd web console) and qmanager-traffic (live traffic
     # counter) are opt-in features. Mark them optional so a fresh install
@@ -1215,6 +1216,8 @@ PY
         || fail "Health-check worker has non-Casa /etc/sudoers.d/qmanager references"
     grep -q "lighttpd listening on 9080/9000" "$worker" \
         || fail "Health-check worker still has 80/443 in lighttpd_listen label"
+    ! grep -q "listening on only one of 80/443" "$worker" \
+        || fail "Health-check worker still has 80/443 in lighttpd_listen warn message"
     ! grep -q "|| echo unknown)" "$worker" \
         || fail "Health-check worker _svc_check still has || echo unknown bug"
     grep -qE '\[ -z "\$active" \] && active="unknown"' "$worker" \
@@ -3472,6 +3475,16 @@ safety_checks() {
         "Casa installer must configure HTTP 9080"
     require_rg_present "9000" "$TARGET/install_cfw3212.sh" \
         "Casa installer must configure HTTPS 9000"
+
+    local health_check="$TARGET/scripts/usr/bin/qmanager_health_check"
+    [ -f "$health_check" ] || fail "Converted tree missing qmanager_health_check worker"
+    require_rg_present "/usrdata/opt/bin/jq" "$health_check" \
+        "Health-check worker must use Casa /usrdata/opt/bin helpers"
+    require_rg_present "lighttpd listening on 9080/9000" "$health_check" \
+        "Health-check worker must use Casa lighttpd ports 9080/9000"
+    require_rg_clean "/usr/bin/atcli_smd11|listening on only one of 80/443|_check_bin jq          /opt/bin/jq|_check_bin curl        /opt/bin/curl|_check_bin openssl     /opt/bin/openssl" \
+        "$health_check" \
+        "Health-check worker still contains upstream RM520N paths or port labels"
 
     require_rg_present "ip_handover" "$TARGET/scripts/www/cgi-bin/quecmanager/network/ip_passthrough.sh" \
         "Casa IPPT backend must use RDB ip_handover"

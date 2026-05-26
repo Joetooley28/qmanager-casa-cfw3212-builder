@@ -117,6 +117,12 @@ repeated installs.
   - installs only after user confirmation.
 - Auto-update remains disabled for Casa CFW-3212.
 - Boot profile auto-apply disabled in `qmanager_poller`.
+- System Health Check worker (`qmanager_health_check`): Casa binary paths
+  (`/usrdata/bin`, `/usrdata/opt/bin`), sudoers and systemd locations,
+  lighttpd listener checks on `9080`/`9000`, CGI PATH checks for
+  `/usrdata/opt/bin`, and opt-in service handling for console/traffic.
+  Applied by `patch_qmanager_health_check_paths_cfw3212` in a single
+  non-overlapping pass so sudoers rewrites do not cascade.
 
 The converter patches `qmanager_poller` surgically so future upstream poller
 changes are preserved where possible. The Casa poller patch only separates
@@ -140,6 +146,8 @@ The converter fails if it detects:
 - Missing Casa package checksum verification.
 - Missing Casa profile auto-apply block.
 - Changed `dependencies/atcli_smd11` SHA-256.
+- Upstream RM520N paths or `80/443` lighttpd labels left in
+  `scripts/usr/bin/qmanager_health_check` after conversion.
 
 It also runs `bash -n` over shell scripts and script-like files.
 
