@@ -15,6 +15,10 @@
 - Software Update → Version Management can now install a different version (including rollbacks). After the download verifies, the Install button switches to "Install Now" so the staged package actually gets applied instead of being left on disk.
 - A handful of upstream modem-management actions stay blocked or limited on Casa because they'd let you push the modem into a state we don't want it in.
 
+## v0.1.12-cfw3212.6
+
+- No functional changes from `v0.1.12-cfw3212.5`. This release is a clean rebuild on top of `.5` to validate the deterministic frontend build ID end-to-end on a live router — installing `.5 → .6` should now rewrite only the small number of files that actually differ between the two builds, instead of the ~80% of the frontend tree that older Casa releases rewrote on every backend-only update.
+
 ## v0.1.12-cfw3212.5
 
 - Casa package builds now use a deterministic frontend build ID based on frontend source inputs. This prevents backend-only Casa releases from changing hundreds of exported Next.js files just because the build ID changed, which should greatly reduce flash writes, CPU load, and swap pressure during normal QManager updates.
