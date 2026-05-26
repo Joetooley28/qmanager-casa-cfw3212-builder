@@ -15,6 +15,10 @@
 - Software Update → Version Management can now install a different version (including rollbacks). After the download verifies, the Install button switches to "Install Now" so the staged package actually gets applied instead of being left on disk.
 - A handful of upstream modem-management actions stay blocked or limited on Casa because they'd let you push the modem into a state we don't want it in.
 
+## v0.1.12-cfw3212.5
+
+- Casa package builds now use a deterministic frontend build ID based on frontend source inputs. This prevents backend-only Casa releases from changing hundreds of exported Next.js files just because the build ID changed, which should greatly reduce flash writes, CPU load, and swap pressure during normal QManager updates.
+
 ## v0.1.12-cfw3212.4
 
 - Software Update install progress now explicitly reports `Restarting QManager services...` while the Casa installer is bringing QManager/lighttpd services back up. This makes the two-step download/install flow clearer and no longer depends on the browser seeing a temporary reconnect failure to show a services-restarting message.

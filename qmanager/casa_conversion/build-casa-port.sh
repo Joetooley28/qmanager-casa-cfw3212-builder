@@ -2446,6 +2446,116 @@ patch_package_version() {
     fi
 }
 
+patch_deterministic_frontend_build_id_cfw3212() {
+    local config="$TARGET/next.config.ts"
+    [ -f "$config" ] || fail "next.config.ts missing in target"
+
+    log "Patching Next build ID to be deterministic from frontend inputs"
+
+    python3 - "$config" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+
+if "Casa CFW-3212 deterministic frontend build ID" in text:
+    raise SystemExit(0)
+
+if 'import type { NextConfig } from "next";' not in text:
+    raise SystemExit("next.config.ts import marker not found")
+
+imports = '''import type { NextConfig } from "next";
+import { createHash } from "crypto";
+import { existsSync, readdirSync, readFileSync, statSync } from "fs";
+import path from "path";
+'''
+text = text.replace('import type { NextConfig } from "next";\n', imports, 1)
+
+helper = r'''
+const FRONTEND_BUILD_INPUTS = [
+  "app",
+  "components",
+  "constants",
+  "hooks",
+  "lib",
+  "public",
+  "types",
+  "middleware.ts",
+  "next-env.d.ts",
+  "package.json",
+  "bun.lock",
+  "bun.lockb",
+  "postcss.config.mjs",
+  "tsconfig.json",
+];
+
+const FRONTEND_BUILD_IGNORE = new Set([
+  ".git",
+  ".next",
+  "node_modules",
+  "out",
+  "qmanager-build",
+]);
+
+function updateHashForPath(hash: ReturnType<typeof createHash>, root: string, filePath: string) {
+  if (!existsSync(filePath)) return;
+
+  const stat = statSync(filePath);
+  if (stat.isDirectory()) {
+    for (const entry of readdirSync(filePath).sort()) {
+      if (FRONTEND_BUILD_IGNORE.has(entry)) continue;
+      updateHashForPath(hash, root, path.join(filePath, entry));
+    }
+    return;
+  }
+
+  if (!stat.isFile()) return;
+  const rel = path.relative(root, filePath).replaceAll(path.sep, "/");
+  hash.update(rel);
+  hash.update("\0");
+  hash.update(readFileSync(filePath));
+  hash.update("\0");
+}
+
+function casaFrontendBuildId() {
+  // Casa CFW-3212 deterministic frontend build ID:
+  // Next's default random build ID changes exported HTML/TXT route files even
+  // when a Casa release only changes backend scripts. That made backend-only
+  // package updates rewrite most of /usrdata/qmanager/www on the router. Hash
+  // frontend inputs instead, so unchanged UI output keeps the same build ID.
+  if (process.env.QMANAGER_FRONTEND_BUILD_ID) {
+    return process.env.QMANAGER_FRONTEND_BUILD_ID;
+  }
+
+  const root = process.cwd();
+  const hash = createHash("sha256");
+  for (const input of FRONTEND_BUILD_INPUTS) {
+    updateHashForPath(hash, root, path.join(root, input));
+  }
+  return `cfw3212-${hash.digest("hex").slice(0, 20)}`;
+}
+
+'''
+text = text.replace('\nconst nextConfig: NextConfig = {', helper + '\nconst nextConfig: NextConfig = {', 1)
+
+if '  trailingSlash: true,\n' not in text:
+    raise SystemExit("next.config.ts trailingSlash marker not found")
+text = text.replace(
+    '  trailingSlash: true,\n',
+    '  trailingSlash: true,\n  generateBuildId: async () => casaFrontendBuildId(),\n',
+    1,
+)
+
+path.write_text(text)
+PY
+
+    grep -q 'Casa CFW-3212 deterministic frontend build ID' "$config" \
+        || fail "Could not apply deterministic frontend build ID patch"
+    grep -q 'generateBuildId: async () => casaFrontendBuildId()' "$config" \
+        || fail "next.config.ts missing deterministic generateBuildId hook"
+}
+
 patch_ping_profile_service_toggle_cfw3212() {
     local cgi="$TARGET/scripts/www/cgi-bin/quecmanager/settings/ping_profile.sh"
     local hook="$TARGET/hooks/use-ping-profile.ts"
@@ -3204,6 +3314,7 @@ apply_casa_overlays() {
     patch_ping_profile_service_toggle_cfw3212
     patch_speedtest_latency_iqm_guard_cfw3212
     patch_software_update_reboot_required_cfw3212
+    patch_deterministic_frontend_build_id_cfw3212
 
     write_qmanager_update_cfw3212
     write_qmanager_auto_update_cfw3212
