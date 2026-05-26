@@ -1,0 +1,52 @@
+---
+description: CFW-3212 QManager Casa workspace layout and key file map
+alwaysApply: true
+---
+
+# Workspace: Joetooley28/qmanager-casa-cfw3212-builder
+
+This repo lives on the AI Hub VPS at:
+`/home/ai/code/cfw3212/github-staging/qmanager-casa-conversion-cfw3212-updater`
+
+## Key files
+
+| File | Purpose |
+|------|---------|
+| `qmanager/casa_conversion/build-casa-port.sh` | Main converter — reads upstream QManager, applies Casa patches, outputs a work tree |
+| `qmanager/casa_conversion/templates/install_cfw3212.sh` | Casa installer template (authoritative) |
+| `qmanager/casa_conversion/templates/uninstall_cfw3212.sh` | Casa uninstaller template |
+| `qmanager/casa_conversion/templates/install-qmanager-cfw3212.sh.tmpl` | tmpl variant of installer |
+| `qmanager/casa_conversion/CFW3212_JTOOLEY_CHANGELOG.md` | Public user-facing changelog — must mention exact Casa tag before any build |
+| `qmanager/casa_conversion/README.md` | Converter docs and installer behavior notes |
+| `qmanager/casa_conversion/vendor/scripts/usr/bin/qmanager_ping` | Vendored ping worker |
+| `.cursor/mcp.json` | Linear MCP config for cloud agents (uses $LINEAR_API_KEY secret) |
+
+## Work trees (generated, do not edit directly)
+
+| Directory | Contents |
+|-----------|----------|
+| `qmanager/qmanager_work_v0.1.11_casa/` | v0.1.11 converted work tree |
+| `qmanager/qmanager_work_v0.1.10_casa/` | v0.1.10 converted work tree |
+
+Current live version: **v0.1.12-cfw3212.7** (on live router, installer working)
+
+## Related repos (not in this repo)
+
+| Path on VPS | GitHub | Purpose |
+|-------------|--------|---------|
+| `github-staging/qmanager-casa-cfw3212-package` | `Joetooley28/qmanager-casa-cfw3212-package` | Casa package releases — router installs from here |
+| `qtooley/public-github-repo/repo-public` | `Joetooley28/cfw3212-qtooley-overlay` | Qtooley shell/UI overlay |
+
+## Safety rules
+
+- Never write to live router/modem unless the Linear issue explicitly approves it with mode `live-change`
+- Never commit secrets, tokens, API keys, private notes, or device captures
+- Always update `CFW3212_JTOOLEY_CHANGELOG.md` with the exact new tag before triggering a package build
+- Work tree directories (`qmanager_work_v*/`) are generated — edit templates and converter instead
+
+## Linear workflow
+
+Issues are in the `Joetooley Lab` workspace, team `AI Coding Projects` (key `AI`).
+Read the Linear issue before editing files. Comment a handoff when done.
+Branch format: `linear/AI-123-short-description`
+Commit format: `AI-123: short description`
