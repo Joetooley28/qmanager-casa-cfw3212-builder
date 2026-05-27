@@ -2056,6 +2056,10 @@ text = text.replace(
     'STAGING_FILE="/etc/data/qmanager/dnsmasq.conf.new"',
     'STAGING_FILE="/tmp/qmanager-dnsmasq.conf.new"',
 )
+text = text.replace(
+    "jq -r '.enabled // empty'",
+    "jq -r '.enabled | if . == null then \"\" else tostring end'",
+)
 path.write_text(text)
 PY
 
@@ -2065,6 +2069,8 @@ PY
         || fail "Could not apply Casa Custom DNS get_passthrough_bypass patch"
     grep -q 'STAGING_FILE="/tmp/qmanager-dnsmasq.conf.new"' "$dns_cgi" \
         || fail "Could not apply Casa Custom DNS staging path patch"
+    grep -q 'if . == null then "" else tostring end' "$dns_cgi" \
+        || fail "Could not apply Casa Custom DNS enabled boolean fix"
 }
 
 patch_email_alerts_casa_msmtp() {
