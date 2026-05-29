@@ -18,6 +18,7 @@
 
 ## v0.1.12-cfw3212.7
 
+- Custom DNS changes now take effect immediately. Previously, enabling, changing, or disabling custom DNS only fully applied after the next router reboot, because the DNS service was sent a reload signal that does not re-read its configuration on this platform. The setting is now applied right away by restarting the DNS service.
 - Casa installer now idempotently creates `/opt -> /usrdata/opt` when missing (brief read-write remount of `/`, then read-only again). Reinstalls leave an existing correct symlink untouched; a non-symlink `/opt` is warned and skipped so `/usrdata/opt` is never overwritten.
 
 ## v0.1.12-cfw3212.6

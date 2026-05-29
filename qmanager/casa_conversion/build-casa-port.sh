@@ -2056,6 +2056,21 @@ text = text.replace(
     'STAGING_FILE="/etc/data/qmanager/dnsmasq.conf.new"',
     'STAGING_FILE="/tmp/qmanager-dnsmasq.conf.new"',
 )
+# CFW-3212: dnsmasq 2.87 SIGHUP does NOT re-read the config file, so the
+# upstream `killall -HUP dnsmasq` reload never applied the custom-DNS block
+# (it only took effect on the next reboot).  Restart the QCMAP dnsmasq unit
+# instead: systemd (Restart=always) re-runs ExecStartPre + ExecStart with
+# --conf-file=/var/run/data/dnsmasq.conf.bridge0.updated, which conf-file-
+# includes /etc/data/dnsmasq.conf.  `/bin/systemctl restart *` is already
+# whitelisted for www-data in /opt/etc/sudoers.d/qmanager (no sudoers change).
+text = text.replace(
+    "sudo /usr/bin/killall -HUP dnsmasq",
+    "sudo /bin/systemctl restart dnsmasq_service@0.service",
+)
+text = text.replace(
+    "killall -HUP dnsmasq failed",
+    "dnsmasq restart failed",
+)
 text = text.replace(
     "jq -r '.enabled // empty'",
     "jq -r '.enabled | if . == null then \"\" else tostring end'",
@@ -2071,6 +2086,8 @@ PY
         || fail "Could not apply Casa Custom DNS staging path patch"
     grep -q 'if . == null then "" else tostring end' "$dns_cgi" \
         || fail "Could not apply Casa Custom DNS enabled boolean fix"
+    grep -q 'systemctl restart dnsmasq_service@0.service' "$dns_cgi" \
+        || fail "Could not apply Casa Custom DNS reload-fix patch"
 }
 
 patch_email_alerts_casa_msmtp() {
