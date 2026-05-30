@@ -2,6 +2,7 @@
 
 ## What's Working
 
+- Version Management **Install Now** confirm dialogs now match the Update Status install flow on Casa: QManager restarts its services after installation and asks you to reboot when ready, instead of saying the device will reboot automatically.
 - Web Console works. On installs with internet, `ttyd` gets pulled in and started automatically, and `/console/` is live once that helper is in place.
 - System Health Check has been pointed at the Casa paths, services, lighttpd ports, and the `/usrdata/opt/bin` helper locations it actually needs to look at.
 - The Casa installer now idempotently ensures `/opt -> /usrdata/opt` on every install (with an explicit root remount when needed) so Entware helpers such as `sudo` resolve correctly on clean routers without manual symlink setup.

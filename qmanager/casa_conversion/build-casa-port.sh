@@ -2907,21 +2907,26 @@ patch_software_update_reboot_required_cfw3212() {
     local hook="$TARGET/hooks/use-software-update.ts"
     local page="$TARGET/components/monitoring/software-update/software-update.tsx"
     local card="$TARGET/components/monitoring/software-update/update-status-card.tsx"
+    local prefs="$TARGET/components/monitoring/software-update/update-preferences-card.tsx"
     if [ ! -f "$page" ]; then
         page="$TARGET/components/system-settings/software-update/software-update.tsx"
     fi
     if [ ! -f "$card" ]; then
         card="$TARGET/components/system-settings/software-update/update-status-card.tsx"
     fi
+    if [ ! -f "$prefs" ]; then
+        prefs="$TARGET/components/system-settings/software-update/update-preferences-card.tsx"
+    fi
     [ -f "$hook" ] || fail "use-software-update.ts missing in target"
     [ -f "$page" ] || fail "software-update.tsx missing in target"
     [ -f "$card" ] || fail "update-status-card.tsx missing in target"
+    [ -f "$prefs" ] || fail "update-preferences-card.tsx missing in target"
 
-    python3 - "$hook" "$page" "$card" <<'PY'
+    python3 - "$hook" "$page" "$card" "$prefs" <<'PY'
 from pathlib import Path
 import sys
 
-hook, page, card = map(Path, sys.argv[1:4])
+hook, page, card, prefs = map(Path, sys.argv[1:5])
 
 def replace_once(path: Path, old: str, new: str) -> None:
     text = path.read_text()
@@ -3296,10 +3301,43 @@ if old_auto_reboot_text in card_text and "QManager will restart its services aft
               the update.
 ''', 1))
 
+casa_install_followup = (
+    "QManager will restart its services after installation and then ask you to reboot when ready."
+)
+replace_once(
+    prefs,
+    '''                  <strong>{updateInfo?.current_version}</strong> and reboot the
+                  device.
+''',
+    f'''                  <strong>{{updateInfo?.current_version}}</strong>. {casa_install_followup}
+''',
+)
+replace_once(
+    prefs,
+    '''                  current installation. The device will reboot after installation.
+''',
+    f'''                  current installation. {casa_install_followup}
+''',
+)
+replace_once(
+    prefs,
+    '''                  The device will reboot after installation.
+''',
+    f'''                  {casa_install_followup}
+''',
+)
+
 for path in (hook, page, card):
     if "reboot_required" not in path.read_text():
         raise SystemExit(f"reboot_required patch missing from {path}")
 PY
+
+    grep -Fq 'QManager will restart its services after installation' "$prefs" \
+        || fail "update-preferences-card.tsx missing Casa install dialog wording"
+    ! grep -Fq 'reboot the device' "$prefs" \
+        || fail "update-preferences-card.tsx still claims staged install will reboot the device"
+    ! grep -Fq 'will reboot after installation' "$prefs" \
+        || fail "update-preferences-card.tsx still claims device will reboot after installation"
 }
 
 patch_installer_version_cfw3212() {
