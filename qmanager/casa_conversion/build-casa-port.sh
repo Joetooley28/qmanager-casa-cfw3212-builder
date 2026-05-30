@@ -2030,6 +2030,13 @@ repl = [
      'TAILSCALE_URL="https://github.com/iamromulan/tiny-tailscale/releases/download/v${TAILSCALE_VERSION}/${TAILSCALE_TARBALL}"'),
     ('TAILSCALE_EXTRACT_DIR="tailscale_${TAILSCALE_VERSION}_${TAILSCALE_ARCH}"',
      'TAILSCALE_EXTRACT_DIR="tiny-tailscale_${TAILSCALE_VERSION}_${TAILSCALE_ARCH}"'),
+    # GitHub release URLs 302-redirect to objects.githubusercontent.com; the
+    # upstream helper's bare `curl -O` does NOT follow redirects (it was fine for
+    # pkgs.tailscale.com which serves directly), so it saved a 0-byte file ->
+    # `tar: invalid magic`. Add -fL so curl follows the redirect and fails loudly
+    # on HTTP errors.
+    ('if ! curl -O "$TAILSCALE_URL"; then',
+     'if ! curl -fL -O "$TAILSCALE_URL"; then'),
 ]
 for old, new in repl:
     if old not in text:
@@ -2059,6 +2066,8 @@ PY
         || fail "Could not apply tiny-tailscale version patch"
     grep -q 'reinstall to upgrade' "$ts_mgr" \
         || fail "Could not neutralise tailscale update path"
+    grep -q 'curl -fL -O' "$ts_mgr" \
+        || fail "Could not apply tiny-tailscale curl follow-redirect (-fL) patch"
     echo "  [tailscale] on-demand installer switched to tiny-tailscale v$tiny_ver (arm)"
 }
 
