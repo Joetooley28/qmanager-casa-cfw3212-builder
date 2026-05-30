@@ -5,7 +5,7 @@
 - Web Console works. On installs with internet, `ttyd` gets pulled in and started automatically, and `/console/` is live once that helper is in place.
 - System Health Check has been pointed at the Casa paths, services, lighttpd ports, and the `/usrdata/opt/bin` helper locations it actually needs to look at.
 - The Casa installer now idempotently ensures `/opt -> /usrdata/opt` on every install (with an explicit root remount when needed) so Entware helpers such as `sudo` resolve correctly on clean routers without manual symlink setup.
-- Tailscale runs from the QManager UI. You do your own Tailscale login from the UI.
+- Tailscale runs from the QManager UI using the lighter Tiny Tailscale build. You do your own Tailscale login from the UI.
 - Ookla Speedtest works once the `speedtest` helper is installed. install handles if connected to internet.
 - Email Alerts can install and remove `msmtp` through the Casa Entware package flow. The Gmail app-password setup and an actual test send are the last things to confirm working on your end. (wired up, not tested yet) 
 - Discord Bot backend is now part of the Casa package, so you can plug in your own Discord bot token and user ID and try the UI. (wired up, not tested yet)
@@ -23,11 +23,11 @@
 
 ## v0.1.12-cfw3212.9
 
-- Tailscale "Connect" / login now works from the UI on the lighter Tailscale build. The previous lighter build left out the component that hands the login link back to the browser, so clicking Connect timed out waiting for a sign-in link. The Tailscale build used here restores that, so you can connect and sign in from the UI normally — while keeping the lower memory use.
+- Tailscale "Connect" / login now works from the UI on the Tiny Tailscale build. The previous build left out the component that hands the login link back to the browser, so clicking Connect timed out waiting for a sign-in link. The Tiny Tailscale build used here restores that, so you can connect and sign in from the UI normally — while keeping the lower memory use.
 
 ## v0.1.12-cfw3212.8
 
-- Tailscale install reliability fixes for the lighter (tiny) Tailscale build introduced in `.7`:
+- Tailscale install reliability fixes for the Tiny Tailscale build introduced in `.7`:
   - The download now follows GitHub redirects, so installing Tailscale from the UI no longer fails partway with an extraction error.
   - The Tailscale service now starts correctly. On the lighter build the daemon was actually running but the service was being reported as "Failed to start" / Stopped; the Service status and Start on Boot now reflect the real state, and you can connect normally.
 
@@ -35,7 +35,7 @@
 
 - Custom DNS changes now take effect immediately. Previously, enabling, changing, or disabling custom DNS only fully applied after the next router reboot, because the DNS service was sent a reload signal that does not re-read its configuration on this platform. The setting is now applied right away by restarting the DNS service.
 - Casa installer now idempotently creates `/opt -> /usrdata/opt` when missing (brief read-write remount of `/`, then read-only again). Reinstalls leave an existing correct symlink untouched; a non-symlink `/opt` is warned and skipped so `/usrdata/opt` is never overwritten.
-- The Tailscale install from the QManager UI now uses a smaller, lighter Tailscale build (v1.98.3) instead of the full official package. It installs and runs the same way from the UI, but uses noticeably less memory on the router — helpful on this hardware where RAM is tight. To upgrade Tailscale later, uninstall and reinstall it from the UI rather than using an in-place update.
+- The Tailscale install from the QManager UI now uses Tiny Tailscale, a smaller, lighter Tailscale build (v1.98.3), instead of the full official package. It installs and runs the same way from the UI, but uses noticeably less memory on the router — helpful on this hardware where RAM is tight. To upgrade Tailscale later, uninstall and reinstall it from the UI rather than using an in-place update.
 
 ## v0.1.12-cfw3212.6
 
