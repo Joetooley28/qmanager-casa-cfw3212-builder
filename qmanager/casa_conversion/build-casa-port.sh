@@ -891,6 +891,95 @@ PY
         || fail "Could not apply Casa QManager version poller patch"
 }
 
+# CFW-3212: the upstream System Health Check pauses the poller with
+# `systemctl stop qmanager-poller` and relies on an EXIT/INT/TERM trap to
+# restart it. SIGKILL is uncatchable, so if the CGI is OOM-killed or its HTTP
+# request is torn down mid-run, the poller is orphaned stopped — and the unit's
+# Restart=on-failure treats the clean SIGTERM as success and never resurrects
+# it, leaving qmanager-poller inactive(enabled=yes) indefinitely (AI-52).
+# Pause via the shared poller-pause flag instead (the same flag the speedtest
+# uses): the poller keeps running and only skips AT polling while the flag
+# exists, and it auto-clears a stale flag after LONG_FLAG_MAX_AGE (300s) so a
+# killed health check self-recovers with no orphan-stop window.
+patch_qmanager_health_check_poller_pause_cfw3212() {
+    local worker="$TARGET/scripts/usr/bin/qmanager_health_check"
+    [ -f "$worker" ] || fail "Target missing qmanager_health_check worker"
+
+    python3 - "$worker" <<'PYEOF'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+
+old_pause = (
+    '# The poller hammers the AT lock 1-2x/sec, which makes per-test qcmd calls\n'
+    "# perpetually time out. Pause it for the run's duration. The trap below\n"
+    '# guarantees the poller restarts even if we crash, get killed, or hit Ctrl-C.\n'
+    '\n'
+    '_PAUSED_POLLER=0\n'
+    '\n'
+    '_pause_poller_if_running() {\n'
+    '    if systemctl is-active --quiet qmanager-poller 2>/dev/null; then\n'
+    '        _PAUSED_POLLER=1\n'
+    '        systemctl stop qmanager-poller 2>/dev/null\n'
+    '        # Give in-flight qcmd/atcli a moment to release the AT lock.\n'
+    '        sleep 1\n'
+    '    fi\n'
+    '}\n'
+    '\n'
+    '_resume_poller_if_paused() {\n'
+    '    if [ "$_PAUSED_POLLER" = "1" ]; then\n'
+    '        systemctl start qmanager-poller 2>/dev/null\n'
+    '        _PAUSED_POLLER=0\n'
+    '    fi\n'
+    '}\n'
+)
+new_pause = (
+    '# The poller hammers the AT lock 1-2x/sec, which makes per-test qcmd calls\n'
+    "# perpetually time out. Pause it for the run's duration via the shared\n"
+    '# poller-pause flag (the same flag the speedtest uses): the poller keeps\n'
+    '# running but skips AT polling while the flag exists, so there is no\n'
+    '# systemctl stop and therefore no orphaned-stop window if this CGI is\n'
+    '# SIGKILLed (OOM / torn-down HTTP request) before the trap can fire. The\n'
+    '# poller auto-clears a stale flag after 300s as a final backstop. (AI-52)\n'
+    '\n'
+    'POLLER_PAUSE_FLAG="/tmp/qmanager_speedtest_polling_pause"\n'
+    '_PAUSED_POLLER=0\n'
+    '\n'
+    '_pause_poller_if_running() {\n'
+    '    _PAUSED_POLLER=1\n'
+    '    touch "$POLLER_PAUSE_FLAG" 2>/dev/null\n'
+    '    # Give in-flight qcmd/atcli a moment to release the AT lock.\n'
+    '    sleep 1\n'
+    '}\n'
+    '\n'
+    '_resume_poller_if_paused() {\n'
+    '    if [ "$_PAUSED_POLLER" = "1" ]; then\n'
+    '        rm -f "$POLLER_PAUSE_FLAG" 2>/dev/null\n'
+    '        _PAUSED_POLLER=0\n'
+    '    fi\n'
+    '}\n'
+)
+
+already = 'POLLER_PAUSE_FLAG="/tmp/qmanager_speedtest_polling_pause"' in text
+if old_pause not in text and not already:
+    raise SystemExit("health-check poller-pause block not found (upstream changed?)")
+if old_pause in text:
+    text = text.replace(old_pause, new_pause, 1)
+    path.write_text(text)
+PYEOF
+
+    grep -q 'POLLER_PAUSE_FLAG="/tmp/qmanager_speedtest_polling_pause"' "$worker" \
+        || fail "Could not apply health-check poller-pause flag to qmanager_health_check"
+    grep -qF 'touch "$POLLER_PAUSE_FLAG"' "$worker" \
+        || fail "health-check _pause_poller_if_running not switched to pause flag"
+    ! grep -q 'systemctl stop qmanager-poller' "$worker" \
+        || fail "health-check still stops qmanager-poller (orphan-stop risk remains)"
+    ! grep -q 'systemctl start qmanager-poller' "$worker" \
+        || fail "health-check still starts qmanager-poller via systemctl"
+}
+
 patch_speedtest_poller_pause_cfw3212() {
     local poller="$TARGET/scripts/usr/bin/qmanager_poller"
     local speedtest_start="$TARGET/scripts/www/cgi-bin/quecmanager/at_cmd/speedtest_start.sh"
@@ -3490,6 +3579,7 @@ apply_casa_overlays() {
 
     pin_casa_stable_ping_rust
     patch_qmanager_health_check_paths_cfw3212
+    patch_qmanager_health_check_poller_pause_cfw3212
     patch_qmanager_poller
     patch_speedtest_poller_pause_cfw3212
     patch_disable_orientation_probe_cfw3212
@@ -3682,6 +3772,11 @@ safety_checks() {
     require_rg_clean "/usr/bin/atcli_smd11|listening on only one of 80/443|_check_bin jq          /opt/bin/jq|_check_bin curl        /opt/bin/curl|_check_bin openssl     /opt/bin/openssl" \
         "$health_check" \
         "Health-check worker still contains upstream RM520N paths or port labels"
+    require_rg_present 'POLLER_PAUSE_FLAG="/tmp/qmanager_speedtest_polling_pause"' "$health_check" \
+        "Health-check worker must pause the poller via the shared pause flag, not systemctl stop (AI-52)"
+    require_rg_clean "systemctl stop qmanager-poller|systemctl start qmanager-poller" \
+        "$health_check" \
+        "Health-check worker must not stop/start the poller — orphan-stop risk (AI-52)"
 
     require_rg_present "ip_handover" "$TARGET/scripts/www/cgi-bin/quecmanager/network/ip_passthrough.sh" \
         "Casa IPPT backend must use RDB ip_handover"

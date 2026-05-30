@@ -16,6 +16,10 @@
 - Software Update → Version Management can now install a different version (including rollbacks). After the download verifies, the Install button switches to "Install Now" so the staged package actually gets applied instead of being left on disk.
 - A handful of upstream modem-management actions stay blocked or limited on Casa because they'd let you push the modem into a state we don't want it in.
 
+## v0.1.12-cfw3212.13
+
+- Running the System Health Check no longer leaves the background data poller stopped. The health check briefly pauses the poller so it can talk to the modem without contention, then resumes it when it finishes. Previously it paused the poller by stopping the service and counting on a cleanup step to start it again — but if the health check got cut off partway (for example the page was closed, the connection dropped, or the router was low on memory), that cleanup could be skipped and the poller was left off. Because the poller is set to only auto-restart after a crash (not after a normal stop), it then stayed off until something started it again, which is why the next Health Check showed `qmanager-poller` as inactive with a warning and the dashboard metrics went stale. The health check now pauses the poller with the same safe flag the Speedtest already uses: the poller keeps running and just skips its modem polling while paused, and it clears a stale pause on its own after a few minutes — so an interrupted health check can no longer take the poller down.
+
 ## v0.1.12-cfw3212.12
 
 - The QManager HTTPS certificate is now generated correctly so browsers accept it. The previous build produced a certificate with a duplicate setting that newer Chrome/Edge rejected outright (`NET::ERR_CERT_INVALID`, with no way to continue). The certificate is now built cleanly with a Subject Alternative Name and proper server settings, so reaching the QManager UI over HTTPS shows the normal, click-through-able warning. Existing installs are upgraded automatically on the next install.
