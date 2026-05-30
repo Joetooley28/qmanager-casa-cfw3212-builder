@@ -2037,6 +2037,11 @@ repl = [
     # on HTTP errors.
     ('if ! curl -O "$TAILSCALE_URL"; then',
      'if ! curl -fL -O "$TAILSCALE_URL"; then'),
+    # tiny-tailscale (stripped build) lacks systemd sd_notify support: a
+    # Type=notify unit never gets READY=1, so systemd marks the (actually
+    # running) daemon as failed-to-start. Use Type=simple. Covers the mgr's
+    # inline fallback unit; the staged bundled unit is patched separately below.
+    ('Type=notify', 'Type=simple'),
 ]
 for old, new in repl:
     if old not in text:
@@ -2068,7 +2073,17 @@ PY
         || fail "Could not neutralise tailscale update path"
     grep -q 'curl -fL -O' "$ts_mgr" \
         || fail "Could not apply tiny-tailscale curl follow-redirect (-fL) patch"
-    echo "  [tailscale] on-demand installer switched to tiny-tailscale v$tiny_ver (arm)"
+    grep -q '^Type=simple' "$ts_mgr" \
+        || fail "Could not set Type=simple in qmanager_tailscale_mgr inline unit"
+
+    # Bundled unit (preferred by the mgr over its inline fallback) is staged here.
+    local ts_unit="$TARGET/scripts/etc/systemd/system/tailscaled.service"
+    [ -f "$ts_unit" ] || fail "staged tailscaled.service not found at $ts_unit"
+    sed -i 's/^Type=notify$/Type=simple/' "$ts_unit"
+    grep -q '^Type=simple' "$ts_unit" \
+        || fail "Could not set Type=simple in staged tailscaled.service"
+
+    echo "  [tailscale] on-demand installer switched to tiny-tailscale v$tiny_ver (arm), Type=simple"
 }
 
 patch_casa_custom_dns_cfw3212() {

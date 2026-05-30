@@ -16,6 +16,12 @@
 - Software Update → Version Management can now install a different version (including rollbacks). After the download verifies, the Install button switches to "Install Now" so the staged package actually gets applied instead of being left on disk.
 - A handful of upstream modem-management actions stay blocked or limited on Casa because they'd let you push the modem into a state we don't want it in.
 
+## v0.1.12-cfw3212.8
+
+- Tailscale install reliability fixes for the lighter (tiny) Tailscale build introduced in `.7`:
+  - The download now follows GitHub redirects, so installing Tailscale from the UI no longer fails partway with an extraction error.
+  - The Tailscale service now starts correctly. On the lighter build the daemon was actually running but the service was being reported as "Failed to start" / Stopped; the Service status and Start on Boot now reflect the real state, and you can connect normally.
+
 ## v0.1.12-cfw3212.7
 
 - Custom DNS changes now take effect immediately. Previously, enabling, changing, or disabling custom DNS only fully applied after the next router reboot, because the DNS service was sent a reload signal that does not re-read its configuration on this platform. The setting is now applied right away by restarting the DNS service.
