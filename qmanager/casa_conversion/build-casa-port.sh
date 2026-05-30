@@ -2089,6 +2089,27 @@ PY
     echo "  [tailscale] on-demand installer switched to tiny-tailscale v$tiny_ver (arm), Type=simple"
 }
 
+patch_casa_tailscale_install_label_cfw3212() {
+    # The on-demand installer pulls the lighter "Tiny Tailscale" build
+    # (see patch_casa_tailscale_tiny_cfw3212); label the UI install button to
+    # match so users know which build they're installing.
+    local tscard="$TARGET/components/monitoring/tailscale/tailscale-connection-card.tsx"
+    [ -f "$tscard" ] || fail "tailscale-connection-card.tsx not found at $tscard"
+    python3 - "$tscard" <<'PY'
+from pathlib import Path
+import sys
+p = Path(sys.argv[1])
+t = p.read_text()
+old = "Install Tailscale"
+if t.count(old) != 1:
+    raise SystemExit(f"tiny-tailscale: expected exactly one 'Install Tailscale' button label, found {t.count(old)}")
+t = t.replace(old, "Install Tiny Tailscale", 1)
+p.write_text(t)
+PY
+    grep -q 'Install Tiny Tailscale' "$tscard" \
+        || fail "Could not apply Tiny Tailscale install button label"
+}
+
 patch_casa_custom_dns_cfw3212() {
     # Upstream QManager v0.1.11+ Custom DNS feature gates the UI on:
     #   1. get_dns_mode()           — expects <DNSMode> in mobileap_cfg.xml
@@ -3486,6 +3507,7 @@ apply_casa_overlays() {
     copy_template_or_fallback "components/reboot/reboot-countdown.tsx" "$TEMPLATE_DIR/components/reboot/reboot-countdown.tsx"
     patch_casa_custom_dns_cfw3212
     patch_casa_tailscale_tiny_cfw3212
+    patch_casa_tailscale_install_label_cfw3212
     patch_casa_poller_boot_identity_cfw3212
     patch_casa_ippt_disable_clears_service_cfw3212
     patch_email_alerts_casa_msmtp
