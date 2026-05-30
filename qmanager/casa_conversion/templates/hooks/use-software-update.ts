@@ -189,6 +189,33 @@ export function useSoftwareUpdate(): UseSoftwareUpdateReturn {
     fetchUpdateInfo();
   }, [fetchUpdateInfo]);
 
+  // Rehydrate a pending post-install reboot on mount / tab revisit.
+  // The install poller only sets reboot_required while it is actively running;
+  // if the user navigates away and comes back, updateStatus resets to "idle"
+  // and the "Reboot required" banner disappears even though the device still
+  // needs a reboot. The backend persists this in /tmp/qmanager_update.json
+  // (which the reboot itself clears), so re-read it once on mount and restore
+  // the banner until the reboot actually happens.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const resp = await authFetch(`${CGI_ENDPOINT}?action=status`);
+        if (!resp.ok) return;
+        const json: UpdateStatus = await resp.json();
+        if (cancelled || !mountedRef.current) return;
+        if (json.status === "reboot_required" || json.status === "rebooting") {
+          setUpdateStatus(json);
+        }
+      } catch {
+        // ignore — the regular poller will pick it up if a job is active
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // ---------------------------------------------------------------------------
   // Poll update status during install/rollback
   // ---------------------------------------------------------------------------
