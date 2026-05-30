@@ -16,6 +16,10 @@
 - Software Update → Version Management can now install a different version (including rollbacks). After the download verifies, the Install button switches to "Install Now" so the staged package actually gets applied instead of being left on disk.
 - A handful of upstream modem-management actions stay blocked or limited on Casa because they'd let you push the modem into a state we don't want it in.
 
+## v0.1.12-cfw3212.12
+
+- The QManager HTTPS certificate is now generated correctly so browsers accept it. The previous build produced a certificate with a duplicate setting that newer Chrome/Edge rejected outright (`NET::ERR_CERT_INVALID`, with no way to continue). The certificate is now built cleanly with a Subject Alternative Name and proper server settings, so reaching the QManager UI over HTTPS shows the normal, click-through-able warning. Existing installs are upgraded automatically on the next install.
+
 ## v0.1.12-cfw3212.11
 
 - Software Update now reliably finds the newest available version. Once the Casa build number reached double digits (for example `.10` and up), the update check could miss it and report "up to date," because it was trusting the package host's release ordering instead of comparing build numbers directly. The check now sorts candidates by their actual version and build number, so the newest build is always detected regardless of how the host lists them.
