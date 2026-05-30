@@ -18,3 +18,7 @@ bun.lockb
 *.pem
 *.pub
 .ssh/
+
+# Claude Code runtime/local files (never commit)
+.claude/scheduled_tasks.lock
+.claude/settings.local.json
