@@ -16,6 +16,10 @@
 - Software Update → Version Management can now install a different version (including rollbacks). After the download verifies, the Install button switches to "Install Now" so the staged package actually gets applied instead of being left on disk.
 - A handful of upstream modem-management actions stay blocked or limited on Casa because they'd let you push the modem into a state we don't want it in.
 
+## v0.1.12-cfw3212.10
+
+- Software Update → Version Management install confirmations no longer say the device will reboot automatically. All three "Install Now" / "Reinstall Now" dialogs now match the Update Status card: QManager restarts its services after installation and then asks you to reboot when ready.
+
 ## v0.1.12-cfw3212.9
 
 - Tailscale "Connect" / login now works from the UI on the lighter Tailscale build. The previous lighter build left out the component that hands the login link back to the browser, so clicking Connect timed out waiting for a sign-in link. The Tailscale build used here restores that, so you can connect and sign in from the UI normally — while keeping the lower memory use.
