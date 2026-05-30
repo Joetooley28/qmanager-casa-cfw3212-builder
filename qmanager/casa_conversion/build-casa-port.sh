@@ -1992,8 +1992,11 @@ PY
 patch_casa_tailscale_tiny_cfw3212() {
     # Switch the on-demand Tailscale installer (driven by the UI's Tailscale
     # section, via cgi .../vpn/tailscale.sh -> qmanager_tailscale_mgr) from
-    # upstream's official pkgs.tailscale.com arm build to iamromulan's
-    # "tiny-tailscale" stripped build.
+    # upstream's official pkgs.tailscale.com arm build to our fork
+    # Joetooley28/tiny-tailscale (forked from iamromulan/tiny-tailscale, which
+    # builds via tailscale's cmd/featuretags --min). Our fork re-adds the
+    # 'ipnbus' feature so the UI's interactive Connect/login flow works (the
+    # stock tiny build omits ipnbus, which streams the auth URL).
     #
     # Why: on the CFW-3212 (~183 MB RAM, single armv7 core) the official
     # tailscaled is the single largest RAM consumer (~29 MB RSS, AI-47).
@@ -2027,7 +2030,7 @@ repl = [
     ('TAILSCALE_TARBALL="tailscale_${TAILSCALE_VERSION}_${TAILSCALE_ARCH}.tgz"',
      'TAILSCALE_TARBALL="tiny-tailscale_${TAILSCALE_VERSION}_${TAILSCALE_ARCH}.tgz"'),
     ('TAILSCALE_URL="https://pkgs.tailscale.com/stable/${TAILSCALE_TARBALL}"',
-     'TAILSCALE_URL="https://github.com/iamromulan/tiny-tailscale/releases/download/v${TAILSCALE_VERSION}/${TAILSCALE_TARBALL}"'),
+     'TAILSCALE_URL="https://github.com/Joetooley28/tiny-tailscale/releases/download/v${TAILSCALE_VERSION}/${TAILSCALE_TARBALL}"'),
     ('TAILSCALE_EXTRACT_DIR="tailscale_${TAILSCALE_VERSION}_${TAILSCALE_ARCH}"',
      'TAILSCALE_EXTRACT_DIR="tiny-tailscale_${TAILSCALE_VERSION}_${TAILSCALE_ARCH}"'),
     # GitHub release URLs 302-redirect to objects.githubusercontent.com; the
@@ -2065,7 +2068,7 @@ PY
 
     grep -q 'tiny-tailscale_' "$ts_mgr" \
         || fail "Could not apply tiny-tailscale tarball/extract patch"
-    grep -q 'iamromulan/tiny-tailscale/releases/download' "$ts_mgr" \
+    grep -q 'Joetooley28/tiny-tailscale/releases/download' "$ts_mgr" \
         || fail "Could not apply tiny-tailscale URL patch"
     grep -q 'TAILSCALE_VERSION="1.98.3"' "$ts_mgr" \
         || fail "Could not apply tiny-tailscale version patch"
