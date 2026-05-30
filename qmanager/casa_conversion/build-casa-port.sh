@@ -2907,21 +2907,26 @@ patch_software_update_reboot_required_cfw3212() {
     local hook="$TARGET/hooks/use-software-update.ts"
     local page="$TARGET/components/monitoring/software-update/software-update.tsx"
     local card="$TARGET/components/monitoring/software-update/update-status-card.tsx"
+    local prefs="$TARGET/components/monitoring/software-update/update-preferences-card.tsx"
     if [ ! -f "$page" ]; then
         page="$TARGET/components/system-settings/software-update/software-update.tsx"
     fi
     if [ ! -f "$card" ]; then
         card="$TARGET/components/system-settings/software-update/update-status-card.tsx"
     fi
+    if [ ! -f "$prefs" ]; then
+        prefs="$TARGET/components/system-settings/software-update/update-preferences-card.tsx"
+    fi
     [ -f "$hook" ] || fail "use-software-update.ts missing in target"
     [ -f "$page" ] || fail "software-update.tsx missing in target"
     [ -f "$card" ] || fail "update-status-card.tsx missing in target"
+    [ -f "$prefs" ] || fail "update-preferences-card.tsx missing in target"
 
-    python3 - "$hook" "$page" "$card" <<'PY'
+    python3 - "$hook" "$page" "$card" "$prefs" <<'PY'
 from pathlib import Path
 import sys
 
-hook, page, card = map(Path, sys.argv[1:4])
+hook, page, card, prefs = map(Path, sys.argv[1:5])
 
 def replace_once(path: Path, old: str, new: str) -> None:
     text = path.read_text()
@@ -3296,10 +3301,56 @@ if old_auto_reboot_text in card_text and "QManager will restart its services aft
               the update.
 ''', 1))
 
+replace_once(
+    prefs,
+    '''                  <strong>{selectedVersion}</strong> is already downloaded and
+                  verified. Installing it now will replace{" "}
+                  <strong>{updateInfo?.current_version}</strong> and reboot the
+                  device.
+''',
+    '''                  <strong>{selectedVersion}</strong> is already downloaded and
+                  verified. Installing it now will replace{" "}
+                  <strong>{updateInfo?.current_version}</strong>. QManager will
+                  restart its services after installation and then ask you to
+                  reboot when ready.
+''',
+)
+replace_once(
+    prefs,
+    '''                  This will reinstall <strong>{selectedVersion}</strong> to repair the
+                  current installation. The device will reboot after installation.
+''',
+    '''                  This will reinstall <strong>{selectedVersion}</strong> to repair the
+                  current installation. QManager will restart its services after installation and then ask you to reboot when ready.
+''',
+)
+replace_once(
+    prefs,
+    '''                  This will install <strong>{selectedVersion}</strong>, replacing the
+                  current version (<strong>{updateInfo?.current_version}</strong>).
+                  The device will reboot after installation.
+''',
+    '''                  This will install <strong>{selectedVersion}</strong>, replacing the
+                  current version (<strong>{updateInfo?.current_version}</strong>).
+                  QManager will restart its services after installation and then
+                  ask you to reboot when ready.
+''',
+)
+
 for path in (hook, page, card):
     if "reboot_required" not in path.read_text():
         raise SystemExit(f"reboot_required patch missing from {path}")
 PY
+
+    grep -Fq 'QManager will restart its services after installation' "$prefs" \
+        || fail "update-preferences-card.tsx missing Casa install restart wording"
+    count="$(grep -c 'restart its services after installation' "$prefs" || true)"
+    [ "$count" -ge 3 ] \
+        || fail "update-preferences-card.tsx must have Casa reboot wording in all three install dialogs (found $count)"
+    ! grep -Fq 'The device will reboot after installation.' "$prefs" \
+        || fail "update-preferences-card.tsx still claims auto-reboot after installation"
+    ! grep -Fq 'and reboot the' "$prefs" \
+        || fail "update-preferences-card.tsx staged install dialog still claims auto-reboot"
 }
 
 patch_installer_version_cfw3212() {
