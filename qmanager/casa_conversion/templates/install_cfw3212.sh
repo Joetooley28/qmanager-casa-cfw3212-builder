@@ -1148,21 +1148,38 @@ if [ "$gen_cert" = "1" ]; then
                    | sed -n 's/.*"DNSName": *"\([^"]*\)\.".*/\1/p' | head -1)"
         [ -n "$_tsname" ] && cert_san="$cert_san,DNS:$_tsname"
     fi
+    # Build the cert from an explicit openssl config. Using -addext here is NOT
+    # safe on this platform's openssl: it APPENDS extensions on top of the
+    # default ones, producing a duplicate basicConstraints (CA:TRUE + CA:FALSE),
+    # which is malformed (RFC 5280) and rejected by Chrome/Edge as
+    # NET::ERR_CERT_INVALID with no bypass. A config with x509_extensions set
+    # emits exactly one of each extension.
+    cert_cfg="$(mktemp 2>/dev/null || echo "/tmp/qm_cert_$$.cnf")"
+    cat > "$cert_cfg" <<CERTCFG
+[req]
+distinguished_name = dn
+x509_extensions = v3
+prompt = no
+[dn]
+CN = QManager-CFW3212
+[v3]
+subjectAltName = $cert_san
+basicConstraints = critical,CA:FALSE
+keyUsage = critical,digitalSignature,keyEncipherment
+extendedKeyUsage = serverAuth
+CERTCFG
     if openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
             -keyout "$CERT_DIR/server.key" -out "$CERT_DIR/server.crt" \
-            -subj "/CN=QManager-CFW3212" \
-            -addext "subjectAltName=$cert_san" \
-            -addext "basicConstraints=critical,CA:FALSE" \
-            -addext "keyUsage=critical,digitalSignature,keyEncipherment" \
-            -addext "extendedKeyUsage=serverAuth" 2>/dev/null; then
+            -config "$cert_cfg" 2>/dev/null; then
         info "TLS cert generated (SAN: $cert_san)"
     elif openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
             -keyout "$CERT_DIR/server.key" -out "$CERT_DIR/server.crt" \
             -subj "/CN=QManager-CFW3212" 2>/dev/null; then
-        warn "openssl -addext unsupported — generated basic TLS cert without SAN"
+        warn "openssl config-cert generation failed — generated basic TLS cert"
     else
         warn "openssl not available — TLS skipped"
     fi
+    rm -f "$cert_cfg"
 else
     info "TLS cert already present with SAN"
 fi
