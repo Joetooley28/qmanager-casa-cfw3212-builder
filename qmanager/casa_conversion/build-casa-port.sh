@@ -1989,6 +1989,79 @@ PY
         || fail "Could not apply Casa IPPT disable service-clear patch"
 }
 
+patch_casa_tailscale_tiny_cfw3212() {
+    # Switch the on-demand Tailscale installer (driven by the UI's Tailscale
+    # section, via cgi .../vpn/tailscale.sh -> qmanager_tailscale_mgr) from
+    # upstream's official pkgs.tailscale.com arm build to iamromulan's
+    # "tiny-tailscale" stripped build.
+    #
+    # Why: on the CFW-3212 (~183 MB RAM, single armv7 core) the official
+    # tailscaled is the single largest RAM consumer (~29 MB RSS, AI-47).
+    # tiny-tailscale is a statically-linked, feature-reduced *combined* binary
+    # (one `tailscaled`, with `tailscale` a symlink that switches to CLI mode by
+    # argv[0]). Although romulan built it for the RM551E (Qualcomm OpenWRT), a
+    # static Go binary has no userland dependency -- smoke-tested running on this
+    # RM520N: `tailscaled --version` and `tailscale version` both return 1.98.3.
+    #
+    # The tarball layout matches upstream's (dir tiny-tailscale_<v>_arm/ holding
+    # tailscaled + a tailscale symlink), so the existing download/extract/mv/
+    # symlink/systemd logic in qmanager_tailscale_mgr works unchanged -- only the
+    # version, tarball name, URL, and extract-dir need to change.
+    local ts_mgr="$TARGET/scripts/usr/bin/qmanager_tailscale_mgr"
+    [ -f "$ts_mgr" ] || fail "qmanager_tailscale_mgr not found at $ts_mgr (upstream layout changed?)"
+
+    local tiny_ver="1.98.3"
+
+    python3 - "$ts_mgr" "$tiny_ver" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+ver = sys.argv[2]
+text = path.read_text()
+
+# TAILSCALE_VERSION appears twice (outer wrapper + inner install script); both
+# should move to the tiny version. ARCH stays "arm" (correct for armv7l).
+repl = [
+    ('TAILSCALE_VERSION="1.92.5"', f'TAILSCALE_VERSION="{ver}"'),
+    ('TAILSCALE_TARBALL="tailscale_${TAILSCALE_VERSION}_${TAILSCALE_ARCH}.tgz"',
+     'TAILSCALE_TARBALL="tiny-tailscale_${TAILSCALE_VERSION}_${TAILSCALE_ARCH}.tgz"'),
+    ('TAILSCALE_URL="https://pkgs.tailscale.com/stable/${TAILSCALE_TARBALL}"',
+     'TAILSCALE_URL="https://github.com/iamromulan/tiny-tailscale/releases/download/v${TAILSCALE_VERSION}/${TAILSCALE_TARBALL}"'),
+    ('TAILSCALE_EXTRACT_DIR="tailscale_${TAILSCALE_VERSION}_${TAILSCALE_ARCH}"',
+     'TAILSCALE_EXTRACT_DIR="tiny-tailscale_${TAILSCALE_VERSION}_${TAILSCALE_ARCH}"'),
+]
+for old, new in repl:
+    if old not in text:
+        raise SystemExit(f"tiny-tailscale: expected marker not found: {old}")
+    text = text.replace(old, new)
+
+# Neutralise the "already installed -> tailscale update" path. tiny-tailscale is
+# a custom build; `tailscale update` would pull the OFFICIAL build from
+# pkgs.tailscale.com and silently undo this swap. Upgrades happen by
+# uninstall + reinstall (which re-fetches the tiny tarball).
+old_update = 'echo y | "$TAILSCALE_DIR/tailscale" update'
+if old_update not in text:
+    raise SystemExit("tiny-tailscale: expected marker not found: tailscale update line")
+text = text.replace(
+    old_update,
+    'echo "tiny-tailscale build: skipping tailscale update (reinstall to upgrade)"',
+)
+
+path.write_text(text)
+PY
+
+    grep -q 'tiny-tailscale_' "$ts_mgr" \
+        || fail "Could not apply tiny-tailscale tarball/extract patch"
+    grep -q 'iamromulan/tiny-tailscale/releases/download' "$ts_mgr" \
+        || fail "Could not apply tiny-tailscale URL patch"
+    grep -q 'TAILSCALE_VERSION="1.98.3"' "$ts_mgr" \
+        || fail "Could not apply tiny-tailscale version patch"
+    grep -q 'reinstall to upgrade' "$ts_mgr" \
+        || fail "Could not neutralise tailscale update path"
+    echo "  [tailscale] on-demand installer switched to tiny-tailscale v$tiny_ver (arm)"
+}
+
 patch_casa_custom_dns_cfw3212() {
     # Upstream QManager v0.1.11+ Custom DNS feature gates the UI on:
     #   1. get_dns_mode()           — expects <DNSMode> in mobileap_cfg.xml
@@ -3334,6 +3407,7 @@ apply_casa_overlays() {
     copy_template_or_fallback "hooks/use-software-update.ts" "$TEMPLATE_DIR/hooks/use-software-update.ts"
     copy_template_or_fallback "components/reboot/reboot-countdown.tsx" "$TEMPLATE_DIR/components/reboot/reboot-countdown.tsx"
     patch_casa_custom_dns_cfw3212
+    patch_casa_tailscale_tiny_cfw3212
     patch_casa_poller_boot_identity_cfw3212
     patch_casa_ippt_disable_clears_service_cfw3212
     patch_email_alerts_casa_msmtp
