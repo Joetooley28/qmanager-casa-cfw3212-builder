@@ -96,9 +96,13 @@ if [ "$PURGE" = "1" ]; then
         /usrdata/overlay/rwdata/data/var/lib/tailscale \
         /usrdata/overlay/rwdata/data/root/.config/ookla \
         /tmp/tailscaled-log-* 2>/dev/null || true
+    # Email Alerts helper (msmtp) is installed under both /usrdata/bin and the
+    # Entware tree; remove both copies. /usrdata/opt/bin/msmtp is also covered by
+    # the /usrdata/opt purge below, but /usrdata/bin/msmtp would otherwise survive.
+    rm -f /usrdata/bin/msmtp /usrdata/opt/bin/msmtp 2>/dev/null || true
     systemctl daemon-reload 2>/dev/null || true
     systemctl reset-failed tailscaled 2>/dev/null || true
-    info "Optional Tailscale/Ookla state removed"
+    info "Optional Tailscale/Ookla/msmtp state removed"
 
     step "Purging preserved config and bundled Entware state"
     # /opt -> /usrdata/opt is created by install_cfw3212.sh on the rootfs; leave it

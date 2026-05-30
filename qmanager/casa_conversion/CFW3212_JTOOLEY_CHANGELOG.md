@@ -19,6 +19,7 @@
 ## v0.1.12-cfw3212.14
 
 - The "Reboot required" reminder after a software update now stays put until you actually reboot. After an install finishes, the Software Update page shows a "Reboot required" badge and an "Installation complete — Reboot when ready" notice with a Reboot Now button. Previously, if you navigated away from that page and came back (or reloaded it), the reminder disappeared, even though the device still needed a reboot to finish applying the update. The page now re-checks the pending-reboot state every time you open it, so the reminder and the Reboot Now button stay visible until the reboot is done. It clears on its own once the device reboots.
+- Full uninstall is now complete: the `--purge` uninstall also removes the Email Alerts helper (`msmtp`), which a previous purge could leave behind. The normal (non-purge) uninstall is unchanged and still keeps your `/etc/qmanager` settings so a later reinstall picks them back up.
 
 ## v0.1.12-cfw3212.13
 
