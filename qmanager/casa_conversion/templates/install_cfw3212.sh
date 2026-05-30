@@ -1123,13 +1123,48 @@ mkdir -p "$QMANAGER_ROOT" "$CERT_DIR"
 cp "$SRC_SCRIPTS/usrdata/qmanager/lighttpd.conf" "$LIGHTTPD_CONF"
 info "lighttpd.conf installed (HTTP:9080 HTTPS:9000)"
 
-if [ ! -f "$CERT_DIR/server.key" ]; then
-    openssl req -x509 -newkey rsa:2048 -keyout "$CERT_DIR/server.key" \
-        -out "$CERT_DIR/server.crt" -days 3650 -nodes \
-        -subj "/CN=QManager-CFW3212" 2>/dev/null \
-        && info "TLS cert generated" || warn "openssl not available — TLS skipped"
+# Proper server leaf cert with a Subject Alternative Name. Older builds made a
+# CA:TRUE, SAN-less self-signed cert that modern Safari/iOS reject (no SAN => no
+# "visit anyway" bypass) and Firefox blocks outright (CA:TRUE used as a leaf).
+# Generate a real server cert with a SAN covering loopback + this box's LAN /
+# Tailscale IPs (and the Tailscale MagicDNS name when up). Regenerate an existing
+# cert if it predates this (has no SAN).
+gen_cert=0
+if [ ! -f "$CERT_DIR/server.key" ] || [ ! -f "$CERT_DIR/server.crt" ]; then
+    gen_cert=1
+elif ! openssl x509 -in "$CERT_DIR/server.crt" -noout -text 2>/dev/null | grep -q "Subject Alternative Name"; then
+    gen_cert=1
+    info "Existing TLS cert has no SAN — regenerating for iOS/Firefox compatibility"
+fi
+
+if [ "$gen_cert" = "1" ]; then
+    cert_san="DNS:localhost,IP:127.0.0.1"
+    for _ip in $(ip -4 addr 2>/dev/null | grep -oE 'inet [0-9.]+' | awk '{print $2}' \
+                 | grep -vE '^(127\.|169\.254\.|192\.0\.0\.)'); do
+        cert_san="$cert_san,IP:$_ip"
+    done
+    if [ -x /usrdata/tailscale/tailscale ]; then
+        _tsname="$(/usrdata/tailscale/tailscale status --json 2>/dev/null \
+                   | sed -n 's/.*"DNSName": *"\([^"]*\)\.".*/\1/p' | head -1)"
+        [ -n "$_tsname" ] && cert_san="$cert_san,DNS:$_tsname"
+    fi
+    if openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+            -keyout "$CERT_DIR/server.key" -out "$CERT_DIR/server.crt" \
+            -subj "/CN=QManager-CFW3212" \
+            -addext "subjectAltName=$cert_san" \
+            -addext "basicConstraints=critical,CA:FALSE" \
+            -addext "keyUsage=critical,digitalSignature,keyEncipherment" \
+            -addext "extendedKeyUsage=serverAuth" 2>/dev/null; then
+        info "TLS cert generated (SAN: $cert_san)"
+    elif openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+            -keyout "$CERT_DIR/server.key" -out "$CERT_DIR/server.crt" \
+            -subj "/CN=QManager-CFW3212" 2>/dev/null; then
+        warn "openssl -addext unsupported — generated basic TLS cert without SAN"
+    else
+        warn "openssl not available — TLS skipped"
+    fi
 else
-    info "TLS cert already exists"
+    info "TLS cert already present with SAN"
 fi
 
 # Console startup script

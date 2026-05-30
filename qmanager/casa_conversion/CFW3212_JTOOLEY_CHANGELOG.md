@@ -19,6 +19,7 @@
 ## v0.1.12-cfw3212.10
 
 - Software Update → Version Management install confirmations no longer say the device will reboot automatically. All three "Install Now" / "Reinstall Now" dialogs now match the Update Status card: QManager restarts its services after installation and then asks you to reboot when ready.
+- The QManager HTTPS certificate is now a proper server certificate with a Subject Alternative Name (covering localhost, the router's LAN IP, and — when Tailscale is up — its Tailscale IP/name). Older builds shipped a certificate that newer iPhone/Safari and Firefox versions refused to open (the browser warning had no "continue anyway" option). Reaching the QManager UI over HTTPS (including over Tailscale) now shows a normal, acceptable certificate warning you can click through. Existing installs that still have the old certificate are upgraded automatically on the next install.
 
 ## v0.1.12-cfw3212.9
 
