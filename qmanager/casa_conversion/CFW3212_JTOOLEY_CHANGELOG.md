@@ -16,6 +16,10 @@
 - Software Update → Version Management can now install a different version (including rollbacks). After the download verifies, the Install button switches to "Install Now" so the staged package actually gets applied instead of being left on disk.
 - A handful of upstream modem-management actions stay blocked or limited on Casa because they'd let you push the modem into a state we don't want it in.
 
+## v0.1.12-cfw3212.11
+
+- Software Update now reliably finds the newest available version. Once the Casa build number reached double digits (for example `.10` and up), the update check could miss it and report "up to date," because it was trusting the package host's release ordering instead of comparing build numbers directly. The check now sorts candidates by their actual version and build number, so the newest build is always detected regardless of how the host lists them.
+
 ## v0.1.12-cfw3212.10
 
 - Software Update → Version Management install confirmations no longer say the device will reboot automatically. All three "Install Now" / "Reinstall Now" dialogs now match the Update Status card: QManager restarts its services after installation and then asks you to reboot when ready.

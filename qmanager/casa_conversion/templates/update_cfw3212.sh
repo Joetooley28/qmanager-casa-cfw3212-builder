@@ -269,6 +269,18 @@ if [ "$REQUEST_METHOD" = "GET" ]; then
         [ -n "$releases" ] || releases="[]"
     fi
 
+    # Casa build numbers are not sortable via GitHub's release ordering: GitHub
+    # orders the "-cfw3212.<N>" suffix as text (so .10 lands below .9), and when
+    # several releases share a created_at (their tags point at the same, frozen
+    # package-repo commit) GitHub's tie-break is not by build number either.
+    # Sort numerically by base version then build number so .[0] is the true
+    # newest regardless of how GitHub returns the list.
+    releases=$(printf '%s' "$releases" | jq 'sort_by([
+        (.tag_name | ltrimstr("v") | split("-cfw3212.")[0] | split(".") | map(tonumber? // 0)),
+        (.tag_name | split("-cfw3212.")[1] | tonumber? // 0)
+      ]) | reverse' 2>/dev/null)
+    [ -n "$releases" ] || releases="[]"
+
     latest_tag=$(printf '%s' "$releases" | jq -r '.[0].tag_name // empty')
     changelog=$(printf '%s' "$releases" | jq -r '.[0].body // empty')
     current_changelog=$(printf '%s' "$releases" | jq -r --arg cv "$current_version" '[ .[] | select(.tag_name == $cv) ][0].body // empty')

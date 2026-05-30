@@ -651,6 +651,37 @@ jobs:
           name: casa-cfw3212-publish-${{ needs.build.outputs.casa_tag }}
           path: publish
 
+      - name: Advance package repo HEAD for release date ordering
+        shell: bash
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          casa_tag="${{ needs.build.outputs.casa_tag }}"
+          # GitHub sets a release's created_at from its target commit's date.
+          # With a frozen package-repo HEAD, every release tag points at the same
+          # commit and shares one created_at, so GitHub cannot order them by date
+          # and buries higher build numbers (e.g. .10 below .9). Push a fresh
+          # commit so target_commitish=main resolves to a new, current-dated
+          # commit. Non-fatal: discovery also works via the numeric sort in the
+          # on-device update CGI, so a failure here never blocks publishing.
+          tmp_pkg="$(mktemp -d)"
+          if git clone --depth 1 "https://x-access-token:${GH_TOKEN}@github.com/${PACKAGE_REPO}.git" "$tmp_pkg"; then
+            cd "$tmp_pkg"
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            mkdir -p .release-tracking
+            printf '%s built %s\n' "$casa_tag" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > .release-tracking/last-build.txt
+            git add .release-tracking/last-build.txt
+            git commit --allow-empty -m "Release ${casa_tag}"
+            if git push origin HEAD:main; then
+              echo "Advanced package repo HEAD for $casa_tag"
+            else
+              echo "WARN: push to package repo main failed; relying on update.sh sort for ordering"
+            fi
+          else
+            echo "WARN: could not clone package repo to advance HEAD; relying on update.sh sort"
+          fi
+
       - name: Create or update prerelease
         shell: bash
         run: |
