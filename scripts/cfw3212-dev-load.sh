@@ -24,7 +24,7 @@
 #                         --file LOCAL:REMOTE   (push an arbitrary local file verbatim)
 #
 # Environment:
-#   CFW3212_BOX   ssh target for the router (default: cfw3212-box2)
+#   CFW3212_BOX   ssh target for the router (default: cfw3212-router) — set this to your box
 #   BUILDER_REPO  GitHub repo for artifacts (default: Joetooley28/qmanager-casa-cfw3212-builder)
 #   BUILD_BRANCH  branch to pull the latest run from when --run is omitted (default: dev)
 #
@@ -34,7 +34,7 @@
 #
 set -euo pipefail
 
-BOX="${CFW3212_BOX:-cfw3212-box2}"
+BOX="${CFW3212_BOX:-cfw3212-router}"   # override with CFW3212_BOX to match your ssh config
 REPO="${BUILDER_REPO:-Joetooley28/qmanager-casa-cfw3212-builder}"
 BRANCH="${BUILD_BRANCH:-dev}"
 WORKFLOW="build-casa-package.yml"
@@ -93,7 +93,7 @@ fetch_tarball() {
 check_box() {
   note "Checking router '$BOX' is reachable ..."
   ssh -o ConnectTimeout=15 -o BatchMode=yes "$BOX" 'echo ok; cat /etc/qmanager/VERSION 2>/dev/null || echo "(no VERSION yet)"' \
-    || die "cannot reach router '$BOX' (set CFW3212_BOX, check the tailnet jump / that the box is plugged in)"
+    || die "cannot reach router '$BOX' (set CFW3212_BOX to your router's ssh target and check connectivity)"
 }
 
 cmd_fetch() { fetch_tarball; echo "$TARBALL"; }

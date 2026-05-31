@@ -31,7 +31,7 @@ Manually dispatch the builder workflow on the `dev` branch
 
 `scripts/cfw3212-dev-load.sh` pulls the `casa-cfw3212-publish-*` artifact (the
 fully **converted** package) and puts it on the box. Set the target with
-`CFW3212_BOX` (default `cfw3212-box2`). `scp` uses `-O` (the modem has no sftp).
+`CFW3212_BOX` (default `cfw3212-router`; set it to your router's ssh target). `scp` uses `-O` (the modem has no sftp).
 
 ```bash
 # Symlink onto PATH (optional)
