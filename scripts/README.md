@@ -65,5 +65,6 @@ device. Use `--file` only when you have already converted the file yourself
 ## Promote to a public release
 
 When a `dev` build tests good on the box: merge `dev` → `main`, then dispatch
-the builder on `main` with `casa_build=<N> dry_run=false create_release=true
+the builder on `main` with `casa_build=next` (or a specific `<N>`) and
+`dry_run=false create_release=true
 force=true` and approve the `official-package-release` environment.
