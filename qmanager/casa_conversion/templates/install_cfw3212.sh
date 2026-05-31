@@ -469,10 +469,11 @@ if ! grep -q '^export PATH=' "$SRC_SCRIPTS/usr/lib/qmanager/cgi_base.sh" 2>/dev/
         "$SRC_SCRIPTS/usr/lib/qmanager/cgi_base.sh" 2>/dev/null || true
 fi
 # Keep sudo pointed at the real pre-patched setuid binary under /usrdata/opt
-# (no /usrdata/bin wrapper — wrapping sudo strips setuid; see Entware bootstrap).
-# Only collapse an accidental double /usrdata prefix from the generic patch pass.
+# Route platform.sh's privileged path at the /usrdata/bin sudo shim (Casa runs
+# CGIs as root, so the shim just execs the command — see the sudo step below).
 sed -i \
-    -e 's|/usrdata/usrdata/opt/bin/sudo|/usrdata/opt/bin/sudo|g' \
+    -e 's|/usrdata/usrdata/opt/bin/sudo|/usrdata/bin/sudo|g' \
+    -e 's|/usrdata/opt/bin/sudo|/usrdata/bin/sudo|g' \
     "$SRC_SCRIPTS/usr/lib/qmanager/platform.sh" 2>/dev/null || true
 info "cgi_base.sh and platform.sh patched for Casa tool paths"
 
@@ -1061,19 +1062,37 @@ fi
 # loader explicitly would make the kernel drop the setuid bit, so `sudo -n`
 # from the CGIs would silently fail. Re-assert setuid + root owner defensively
 # (extraction or an older/unpatched bundle may not carry them).
+# sudo shim. On Casa, lighttpd and its CGIs run as root, and QManager only ever
+# uses `sudo -n <cmd>` to elevate (never `sudo -u <other-user>`). Entware's real
+# setuid sudo cannot run on a clean stock box: its glibc resolves NSS modules
+# (libnss_files) from the compiled-in /opt prefix, which a read-only squashfs
+# root cannot provide (no pivot) — so getpwuid() fails with "you do not exist in
+# the passwd database". Since the caller is already root, elevation is a no-op:
+# install a tiny shim that strips sudo's own options and execs the command
+# directly. If somehow not root, fall back to the bundled Entware sudo.
+cat > "$BIN_DIR/sudo" <<'SUDO_EOF'
+#!/bin/sh
+if [ "$(id -u)" -ne 0 ]; then
+    exec /usrdata/opt/bin/sudo "$@"
+fi
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -n|-k|-K|-E|-H|-S|-b) shift ;;
+        -u|-g|-p|-C|-r|-t|-T|-U) shift 2 ;;
+        --) shift; break ;;
+        -*) shift ;;
+        *) break ;;
+    esac
+done
+exec "$@"
+SUDO_EOF
+chmod 755 "$BIN_DIR/sudo"
+info "sudo shim installed at $BIN_DIR/sudo (Casa CGIs run as root)"
+# Keep the bundled Entware sudo as a setuid fallback for boxes that do have a
+# writable /opt (e.g. a pivoted box); harmless and unused on a stock box.
 if [ -x "$OPT_DIR/bin/sudo" ]; then
     chown 0:0 "$OPT_DIR/bin/sudo" 2>/dev/null || true
     chmod 4755 "$OPT_DIR/bin/sudo" 2>/dev/null || true
-    # Drop any stale loader wrapper from a previous install — on PATH it would
-    # shadow the setuid binary and strip privileges.
-    [ -e "$BIN_DIR/sudo" ] && rm -f "$BIN_DIR/sudo"
-    if "$OPT_DIR/bin/sudo" -V >/dev/null 2>&1; then
-        info "sudo installed (setuid, /usrdata/opt loader — no /opt needed)"
-    else
-        warn "sudo present but failed to run — check $OPT_DIR/lib loader/libs"
-    fi
-else
-    warn "sudo not installed — privileged CGIs may not work"
 fi
 
 # rc.unslung service → /etc/systemd/system (writable overlay)
@@ -1352,6 +1371,13 @@ fi
 # lighttpd.service — overrides the null-mask in squashfs.
 # Write a clean Casa-specific unit instead of trying to rewrite the upstream
 # one again after the earlier generic /opt -> /usrdata/opt patching pass.
+#
+# Casa ships lighttpd.service masked (a symlink to /dev/null). Clear the mask
+# first: otherwise `cat >` writes through the symlink to /dev/null and the
+# follow-up `sed -i` leaves a 0-byte regular file — which systemd still treats
+# as masked, so `systemctl start lighttpd` fails.
+systemctl unmask lighttpd 2>/dev/null || true
+rm -f "$SYSTEMD_DIR/lighttpd.service"
 cat > "$SYSTEMD_DIR/lighttpd.service" << EOF
 [Unit]
 Description=Lighttpd Daemon
