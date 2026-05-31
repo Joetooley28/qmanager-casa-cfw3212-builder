@@ -726,14 +726,37 @@ new = '''# Group A: Identity reads — compound AT (6 -> 1 call)
     result=""
     local identity_try
     for identity_try in 1 2 3 4 5 6; do
-        result=$(qcmd 'AT+CVERSION;+CGMM;+CGSN;+CIMI;+QCCID;+CNUM' 2>/dev/null)
-        if printf '%s\n' "$result" | tr -d '\r' | grep -q '^OK$' && printf '%s\n' "$result" | tr -d '\r' | grep -q '^+QCCID:'; then
+        # Identity (CVERSION/CGMM/CGSN) is SIM-independent and ends in OK even
+        # with no SIM inserted; accept once OK and the bare 15-digit IMEI show.
+        result=$(qcmd 'AT+CVERSION;+CGMM;+CGSN' 2>/dev/null)
+        if printf '%s\n' "$result" | tr -d '\r' | grep -q '^OK$' && printf '%s\n' "$result" | tr -d '\r' | grep -q -E '^[0-9]{15}$'; then
             break
         fi
         result=""
         qlog_warn "Boot identity read not ready; retry ${identity_try}/6"
         sleep 3
-    done'''
+    done
+
+    # SIM-dependent reads (CIMI/QCCID/CNUM) are a SEPARATE best-effort call:
+    # chained into the identity compound they return ERROR on a SIM-less modem
+    # and poison the whole response, blanking every device-info field. Append
+    # only on success so the parser below still sees IMSI/ICCID/phone.
+    if [ -n "$result" ]; then
+        local sim_result
+        sim_result=$(qcmd 'AT+CIMI;+QCCID;+CNUM' 2>/dev/null)
+        if printf '%s\n' "$sim_result" | tr -d '\r' | grep -q '^OK$'; then
+            result="$result
+$sim_result"
+        fi
+
+        # Manufacturer (AT+CGMI) — SIM-independent; queried separately so its
+        # bare "Quectel" line does not collide with the bare CGMM model line.
+        local mfr_result
+        mfr_result=$(qcmd 'AT+CGMI' 2>/dev/null)
+        if printf '%s\n' "$mfr_result" | tr -d '\r' | grep -q '^OK$'; then
+            boot_manufacturer=$(printf '%s\n' "$mfr_result" | tr -d '\r' | grep -v '^AT' | grep -v '^OK$' | grep -v '^$' | grep -v '^+' | head -1)
+        fi
+    fi'''
 text = text.replace(old, new)
 
 old = '''
