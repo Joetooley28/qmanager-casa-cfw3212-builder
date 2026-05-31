@@ -132,8 +132,8 @@ jobs:
 
           . "$RUNNER_TEMP/resolve.env"
           casa_tag="${upstream_tag}-cfw3212.${casa_build}"
-          tar_name="qmanager-cfw3212-${upstream_tag}.tar.gz"
-          sha_name="qmanager-cfw3212-${upstream_tag}.sha256"
+          tar_name="qmanager-cfw3212-${casa_tag}.tar.gz"
+          sha_name="qmanager-cfw3212-${casa_tag}.sha256"
           changelog_name="qmanager-cfw3212-${casa_tag}-changelog.json"
 
           {
@@ -187,8 +187,8 @@ jobs:
               upstream = match.group(1)
               assets = {asset.get("name") for asset in rel.get("assets", [])}
               required = {
-                  f"qmanager-cfw3212-{upstream}.tar.gz",
-                  f"qmanager-cfw3212-{upstream}.sha256",
+                  f"qmanager-cfw3212-{tag}.tar.gz",
+                  f"qmanager-cfw3212-{tag}.sha256",
               }
               if required.issubset(assets):
                   if not latest_packaged_upstream:

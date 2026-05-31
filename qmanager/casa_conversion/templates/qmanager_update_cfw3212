@@ -82,15 +82,12 @@ strip_casa_suffix() {
 }
 
 asset_name_for_tag() {
-    local upstream
-    upstream="$(strip_casa_suffix "$1")"
-    printf 'qmanager-cfw3212-%s.tar.gz' "$upstream"
+    # Full Casa tag in the asset name (unique per build; AI-56 follow-up).
+    printf 'qmanager-cfw3212-%s.tar.gz' "$1"
 }
 
 checksum_name_for_tag() {
-    local upstream
-    upstream="$(strip_casa_suffix "$1")"
-    printf 'qmanager-cfw3212-%s.sha256' "$upstream"
+    printf 'qmanager-cfw3212-%s.sha256' "$1"
 }
 
 validate_release_url() {

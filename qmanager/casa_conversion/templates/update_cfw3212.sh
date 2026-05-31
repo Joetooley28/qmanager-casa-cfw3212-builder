@@ -114,15 +114,13 @@ check_lock() {
 }
 
 asset_name_for_tag() {
-    local tag="$1" upstream
-    upstream="$(strip_casa_suffix "$tag")"
-    printf 'qmanager-cfw3212-%s.tar.gz' "$upstream"
+    # Asset name carries the full Casa tag (e.g. v0.1.12-cfw3212.15) so every
+    # build is uniquely named and manual downloads never collide (AI-56 follow-up).
+    printf 'qmanager-cfw3212-%s.tar.gz' "$1"
 }
 
 checksum_name_for_tag() {
-    local tag="$1" upstream
-    upstream="$(strip_casa_suffix "$tag")"
-    printf 'qmanager-cfw3212-%s.sha256' "$upstream"
+    printf 'qmanager-cfw3212-%s.sha256' "$1"
 }
 
 changelog_name_for_tag() {
@@ -255,9 +253,8 @@ if [ "$REQUEST_METHOD" = "GET" ]; then
       | select(.tag_name | startswith("v"))
       | select(.tag_name | contains("-cfw3212."))
       | . as $rel
-      | ($rel.tag_name | split("-cfw3212.")[0]) as $upstream
-      | ("qmanager-cfw3212-" + $upstream + ".tar.gz") as $tar
-      | ("qmanager-cfw3212-" + $upstream + ".sha256") as $sha
+      | ("qmanager-cfw3212-" + $rel.tag_name + ".tar.gz") as $tar
+      | ("qmanager-cfw3212-" + $rel.tag_name + ".sha256") as $sha
       | select(any($rel.assets[]?; .name == $tar))
       | select(any($rel.assets[]?; .name == $sha))
     ]'
@@ -319,10 +316,10 @@ if [ "$REQUEST_METHOD" = "GET" ]; then
 
     available_versions=$(printf '%s' "$releases" | jq \
         --arg cv "$current_version" \
-        '[ .[] | (.tag_name | split("-cfw3212.")[0]) as $upstream | {
+        '[ .[] | .tag_name as $t | {
             tag: .tag_name,
             has_assets: true,
-            asset_size: (([ .assets[] | select(.name == ("qmanager-cfw3212-" + $upstream + ".tar.gz")) ][0].size // 0) / 1048576 * 10 | floor / 10 | tostring + " MB"),
+            asset_size: (([ .assets[] | select(.name == ("qmanager-cfw3212-" + $t + ".tar.gz")) ][0].size // 0) / 1048576 * 10 | floor / 10 | tostring + " MB"),
             is_current: (.tag_name == $cv)
         }]')
 
@@ -330,8 +327,7 @@ if [ "$REQUEST_METHOD" = "GET" ]; then
     download_size=""
     if [ -n "$latest_tag" ]; then
         download_url="$(download_url_for_tag "$latest_tag")"
-        latest_upstream="$(strip_casa_suffix "$latest_tag")"
-        latest_asset="qmanager-cfw3212-${latest_upstream}.tar.gz"
+        latest_asset="qmanager-cfw3212-${latest_tag}.tar.gz"
         download_size=$(printf '%s' "$releases" | jq -r --arg asset "$latest_asset" '.[0].assets[] | select(.name == $asset) | (.size / 1048576 * 10 | floor / 10 | tostring + " MB")' 2>/dev/null | head -n1)
     fi
 
