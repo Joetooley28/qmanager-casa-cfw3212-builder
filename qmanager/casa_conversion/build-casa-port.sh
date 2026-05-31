@@ -2023,7 +2023,12 @@ if count == 0:
     if "Casa CFW-3212 boot-identity tr fix" in text:
         sys.exit(0)
     sys.exit("expected tr -d '\\n' literal not found in qmanager_poller")
-if count > 4:
+# patch_qmanager_poller's Group A identity block emits its `tr -d '\\r'`
+# guards as literal CR bytes (Python non-raw string), which read_text() above
+# normalizes to \n — so each such guard shows up here and is converted to a
+# clean `tr -d '\\r'`. That block currently has 5 of them; keep headroom but
+# still refuse on a wildly different upstream shape.
+if count > 8:
     sys.exit(f"too many tr -d '\\n' matches ({count}); refusing to patch blindly")
 
 # Leave a sentinel comment near the top of the file (after shebang/header) so
