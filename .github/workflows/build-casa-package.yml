@@ -74,10 +74,26 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          dry_run="${INPUT_DRY_RUN:-true}"
+          create_release="${INPUT_CREATE_RELEASE:-false}"
+          force="${INPUT_FORCE:-false}"
+          # Branch safety gate: only the default branch (main) may ever publish.
+          # Any other branch (e.g. the 'dev' working branch) is forced to a
+          # non-publishing dry run -- even if create_release was ticked -- so a
+          # working-branch build can never cut a public package release. The
+          # publish job's `if:` (create_release==true && dry_run!=true) then
+          # cannot fire off-main. main still behaves exactly as before.
+          if [ "${GITHUB_REF_NAME:-}" != "main" ]; then
+            if [ "$create_release" = "true" ] || [ "$dry_run" != "true" ]; then
+              echo "::notice::Non-main branch '${GITHUB_REF_NAME:-?}': forcing dry_run=true, create_release=false (publishing is main-only)."
+            fi
+            dry_run=true
+            create_release=false
+          fi
           {
-            echo "dry_run=${INPUT_DRY_RUN:-true}"
-            echo "create_release=${INPUT_CREATE_RELEASE:-false}"
-            echo "force=${INPUT_FORCE:-false}"
+            echo "dry_run=${dry_run}"
+            echo "create_release=${create_release}"
+            echo "force=${force}"
           } >> "$GITHUB_OUTPUT"
 
       - name: Resolve upstream app release
