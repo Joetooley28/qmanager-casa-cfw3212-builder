@@ -35,6 +35,11 @@ checked out into the existing local workspace layout.
 - Builds Casa CFW-3212 packages that check the official Casa package repo,
   download converted Casa tarballs, verify SHA-256, and install only after user
   confirmation.
+- Bundles the full Entware runtime dependency set (lighttpd + modules, `sudo`,
+  and their support libraries incl. the loader) into each package, so the
+  no-internet install works on a clean stock router. The bundled `sudo` is
+  pre-patched (ELF interpreter + RPATH repointed to `/usrdata/opt`, setuid
+  preserved) so it needs no writable-root `/opt` symlink.
 - Keeps `qmanager_auto_update` disabled for Casa CFW-3212.
 
 ## GitHub Actions
