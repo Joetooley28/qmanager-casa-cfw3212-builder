@@ -1488,7 +1488,11 @@ step "Installing Ookla Speedtest CLI"
 if [ -x "$OOKLA_BIN" ]; then
     info "Ookla speedtest binary already present — skipping download"
 elif command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1; then
-    OOKLA_TMP=$(mktemp /tmp/ookla_speedtest_XXXXXX.tgz)
+    # busybox mktemp rejects a template with a suffix after the X's
+    # ("Invalid argument"); since set -e is on, that would abort the whole
+    # install. Use an X-terminated template (tar -xzf ignores the extension)
+    # with a fallback so this step can never kill the install.
+    OOKLA_TMP=$(mktemp /tmp/ookla_speedtest_XXXXXX 2>/dev/null || echo "/tmp/ookla_speedtest_$$")
     if command -v curl >/dev/null 2>&1; then
         curl -sL --max-time 60 "$OOKLA_URL" -o "$OOKLA_TMP" 2>/dev/null || true
     else
