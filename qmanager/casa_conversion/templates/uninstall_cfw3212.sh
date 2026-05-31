@@ -34,6 +34,9 @@ for svc in $SERVICES; do
     rm -f "/etc/systemd/system/$svc.service"
     rm -f "/etc/systemd/system/multi-user.target.wants/$svc.service"
 done
+# Casa ships lighttpd masked behind its stock web service. Restore that state
+# after removing the QManager override unit.
+systemctl mask lighttpd 2>/dev/null || true
 info "QManager service units removed"
 
 step "Removing stale QManager unit files"
@@ -105,10 +108,20 @@ if [ "$PURGE" = "1" ]; then
     info "Optional Tailscale/Ookla/msmtp state removed"
 
     step "Purging preserved config and bundled Entware state"
-    # /opt -> /usrdata/opt is created by install_cfw3212.sh on the rootfs; leave it
-    # in place so a later reinstall can still use Entware ELF paths if /usrdata/opt returns.
-    rm -rf /etc/qmanager /usrdata/opt
+    # Remove only include lines written by this installer. The bundled Entware
+    # sudoers file is ours; /etc/sudoers may contain a pre-existing include.
+    if [ -f /usrdata/opt/etc/sudoers ]; then
+        sed -i '\|^#includedir /usrdata/opt/etc/sudoers\.d\( # qmanager-cfw3212\)\?$|d' \
+            /usrdata/opt/etc/sudoers
+    fi
+    if [ -f /etc/sudoers ]; then
+        sed -i '\|^#includedir /etc/sudoers\.d # qmanager-cfw3212$|d' /etc/sudoers
+    fi
     rm -f /etc/sudoers.d/qmanager /usrdata/opt/etc/sudoers.d/qmanager 2>/dev/null || true
+    rm -rf /etc/qmanager /usrdata/opt
+    if [ -L /opt ] && [ "$(readlink /opt 2>/dev/null || true)" = "/usrdata/opt" ]; then
+        rm -f /opt
+    fi
     info "Purge cleanup complete"
 fi
 

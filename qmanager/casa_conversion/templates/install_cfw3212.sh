@@ -1282,7 +1282,7 @@ for sudoers_path in /usrdata/opt/etc/sudoers /etc/sudoers; do
     sudoers_dir="$(dirname "$sudoers_path")/sudoers.d"
     mkdir -p "$sudoers_dir"
     grep -q "includedir.*sudoers.d" "$sudoers_path" 2>/dev/null || \
-        echo "#includedir $sudoers_dir" >> "$sudoers_path"
+        echo "#includedir $sudoers_dir # qmanager-cfw3212" >> "$sudoers_path"
     if [ -f "$SRC_SCRIPTS/etc/sudoers.d/qmanager" ]; then
         cp "$SRC_SCRIPTS/etc/sudoers.d/qmanager" "$sudoers_dir/qmanager"
         sed -i 's/\r$//' "$sudoers_dir/qmanager"
