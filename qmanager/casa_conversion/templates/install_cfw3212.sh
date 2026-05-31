@@ -359,40 +359,35 @@ available_kb=$(df /usrdata | awk 'NR==2{print $4}')
 [ "$available_kb" -gt 30000 ] || die "/usrdata < 30MB free"
 info "/usrdata has $((available_kb/1024))MB free"
 
-# Ensure /opt -> /usrdata/opt symlink exists (needed for Entware helpers like sudo).
-# Entware sudo has its ELF interpreter and RPATH baked to /opt/lib/...
-# Without /opt -> /usrdata/opt, the setuid sudo at /usrdata/opt/bin/sudo
-# cannot find its loader, and the ld-linux wrapper at /usrdata/bin/sudo
-# loses setuid privileges (kernel strips them when the loader is named
-# explicitly). Every CGI that uses `sudo -n` then silently fails.
+# Optional /opt -> /usrdata/opt symlink.
+#
+# As of AI-56 this symlink is NOT required. The bundled Entware sudo ships
+# pre-patched (ELF interpreter + RPATH repointed to /usrdata/opt at build time,
+# with setuid preserved), and jq/lighttpd are launched through an explicit
+# /usrdata/opt loader — so nothing on the device depends on a root-level /opt.
+# On a clean stock box `/` is a read-only squashfs and /opt cannot be created;
+# that is now harmless. We still create the symlink opportunistically on boxes
+# that already have a writable root, since it costs nothing and keeps any stray
+# /opt-relative tooling happy.
 # Does not create or modify /usrdata/opt — only the root-level symlink.
 if [ ! -e /opt ]; then
     opt_root_remounted_rw=0
     if mount -o remount,rw / 2>/dev/null; then
         opt_root_remounted_rw=1
-    else
-        warn "Could not remount / read-write for /opt symlink"
     fi
-    if ln -sf /usrdata/opt /opt 2>/dev/null; then
-        :
-    else
-        warn "/opt symlink could not be created — Entware sudo may not work"
-    fi
+    ln -sf /usrdata/opt /opt 2>/dev/null || true
     if [ "$opt_root_remounted_rw" = 1 ]; then
-        mount -o remount,ro / 2>/dev/null \
-            || warn "Could not remount / read-only after /opt symlink"
+        mount -o remount,ro / 2>/dev/null || true
     fi
     if [ -L /opt ]; then
         info "/opt -> /usrdata/opt symlink created"
     else
-        warn "/opt symlink could not be created — Entware sudo may not work"
+        info "/opt not created (read-only root) — not required; sudo is pre-patched"
     fi
-elif [ ! -L /opt ]; then
-    warn "/opt exists but is not a symlink — skipping (Entware sudo may not work)"
-elif [ "$(readlink /opt 2>/dev/null || true)" = "/usrdata/opt" ]; then
+elif [ -L /opt ] && [ "$(readlink /opt 2>/dev/null || true)" = "/usrdata/opt" ]; then
     info "/opt -> /usrdata/opt symlink already present"
 else
-    warn "/opt is a symlink but does not point at /usrdata/opt — leaving unchanged"
+    info "/opt exists and is not our symlink — leaving unchanged (not required)"
 fi
 
 # --- Extract -----------------------------------------------------------------
@@ -473,9 +468,11 @@ if ! grep -q '^export PATH=' "$SRC_SCRIPTS/usr/lib/qmanager/cgi_base.sh" 2>/dev/
     sed -i '/^_CGI_BASE_LOADED=1$/a export PATH="/usrdata/bin:/usrdata/opt/bin:/usrdata/opt/sbin:/usr/bin:/usr/sbin:/bin:/sbin:$PATH"' \
         "$SRC_SCRIPTS/usr/lib/qmanager/cgi_base.sh" 2>/dev/null || true
 fi
+# Keep sudo pointed at the real pre-patched setuid binary under /usrdata/opt
+# (no /usrdata/bin wrapper — wrapping sudo strips setuid; see Entware bootstrap).
+# Only collapse an accidental double /usrdata prefix from the generic patch pass.
 sed -i \
-    -e 's|/usrdata/usrdata/opt/bin/sudo|/usrdata/bin/sudo|g' \
-    -e 's|/usrdata/opt/bin/sudo|/usrdata/bin/sudo|g' \
+    -e 's|/usrdata/usrdata/opt/bin/sudo|/usrdata/opt/bin/sudo|g' \
     "$SRC_SCRIPTS/usr/lib/qmanager/platform.sh" 2>/dev/null || true
 info "cgi_base.sh and platform.sh patched for Casa tool paths"
 
@@ -1001,13 +998,43 @@ mkdir -p "$OPT_DIR/bin" "$OPT_DIR/etc" "$OPT_DIR/lib/opkg" \
          "$OPT_DIR/tmp" "$OPT_DIR/var/lock" "$OPT_DIR/var/run" "$ENTWARE_STATE_DIR"
 chmod 777 "$OPT_DIR/tmp"
 
-entware_refresh_index
+# Install the core Entware runtime (libc/loader, libssl, lighttpd + modules,
+# sudo). Prefer the bundled offline .ipk set staged under dependencies/entware/
+# (AI-56) so a box with no WAN can still install; fall back to downloading from
+# bin.entware.net only when the bundle is absent or incomplete.
+ENTWARE_BUNDLE_DIR="$SRC_DEPS/entware"
+entware_bundled_installed=0
+if [ -d "$ENTWARE_BUNDLE_DIR" ]; then
+    for ipk in "$ENTWARE_BUNDLE_DIR"/*.ipk; do
+        [ -f "$ipk" ] || continue
+        install_bundled_ipk "$ipk" "$(basename "$ipk" .ipk)"
+        entware_bundled_installed=$((entware_bundled_installed + 1))
+    done
+fi
+if [ "$entware_bundled_installed" -gt 0 ]; then
+    info "Installed $entware_bundled_installed bundled Entware package(s) offline"
+fi
 
-for pkg in libpcre2 libopenssl lighttpd lighttpd-mod-cgi \
-           lighttpd-mod-openssl lighttpd-mod-redirect \
-           lighttpd-mod-proxy sudo; do
-    entware_install_pkg "$pkg"
-done
+# Decide whether anything still needs to come from the network. The loader
+# (libc), sudo, and the lighttpd server binary are the must-haves.
+entware_need_online=0
+[ -e "$OPT_DIR/lib/ld-linux.so.3" ] || entware_need_online=1
+[ -x "$OPT_DIR/bin/sudo" ] || entware_need_online=1
+[ -x "$OPT_DIR/sbin/lighttpd" ] || entware_need_online=1
+
+if [ "$entware_need_online" = 1 ]; then
+    if [ "$entware_bundled_installed" -gt 0 ]; then
+        warn "Bundled Entware set incomplete — falling back to online download"
+    fi
+    entware_refresh_index
+    for pkg in libpcre2 libopenssl lighttpd lighttpd-mod-cgi \
+               lighttpd-mod-openssl lighttpd-mod-redirect \
+               lighttpd-mod-proxy sudo; do
+        entware_install_pkg "$pkg"
+    done
+else
+    info "Entware runtime satisfied from bundled packages (offline OK)"
+fi
 
 for f in passwd group shells shadow gshadow; do
     [ -f "/etc/$f" ] && ln -sf "/etc/$f" "$OPT_DIR/etc/$f" 2>/dev/null || true
@@ -1027,9 +1054,26 @@ if [ -x "$OPT_DIR/bin/jq" ]; then
     info "jq loader wrapper installed"
 fi
 
+# sudo: do NOT create a loader wrapper. The bundled sudo is pre-patched so its
+# ELF interpreter (/usrdata/opt/lib/ld-linux.so.3) and RPATH
+# (/usrdata/opt/lib:/usrdata/opt/lib/sudo) resolve without /opt, and it is run
+# directly as the setuid binary at $OPT_DIR/bin/sudo. A wrapper naming the
+# loader explicitly would make the kernel drop the setuid bit, so `sudo -n`
+# from the CGIs would silently fail. Re-assert setuid + root owner defensively
+# (extraction or an older/unpatched bundle may not carry them).
 if [ -x "$OPT_DIR/bin/sudo" ]; then
-    create_entware_wrapper "sudo" "$OPT_DIR/bin/sudo"
-    info "sudo loader wrapper installed"
+    chown 0:0 "$OPT_DIR/bin/sudo" 2>/dev/null || true
+    chmod 4755 "$OPT_DIR/bin/sudo" 2>/dev/null || true
+    # Drop any stale loader wrapper from a previous install — on PATH it would
+    # shadow the setuid binary and strip privileges.
+    [ -e "$BIN_DIR/sudo" ] && rm -f "$BIN_DIR/sudo"
+    if "$OPT_DIR/bin/sudo" -V >/dev/null 2>&1; then
+        info "sudo installed (setuid, /usrdata/opt loader — no /opt needed)"
+    else
+        warn "sudo present but failed to run — check $OPT_DIR/lib loader/libs"
+    fi
+else
+    warn "sudo not installed — privileged CGIs may not work"
 fi
 
 # rc.unslung service → /etc/systemd/system (writable overlay)
@@ -1224,9 +1268,15 @@ for sudoers_path in /usrdata/opt/etc/sudoers /etc/sudoers; do
         cp "$SRC_SCRIPTS/etc/sudoers.d/qmanager" "$sudoers_dir/qmanager"
         sed -i 's/\r$//' "$sudoers_dir/qmanager"
         chmod 440 "$sudoers_dir/qmanager"
-        # Replace sudo binary path references in case they point to /opt
-        sed -i "s|/opt/bin/sudo|$OPT_DIR/bin/sudo|g" "$sudoers_dir/qmanager"
-        sed -i "s|$OPT_DIR/bin/sudo|$BIN_DIR/sudo|g" "$sudoers_dir/qmanager"
+        # Normalize any sudo binary reference to the real setuid binary under
+        # /usrdata/opt (not /opt, not the /usrdata/bin wrapper). Route every
+        # form through a sentinel first to avoid double-prefixing.
+        sed -i \
+            -e "s|/usrdata/opt/bin/sudo|@QMSUDO@|g" \
+            -e "s|$BIN_DIR/sudo|@QMSUDO@|g" \
+            -e "s|/opt/bin/sudo|@QMSUDO@|g" \
+            -e "s|@QMSUDO@|$OPT_DIR/bin/sudo|g" \
+            "$sudoers_dir/qmanager"
         info "sudoers installed at $sudoers_dir"
     fi
     break

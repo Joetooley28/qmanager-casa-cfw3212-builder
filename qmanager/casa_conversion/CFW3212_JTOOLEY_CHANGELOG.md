@@ -4,7 +4,7 @@
 
 - Web Console works. On installs with internet, `ttyd` gets pulled in and started automatically, and `/console/` is live once that helper is in place.
 - System Health Check has been pointed at the Casa paths, services, lighttpd ports, and the `/usrdata/opt/bin` helper locations it actually needs to look at.
-- The Casa installer now idempotently ensures `/opt -> /usrdata/opt` on every install (with an explicit root remount when needed) so Entware helpers such as `sudo` resolve correctly on clean routers without manual symlink setup.
+- QManager now installs on a clean, stock router with no internet and no special "rooting." The installer bundles everything it needs (the web server, `sudo`, and their support libraries) inside the package, and the bundled `sudo` is pre-built so it works without the old root-level `/opt` shortcut. Routers with a writable root still get the `/opt` shortcut created for good measure, but it's no longer required.
 - Tailscale runs from the QManager UI using the lighter Tiny Tailscale build. You do your own Tailscale login from the UI.
 - Ookla Speedtest works once the `speedtest` helper is installed. install handles if connected to internet.
 - Email Alerts can install and remove `msmtp` through the Casa Entware package flow. The Gmail app-password setup and an actual test send are the last things to confirm working on your end. (wired up, not tested yet) 
@@ -15,6 +15,11 @@
 - Reconnect Network now keeps a small progress window open so you can watch elapsed time, network registration, WAN IP, and internet status while the router comes back online.
 - Software Update → Version Management can now install a different version (including rollbacks). After the download verifies, the Install button switches to "Install Now" so the staged package actually gets applied instead of being left on disk.
 - A handful of upstream modem-management actions stay blocked or limited on Casa because they'd let you push the modem into a state we don't want it in.
+
+## v0.1.12-cfw3212.15
+
+- Offline install on a clean stock router now works end to end. Previously, installing without internet ("Method 2") would stop early with `Could not resolve host: bin.entware.net`, because the web server (`lighttpd`), `sudo`, and their support libraries were downloaded during install rather than shipped in the package — only `jq` was bundled. The package now carries the full set of these components inside it, so a router with no SIM/WAN can install completely. Routers that do have internet still work the same way, falling back to downloading only if a bundled piece is somehow missing.
+- QManager no longer needs a writable root filesystem to install. On a stock router, `/` is read-only, so the installer previously couldn't create the `/opt` shortcut that the bundled `sudo` relied on, and privileged actions in the UI would silently fail. The bundled `sudo` is now pre-built to find its loader under `/usrdata` directly (no `/opt` needed) while keeping the elevated permissions it requires, so the install works on a clean stock box without any pivot/overlay/"rooting" prep.
 
 ## v0.1.12-cfw3212.14
 

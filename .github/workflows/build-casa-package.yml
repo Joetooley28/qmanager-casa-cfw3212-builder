@@ -303,6 +303,100 @@ jobs:
             chmod +x "$target_dir/build-discord-bot.sh"
           fi
 
+          # --- AI-56: bundle the offline Entware dependency closure ----------
+          # Stage the full runtime closure (libc/loader, libssl, lighttpd +
+          # modules, sudo) under dependencies/entware/ so the package installs
+          # on a box with no WAN. The sudo .ipk is repacked with its ELF
+          # interpreter + RPATH repointed to /usrdata/opt and setuid preserved,
+          # so privileged CGIs work on a read-only-root box with no /opt symlink.
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq patchelf
+          entware_base="http://bin.entware.net/armv7sf-k3.2"
+          dep_dir="$target_dir/dependencies/entware"
+          rm -rf "$dep_dir"
+          mkdir -p "$dep_dir"
+          curl -fsSL "$entware_base/Packages.gz" -o /tmp/entware-Packages.gz
+          gzip -dc /tmp/entware-Packages.gz > /tmp/entware-Packages.txt
+          python3 - <<'PY' > /tmp/entware-closure.txt
+          import re
+          pkgs = {}
+          cur = {}
+          for line in open("/tmp/entware-Packages.txt"):
+              line = line.rstrip("\n")
+              if line.startswith("Package: "):
+                  cur = {"Package": line[9:]}
+              elif line.startswith("Depends: "):
+                  cur["Depends"] = line[9:]
+              elif line.startswith("Filename: "):
+                  cur["Filename"] = line[10:]
+              elif line == "":
+                  if cur.get("Package"):
+                      pkgs[cur["Package"]] = cur
+                  cur = {}
+          if cur.get("Package"):
+              pkgs[cur["Package"]] = cur
+          targets = ["libpcre2", "libopenssl", "lighttpd", "lighttpd-mod-cgi",
+                     "lighttpd-mod-openssl", "lighttpd-mod-redirect",
+                     "lighttpd-mod-proxy", "sudo"]
+          seen = set()
+          def visit(p):
+              if p in seen:
+                  return
+              if p not in pkgs:
+                  raise SystemExit("Entware dependency not in index: " + p)
+              seen.add(p)
+              for d in pkgs[p].get("Depends", "").split(","):
+                  d = re.sub(r"\(.*?\)", "", d).strip()
+                  if d:
+                      visit(d)
+          for t in targets:
+              visit(t)
+          for p in sorted(seen):
+              print(pkgs[p]["Filename"])
+          PY
+          mapfile -t ent_files < /tmp/entware-closure.txt
+          [ "${#ent_files[@]}" -gt 0 ] || { echo "Empty Entware closure" >&2; exit 1; }
+          for f in "${ent_files[@]}"; do
+            curl -fsSL "$entware_base/$f" -o "$dep_dir/$f"
+          done
+          echo "Downloaded ${#ent_files[@]} Entware .ipk(s) into $dep_dir"
+
+          # Pre-patch the sudo .ipk in place: repoint loader + RPATH to
+          # /usrdata/opt and restore setuid (patchelf clears it). libsudo_util.so
+          # lives in .../lib/sudo, so RPATH must include that dir too.
+          sudo_ipk="$(ls "$dep_dir"/sudo_*.ipk)"
+          work="$(mktemp -d)"
+          tar xzf "$sudo_ipk" -C "$work"
+          mkdir -p "$work/data"
+          tar xzf "$work/data.tar.gz" -C "$work/data"
+          patchelf --set-interpreter /usrdata/opt/lib/ld-linux.so.3 \
+                   --set-rpath /usrdata/opt/lib:/usrdata/opt/lib/sudo \
+                   "$work/data/opt/bin/sudo"
+          chmod 4755 "$work/data/opt/bin/sudo"
+          ( cd "$work/data" && tar czf "$work/data.tar.gz" --owner=0 --group=0 ./ )
+          ( cd "$work" && tar czf "$GITHUB_WORKSPACE/$sudo_ipk" ./debian-binary ./control.tar.gz ./data.tar.gz )
+          rm -rf "$work"
+
+          # Verify the repacked sudo: setuid+root in the tar header and the ELF
+          # interpreter actually repointed.
+          python3 - "$sudo_ipk" <<'PY'
+          import os, subprocess, sys, tarfile, tempfile
+          ipk = sys.argv[1]
+          d = tempfile.mkdtemp()
+          with tarfile.open(ipk) as t:
+              t.extract("./data.tar.gz", d)
+          with tarfile.open(os.path.join(d, "data.tar.gz")) as t:
+              m = t.getmember("./opt/bin/sudo")
+              assert m.mode & 0o4000, "setuid bit missing on repacked sudo"
+              assert m.uid == 0 and m.gid == 0, "repacked sudo not owned by root"
+              t.extract("./opt/bin/sudo", d)
+          out = subprocess.check_output(
+              ["readelf", "-l", os.path.join(d, "opt/bin/sudo")], text=True)
+          assert "/usrdata/opt/lib/ld-linux.so.3" in out, "sudo interpreter not repointed"
+          print("Repacked sudo .ipk OK: setuid+root, interp=/usrdata/opt/lib/ld-linux.so.3")
+          PY
+          # --- end AI-56 bundling --------------------------------------------
+
           cd "$target_dir"
           bun install
           CASA_BUILD="$casa_build" bun run package

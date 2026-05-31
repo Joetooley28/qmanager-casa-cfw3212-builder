@@ -279,6 +279,18 @@ cp "$DEPS_DIR/jq.ipk" "$STAGING_DIR/dependencies/jq.ipk"
 cp "$DEPS_DIR"/dropbear_*.ipk "$STAGING_DIR/dependencies/"
 chmod 755 "$STAGING_DIR/dependencies/atcli_smd11" "$STAGING_DIR/dependencies/sms_tool"
 
+# Offline Entware .ipk bundle (AI-56): the full dependency closure for sudo and
+# lighttpd, staged by the builder workflow into dependencies/entware/ (the sudo
+# .ipk is pre-patched there so its ELF loader/RPATH point at /usrdata/opt and it
+# keeps setuid). Copied verbatim so the device installer can come up with no
+# WAN. Optional — a local dev build that has not fetched the set just omits it
+# and the installer falls back to downloading from bin.entware.net.
+if [ -d "$DEPS_DIR/entware" ]; then
+    mkdir -p "$STAGING_DIR/dependencies/entware"
+    cp "$DEPS_DIR/entware"/*.ipk "$STAGING_DIR/dependencies/entware/" 2>/dev/null || true
+    step "Bundled $(ls "$STAGING_DIR/dependencies/entware"/*.ipk 2>/dev/null | wc -l) offline Entware package(s)"
+fi
+
 if [ -f "$ROOT_DIR/build-discord-bot.sh" ] && command -v go >/dev/null 2>&1; then
     step "Building Discord bot..."
     ( cd "$ROOT_DIR" && ./build-discord-bot.sh ) || fail "build-discord-bot.sh failed"
