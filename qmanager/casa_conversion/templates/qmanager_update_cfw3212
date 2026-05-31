@@ -90,6 +90,16 @@ checksum_name_for_tag() {
     printf 'qmanager-cfw3212-%s.sha256' "$1"
 }
 
+# Pre-99c5c47 releases carry the upstream-only asset name. Accept these too
+# so rollback to an older build can still be downloaded.
+asset_name_old_for_tag() {
+    printf 'qmanager-cfw3212-%s.tar.gz' "$(strip_casa_suffix "$1")"
+}
+
+checksum_name_old_for_tag() {
+    printf 'qmanager-cfw3212-%s.sha256' "$(strip_casa_suffix "$1")"
+}
+
 validate_release_url() {
     local url="$1" tag="$2" name="$3"
     [ "$url" = "https://github.com/$PACKAGE_REPO/releases/download/$tag/$name" ]
@@ -108,26 +118,48 @@ if [ "$MODE" = "download" ]; then
     VERSION="$4"
 
     validate_tag "$VERSION" || die "Invalid Casa release tag"
-    TAR_NAME="$(asset_name_for_tag "$VERSION")"
-    SHA_NAME="$(checksum_name_for_tag "$VERSION")"
-    validate_release_url "$URL" "$VERSION" "$TAR_NAME" || die "Invalid Casa package URL"
-    validate_release_url "$CHECKSUM_URL" "$VERSION" "$SHA_NAME" || die "Invalid Casa checksum URL"
 
     work_dir="/tmp/qmanager_update_stage"
     rm -rf "$work_dir"
     mkdir -p "$work_dir" || die "Could not create update work directory"
 
-    write_status "downloading" "Downloading Casa QManager ${VERSION}..." "$VERSION" ""
-    log "Downloading $URL"
-    if ! http_download "$URL" "$work_dir/$TAR_NAME"; then
-        die "Download failed. Check the router internet connection."
-    fi
+    # Resolve the release asset name. Builds from 99c5c47 on carry the full
+    # Casa tag (qmanager-cfw3212-<tag>.tar.gz); older releases carry the
+    # upstream-only name (qmanager-cfw3212-<upstream>.tar.gz). Try the new
+    # name first, then fall back to the old one so rollback to older builds
+    # works. The URL is rebuilt from PACKAGE_REPO + the validated tag, so the
+    # CGI-supplied $URL/$CHECKSUM_URL are not trusted for the fetch target.
+    fetched=0
+    for era in new old; do
+        if [ "$era" = "new" ]; then
+            TAR_NAME="$(asset_name_for_tag "$VERSION")"
+            SHA_NAME="$(checksum_name_for_tag "$VERSION")"
+        else
+            TAR_NAME="$(asset_name_old_for_tag "$VERSION")"
+            SHA_NAME="$(checksum_name_old_for_tag "$VERSION")"
+        fi
+        tar_url="https://github.com/$PACKAGE_REPO/releases/download/$VERSION/$TAR_NAME"
+        sha_url="https://github.com/$PACKAGE_REPO/releases/download/$VERSION/$SHA_NAME"
 
-    write_status "verifying" "Downloading and verifying SHA-256..." "$VERSION" ""
-    log "Downloading $CHECKSUM_URL"
-    if ! http_download "$CHECKSUM_URL" "$work_dir/$SHA_NAME" 30; then
-        die "Checksum file download failed. Refusing to install unverified package."
-    fi
+        write_status "downloading" "Downloading Casa QManager ${VERSION}..." "$VERSION" ""
+        log "Downloading $tar_url"
+        if ! http_download "$tar_url" "$work_dir/$TAR_NAME"; then
+            log "Tarball not found for era=$era ($TAR_NAME); trying next naming"
+            continue
+        fi
+
+        write_status "verifying" "Downloading and verifying SHA-256..." "$VERSION" ""
+        log "Downloading $sha_url"
+        if ! http_download "$sha_url" "$work_dir/$SHA_NAME" 30; then
+            log "Checksum not found for era=$era ($SHA_NAME); trying next naming"
+            rm -f "$work_dir/$TAR_NAME"
+            continue
+        fi
+
+        fetched=1
+        break
+    done
+    [ "$fetched" = "1" ] || die "Download failed. Check the router internet connection."
 
     if ! ( cd "$work_dir" && sha256sum -c "$SHA_NAME" >/dev/null 2>&1 ); then
         die "SHA-256 mismatch. Refusing to install package."

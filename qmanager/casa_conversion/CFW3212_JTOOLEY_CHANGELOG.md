@@ -16,6 +16,10 @@
 - Software Update → Version Management can now install a different version (including rollbacks). After the download verifies, the Install button switches to "Install Now" so the staged package actually gets applied instead of being left on disk.
 - A handful of upstream modem-management actions stay blocked or limited on Casa because they'd let you push the modem into a state we don't want it in.
 
+## v0.1.12-cfw3212.16
+
+- Software Update → Version Management lists older releases again, so you can roll back to a previous build from the UI. Build .15 changed the package filename to include the full build number, but the in-UI version list only recognized that new naming — so right after the change only the newest build (.15) showed up and there was nothing to roll back to. The version list, the size shown for each version, and the rollback download now accept both filename styles (the new full-build-number name and the older upstream-only name), so the full history of installable builds appears again. Note: a router only shows this restored history once it's running a build that includes this fix (.16 or later); an older install still reaches .16 by a one-line/offline install first.
+
 ## v0.1.12-cfw3212.15
 
 - Offline install on a clean stock router now works end to end. Previously, installing without internet ("Method 2") would stop early with `Could not resolve host: bin.entware.net`, because the web server (`lighttpd`), `sudo`, and their support libraries were downloaded during install rather than shipped in the package — only `jq` was bundled. The package now carries the full set of these components inside it, so a router with no SIM/WAN can install completely. Routers that do have internet still work the same way, falling back to downloading only if a bundled piece is somehow missing.

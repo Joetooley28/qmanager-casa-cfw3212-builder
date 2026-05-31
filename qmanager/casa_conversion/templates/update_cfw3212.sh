@@ -123,6 +123,17 @@ checksum_name_for_tag() {
     printf 'qmanager-cfw3212-%s.sha256' "$1"
 }
 
+# Pre-99c5c47 releases named assets after the upstream version only
+# (e.g. qmanager-cfw3212-v0.1.12.tar.gz, shared across every build of that
+# upstream). Accept these too so older releases stay installable for rollback.
+asset_name_old_for_tag() {
+    printf 'qmanager-cfw3212-%s.tar.gz' "$(strip_casa_suffix "$1")"
+}
+
+checksum_name_old_for_tag() {
+    printf 'qmanager-cfw3212-%s.sha256' "$(strip_casa_suffix "$1")"
+}
+
 changelog_name_for_tag() {
     local tag="$1"
     printf 'qmanager-cfw3212-%s-changelog.json' "$tag"
@@ -253,10 +264,13 @@ if [ "$REQUEST_METHOD" = "GET" ]; then
       | select(.tag_name | startswith("v"))
       | select(.tag_name | contains("-cfw3212."))
       | . as $rel
-      | ("qmanager-cfw3212-" + $rel.tag_name + ".tar.gz") as $tar
-      | ("qmanager-cfw3212-" + $rel.tag_name + ".sha256") as $sha
-      | select(any($rel.assets[]?; .name == $tar))
-      | select(any($rel.assets[]?; .name == $sha))
+      | ($rel.tag_name | sub("-cfw3212\\.[0-9]+$"; "")) as $up
+      | ("qmanager-cfw3212-" + $rel.tag_name + ".tar.gz") as $tar_new
+      | ("qmanager-cfw3212-" + $rel.tag_name + ".sha256") as $sha_new
+      | ("qmanager-cfw3212-" + $up + ".tar.gz") as $tar_old
+      | ("qmanager-cfw3212-" + $up + ".sha256") as $sha_old
+      | select(any($rel.assets[]?; .name == $tar_new) or any($rel.assets[]?; .name == $tar_old))
+      | select(any($rel.assets[]?; .name == $sha_new) or any($rel.assets[]?; .name == $sha_old))
     ]'
 
     releases=$(printf '%s' "$api_response" | jq "$casa_filter" 2>/dev/null)
@@ -319,7 +333,7 @@ if [ "$REQUEST_METHOD" = "GET" ]; then
         '[ .[] | .tag_name as $t | {
             tag: .tag_name,
             has_assets: true,
-            asset_size: (([ .assets[] | select(.name == ("qmanager-cfw3212-" + $t + ".tar.gz")) ][0].size // 0) / 1048576 * 10 | floor / 10 | tostring + " MB"),
+            asset_size: (((([ .assets[] | select(.name == ("qmanager-cfw3212-" + $t + ".tar.gz")) ][0].size) // ([ .assets[] | select(.name == ("qmanager-cfw3212-" + ($t | sub("-cfw3212\\.[0-9]+$"; "")) + ".tar.gz")) ][0].size) // 0) / 1048576 * 10 | floor / 10 | tostring + " MB")),
             is_current: (.tag_name == $cv)
         }]')
 
@@ -327,8 +341,7 @@ if [ "$REQUEST_METHOD" = "GET" ]; then
     download_size=""
     if [ -n "$latest_tag" ]; then
         download_url="$(download_url_for_tag "$latest_tag")"
-        latest_asset="qmanager-cfw3212-${latest_tag}.tar.gz"
-        download_size=$(printf '%s' "$releases" | jq -r --arg asset "$latest_asset" '.[0].assets[] | select(.name == $asset) | (.size / 1048576 * 10 | floor / 10 | tostring + " MB")' 2>/dev/null | head -n1)
+        download_size=$(printf '%s' "$releases" | jq -r --arg t "$latest_tag" '(([ .[0].assets[] | select(.name == ("qmanager-cfw3212-" + $t + ".tar.gz")) ][0].size) // ([ .[0].assets[] | select(.name == ("qmanager-cfw3212-" + ($t | sub("-cfw3212\\.[0-9]+$"; "")) + ".tar.gz")) ][0].size)) as $sz | if $sz then ($sz / 1048576 * 10 | floor / 10 | tostring + " MB") else "" end' 2>/dev/null | head -n1)
     fi
 
     update_available="false"
