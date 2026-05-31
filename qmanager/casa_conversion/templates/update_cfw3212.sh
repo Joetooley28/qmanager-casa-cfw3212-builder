@@ -264,7 +264,7 @@ if [ "$REQUEST_METHOD" = "GET" ]; then
       | select(.tag_name | startswith("v"))
       | select(.tag_name | contains("-cfw3212."))
       | . as $rel
-      | ($rel.tag_name | sub("-cfw3212\\.[0-9]+$"; "")) as $up
+      | ($rel.tag_name | split("-cfw3212.")[0]) as $up
       | ("qmanager-cfw3212-" + $rel.tag_name + ".tar.gz") as $tar_new
       | ("qmanager-cfw3212-" + $rel.tag_name + ".sha256") as $sha_new
       | ("qmanager-cfw3212-" + $up + ".tar.gz") as $tar_old
@@ -333,7 +333,7 @@ if [ "$REQUEST_METHOD" = "GET" ]; then
         '[ .[] | .tag_name as $t | {
             tag: .tag_name,
             has_assets: true,
-            asset_size: (((([ .assets[] | select(.name == ("qmanager-cfw3212-" + $t + ".tar.gz")) ][0].size) // ([ .assets[] | select(.name == ("qmanager-cfw3212-" + ($t | sub("-cfw3212\\.[0-9]+$"; "")) + ".tar.gz")) ][0].size) // 0) / 1048576 * 10 | floor / 10 | tostring + " MB")),
+            asset_size: (((([ .assets[] | select(.name == ("qmanager-cfw3212-" + $t + ".tar.gz")) ][0].size) // ([ .assets[] | select(.name == ("qmanager-cfw3212-" + ($t | split("-cfw3212.")[0]) + ".tar.gz")) ][0].size) // 0) / 1048576 * 10 | floor / 10 | tostring + " MB")),
             is_current: (.tag_name == $cv)
         }]')
 
@@ -341,7 +341,7 @@ if [ "$REQUEST_METHOD" = "GET" ]; then
     download_size=""
     if [ -n "$latest_tag" ]; then
         download_url="$(download_url_for_tag "$latest_tag")"
-        download_size=$(printf '%s' "$releases" | jq -r --arg t "$latest_tag" '(([ .[0].assets[] | select(.name == ("qmanager-cfw3212-" + $t + ".tar.gz")) ][0].size) // ([ .[0].assets[] | select(.name == ("qmanager-cfw3212-" + ($t | sub("-cfw3212\\.[0-9]+$"; "")) + ".tar.gz")) ][0].size)) as $sz | if $sz then ($sz / 1048576 * 10 | floor / 10 | tostring + " MB") else "" end' 2>/dev/null | head -n1)
+        download_size=$(printf '%s' "$releases" | jq -r --arg t "$latest_tag" '(([ .[0].assets[] | select(.name == ("qmanager-cfw3212-" + $t + ".tar.gz")) ][0].size) // ([ .[0].assets[] | select(.name == ("qmanager-cfw3212-" + ($t | split("-cfw3212.")[0]) + ".tar.gz")) ][0].size)) as $sz | if $sz then ($sz / 1048576 * 10 | floor / 10 | tostring + " MB") else "" end' 2>/dev/null | head -n1)
     fi
 
     update_available="false"
