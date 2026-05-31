@@ -8,9 +8,9 @@ on:
         required: true
         default: latest
       casa_build:
-        description: Casa build suffix number
+        description: "Casa build suffix: enter a number (e.g. 17), or next to auto-pick highest published + 1 for the selected upstream"
         required: true
-        default: "7"
+        default: next
       dry_run:
         description: Build and stage assets without publishing
         required: true
@@ -60,7 +60,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       INPUT_UPSTREAM_VERSION: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.upstream_version || 'latest' }}
-      INPUT_CASA_BUILD: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.casa_build || '1' }}
+      INPUT_CASA_BUILD: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.casa_build || 'next' }}
       INPUT_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.dry_run || 'true' }}
       INPUT_FORCE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.force || 'false' }}
       INPUT_CREATE_RELEASE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.create_release || 'false' }}
@@ -103,11 +103,7 @@ jobs:
           set -euo pipefail
 
           requested="${INPUT_UPSTREAM_VERSION:-latest}"
-          casa_build="${INPUT_CASA_BUILD:-1}"
-
-          case "$casa_build" in
-            ''|*[!0-9]*) echo "casa_build must be a positive integer" >&2; exit 1 ;;
-          esac
+          casa_build_input="${INPUT_CASA_BUILD:-next}"
 
           gh api "repos/${UPSTREAM_REPO_SLUG}/releases?per_page=100" > "$RUNNER_TEMP/upstream-releases.json"
 
@@ -147,6 +143,40 @@ jobs:
           PY
 
           . "$RUNNER_TEMP/resolve.env"
+
+          casa_build=""
+          case "${casa_build_input,,}" in
+            next|auto|'')
+              gh api "repos/${PACKAGE_REPO}/releases?per_page=100" > "$RUNNER_TEMP/package-releases.json"
+              casa_build="$(
+                python3 - "$RUNNER_TEMP/package-releases.json" "$upstream_tag" <<'PY'
+          import json
+          import re
+          import sys
+          from pathlib import Path
+
+          releases = json.loads(Path(sys.argv[1]).read_text())
+          upstream = sys.argv[2]
+          max_build = 0
+          for rel in releases:
+              tag = rel.get("tag_name") or ""
+              match = re.fullmatch(r"(v\d+\.\d+\.\d+)-cfw3212\.(\d+)", tag)
+              if match and match.group(1) == upstream:
+                  max_build = max(max_build, int(match.group(2)))
+          print(max_build + 1)
+          PY
+              )"
+              echo "casa_build input '${casa_build_input}' resolved to ${casa_build} (next after highest ${upstream_tag}-cfw3212.* in ${PACKAGE_REPO})"
+              ;;
+            *)
+              casa_build="$casa_build_input"
+              case "$casa_build" in
+                ''|*[!0-9]*) echo "casa_build must be a positive integer or 'next'" >&2; exit 1 ;;
+              esac
+              echo "casa_build input '${casa_build_input}' used as-is (manual override)"
+              ;;
+          esac
+
           casa_tag="${upstream_tag}-cfw3212.${casa_build}"
           tar_name="qmanager-cfw3212-${casa_tag}.tar.gz"
           sha_name="qmanager-cfw3212-${casa_tag}.sha256"
