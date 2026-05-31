@@ -21,6 +21,7 @@
 - Software Update → Version Management works with the router's bundled `jq` build again. The `.16` rollback-history filter used a regex helper that is not available on the router, which could leave the version dropdown empty. The filter now uses a compatible literal split instead.
 - Uninstall cleanup now restores Casa's stock masked `lighttpd` state after removing the QManager web service override.
 - `--purge` cleanup now removes QManager-owned sudoers include residue and removes `/opt` only when it is the QManager-created shortcut to `/usrdata/opt`.
+- Installs now start the Casa firewall service immediately, so curl installs, offline installs, and in-UI updates all finish in the same ready state without waiting for a reboot.
 
 ## v0.1.12-cfw3212.16
 

@@ -1426,6 +1426,10 @@ find "$LIB_DIR" -name "*.sh" -exec chmod 644 {} \; 2>/dev/null || true
 step "Starting QManager services"
 write_update_status "Restarting QManager services..."
 
+systemctl start qmanager-firewall 2>/dev/null \
+    && info "qmanager-firewall started" \
+    || warn "qmanager-firewall had issues — check: systemctl status qmanager-firewall"
+
 systemctl start qmanager-setup 2>/dev/null \
     && info "qmanager-setup done" \
     || warn "qmanager-setup had issues — check: systemctl status qmanager-setup"
