@@ -149,7 +149,9 @@ export function useSoftwareUpdate(): UseSoftwareUpdateReturn {
     setError(null);
 
     try {
-      const resp = await authFetch(CGI_ENDPOINT);
+      // Mount uses cached GitHub data; "Check for Updates" passes refresh=1.
+      const refreshParam = silent ? "?refresh=1" : "";
+      const resp = await authFetch(`${CGI_ENDPOINT}${refreshParam}`);
       if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${resp.statusText}`);
 
       const json = await resp.json();

@@ -45,6 +45,37 @@ ensure_update_config() {
     command -v qm_config_init >/dev/null 2>&1 && qm_config_init || true
 }
 
+# GitHub release list + changelog fetches are slow on-router (~30–60s cold).
+# Cache API/processed lists briefly; cache per-tag changelogs longer. Pass
+# ?refresh=1 (Software Update → Check for Updates) to bypass.
+RELEASES_API_CACHE="/tmp/qm_cfw3212_releases_api.json"
+RELEASES_API_CACHE_HDR="/tmp/qm_cfw3212_releases_api.headers"
+RELEASES_API_CACHE_TTL=300
+RELEASES_PROCESSED_CACHE="/tmp/qm_cfw3212_releases_processed.json"
+RELEASES_PROCESSED_CACHE_TTL=300
+CHANGELOG_CACHE_DIR="/tmp/qm_cfw3212_changelog_cache"
+CHANGELOG_CACHE_TTL=3600
+
+cache_mtime_age() {
+    local f="$1"
+    [ -f "$f" ] || return 1
+    echo $(($(date +%s) - $(stat -c %Y "$f" 2>/dev/null || echo 0)))
+}
+
+cache_is_fresh() {
+    local file="$1" ttl="$2"
+    [ -f "$file" ] || return 1
+    [ "$(cache_mtime_age "$file")" -lt "$ttl" ]
+}
+
+invalidate_update_release_caches() {
+    rm -f "$RELEASES_API_CACHE" "$RELEASES_API_CACHE_HDR" "$RELEASES_PROCESSED_CACHE"
+}
+
+query_requests_refresh() {
+    echo "$QUERY_STRING" | grep -qE '(^|&)refresh=1(&|$)'
+}
+
 http_api_fetch() {
     local url="$1" out_file="$2" header_file="$3" timeout="${4:-20}"
     if command -v curl >/dev/null 2>&1; then
@@ -172,8 +203,17 @@ changelog_url_for_tag() {
 }
 
 fetch_changelog_for_tag() {
-    local tag="$1" out_file="$2" tmp_body tmp_headers url
+    local tag="$1" out_file="$2" tmp_body tmp_headers url cache_file
     [ -n "$tag" ] || { printf '{}\n' > "$out_file"; return 0; }
+
+    mkdir -p "$CHANGELOG_CACHE_DIR" 2>/dev/null || true
+    cache_file="$CHANGELOG_CACHE_DIR/${tag}.json"
+    if [ "${QM_UPDATE_FORCE_REFRESH:-0}" = "0" ] \
+        && cache_is_fresh "$cache_file" "$CHANGELOG_CACHE_TTL" \
+        && jq -e 'type == "object"' "$cache_file" >/dev/null 2>&1; then
+        cp "$cache_file" "$out_file" 2>/dev/null || printf '{}\n' > "$out_file"
+        return 0
+    fi
 
     tmp_body="/tmp/qm_cfw3212_changelog_${tag}.json"
     tmp_headers="/tmp/qm_cfw3212_changelog_${tag}.headers"
@@ -183,6 +223,7 @@ fetch_changelog_for_tag() {
     if http_api_fetch "$url" "$tmp_body" "$tmp_headers" 15 \
         && jq -e 'type == "object"' "$tmp_body" >/dev/null 2>&1; then
         cp "$tmp_body" "$out_file" 2>/dev/null || printf '{}\n' > "$out_file"
+        cp "$tmp_body" "$cache_file" 2>/dev/null || true
     else
         printf '{}\n' > "$out_file"
     fi
@@ -221,54 +262,86 @@ if [ "$REQUEST_METHOD" = "GET" ]; then
     include_prerelease=$(qm_update_get include_prerelease 1)
     auto_time=$(qm_update_get auto_update_time "03:00")
     include_prerelease_json="$( [ "$include_prerelease" = "1" ] && echo true || echo false )"
+    if query_requests_refresh; then
+        QM_UPDATE_FORCE_REFRESH=1
+        invalidate_update_release_caches
+    else
+        QM_UPDATE_FORCE_REFRESH=0
+    fi
 
     api_url="https://api.github.com/repos/$PACKAGE_REPO/releases"
     tmp_body="/tmp/qm_cfw3212_update_api_body.json"
     tmp_headers="/tmp/qm_cfw3212_update_api_headers.txt"
-    rm -f "$tmp_body" "$tmp_headers"
+    releases=""
+    releases_from_cache=0
 
-    if ! http_api_fetch "$api_url" "$tmp_body" "$tmp_headers"; then
-        rm -f "$tmp_body" "$tmp_headers"
-        jq -n \
-            --arg cv "$current_version" \
-            --argjson include_prerelease_bool "$include_prerelease_json" \
-            --arg auto_time "$auto_time" \
-            '{
-                success: true, current_version: $cv,
-                latest_version: null, update_available: false,
-                changelog: null, current_changelog: null,
-                download_url: null, download_size: null,
-                available_versions: [], download_state: null,
-                include_prerelease: $include_prerelease_bool,
-                auto_update_enabled: false,
-                auto_update_time: $auto_time,
-                check_error: "Unable to check Casa package releases. Confirm the package repo is public and the router has internet."
-            }'
-        exit 0
+    if [ "$QM_UPDATE_FORCE_REFRESH" = "0" ] \
+        && cache_is_fresh "$RELEASES_PROCESSED_CACHE" "$RELEASES_PROCESSED_CACHE_TTL" \
+        && jq -e --argjson ip "$include_prerelease_json" \
+            '.include_prerelease == $ip and (.releases | type) == "array"' \
+            "$RELEASES_PROCESSED_CACHE" >/dev/null 2>&1; then
+        releases=$(jq -c '.releases' "$RELEASES_PROCESSED_CACHE" 2>/dev/null)
+        [ -n "$releases" ] || releases="[]"
+        releases_from_cache=1
     fi
 
-    if grep -qi "403 Forbidden\|HTTP/[0-9.]* 403" "$tmp_headers" 2>/dev/null; then
-        rm -f "$tmp_body" "$tmp_headers"
-        jq -n \
-            --arg cv "$current_version" \
-            --argjson include_prerelease_bool "$include_prerelease_json" \
-            --arg auto_time "$auto_time" \
-            '{
-                success: true, current_version: $cv,
-                latest_version: null, update_available: false,
-                changelog: null, current_changelog: null,
-                download_url: null, download_size: null,
-                available_versions: [], download_state: null,
-                include_prerelease: $include_prerelease_bool,
-                auto_update_enabled: false,
-                auto_update_time: $auto_time,
-                check_error: "GitHub rate limit or access error while checking Casa package releases."
-            }'
-        exit 0
-    fi
+    if [ "$releases_from_cache" = "0" ]; then
+        api_fetch_ok=0
+        if [ "$QM_UPDATE_FORCE_REFRESH" = "0" ] \
+            && cache_is_fresh "$RELEASES_API_CACHE" "$RELEASES_API_CACHE_TTL"; then
+            cp "$RELEASES_API_CACHE" "$tmp_body" 2>/dev/null \
+                && cp "$RELEASES_API_CACHE_HDR" "$tmp_headers" 2>/dev/null \
+                && api_fetch_ok=1
+        fi
+        if [ "$api_fetch_ok" = "0" ]; then
+            rm -f "$tmp_body" "$tmp_headers"
+            if ! http_api_fetch "$api_url" "$tmp_body" "$tmp_headers"; then
+                rm -f "$tmp_body" "$tmp_headers"
+                invalidate_update_release_caches
+                jq -n \
+                    --arg cv "$current_version" \
+                    --argjson include_prerelease_bool "$include_prerelease_json" \
+                    --arg auto_time "$auto_time" \
+                    '{
+                        success: true, current_version: $cv,
+                        latest_version: null, update_available: false,
+                        changelog: null, current_changelog: null,
+                        download_url: null, download_size: null,
+                        available_versions: [], download_state: null,
+                        include_prerelease: $include_prerelease_bool,
+                        auto_update_enabled: false,
+                        auto_update_time: $auto_time,
+                        check_error: "Unable to check Casa package releases. Confirm the package repo is public and the router has internet."
+                    }'
+                exit 0
+            fi
+            cp "$tmp_body" "$RELEASES_API_CACHE" 2>/dev/null || true
+            cp "$tmp_headers" "$RELEASES_API_CACHE_HDR" 2>/dev/null || true
+        fi
 
-    api_response=$(cat "$tmp_body" 2>/dev/null)
-    rm -f "$tmp_body" "$tmp_headers"
+        if grep -qi "403 Forbidden\|HTTP/[0-9.]* 403" "$tmp_headers" 2>/dev/null; then
+            rm -f "$tmp_body" "$tmp_headers"
+            invalidate_update_release_caches
+            jq -n \
+                --arg cv "$current_version" \
+                --argjson include_prerelease_bool "$include_prerelease_json" \
+                --arg auto_time "$auto_time" \
+                '{
+                    success: true, current_version: $cv,
+                    latest_version: null, update_available: false,
+                    changelog: null, current_changelog: null,
+                    download_url: null, download_size: null,
+                    available_versions: [], download_state: null,
+                    include_prerelease: $include_prerelease_bool,
+                    auto_update_enabled: false,
+                    auto_update_time: $auto_time,
+                    check_error: "GitHub rate limit or access error while checking Casa package releases."
+                }'
+            exit 0
+        fi
+
+        api_response=$(cat "$tmp_body" 2>/dev/null)
+        rm -f "$tmp_body" "$tmp_headers"
 
     # Only Casa package releases are considered installable.
     # language-packs and upstream QManager assets are intentionally ignored.
@@ -305,7 +378,14 @@ if [ "$REQUEST_METHOD" = "GET" ]; then
         (.tag_name | split("-cfw3212.")[1] | split(".")[0] | tonumber? // 0),
         (if (.tag_name | split("-cfw3212.")[1] | contains(".")) then 0 else 1 end)
       ]) | reverse' 2>/dev/null)
-    [ -n "$releases" ] || releases="[]"
+        [ -n "$releases" ] || releases="[]"
+
+        jq -n \
+            --argjson releases "$releases" \
+            --argjson include_prerelease_bool "$include_prerelease_json" \
+            '{include_prerelease: $include_prerelease_bool, releases: $releases}' \
+            > "$RELEASES_PROCESSED_CACHE" 2>/dev/null || true
+    fi
 
     latest_tag=$(printf '%s' "$releases" | jq -r '.[0].tag_name // empty')
     changelog=$(printf '%s' "$releases" | jq -r '.[0].body // empty')
@@ -418,6 +498,7 @@ if [ "$REQUEST_METHOD" = "POST" ]; then
         else
             qm_update_set include_prerelease 0
         fi
+        invalidate_update_release_caches
         cgi_success
         exit 0
     fi

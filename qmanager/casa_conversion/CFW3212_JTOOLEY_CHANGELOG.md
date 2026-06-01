@@ -16,6 +16,10 @@
 - Software Update → Version Management can now install a different version (including rollbacks). After the download verifies, the Install button switches to "Install Now" so the staged package actually gets applied instead of being left on disk.
 - A handful of upstream modem-management actions stay blocked or limited on Casa because they'd let you push the modem into a state we don't want it in.
 
+## v0.1.12-cfw3212.19.dev
+
+- Software Update loads much faster when you revisit the page: the router caches the GitHub release list and changelog JSON for a few minutes instead of refetching everything on every tab visit. **Check for Updates** still forces a fresh check.
+
 ## v0.1.12-cfw3212.18.dev
 
 - Software Update → Version Management no longer shows a duplicate **Install Now** in the staged-ready banner (install from the version dropdown row).
