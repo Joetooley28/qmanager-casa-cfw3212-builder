@@ -16,15 +16,14 @@
 - Software Update → Version Management can now install a different version (including rollbacks). After the download verifies, the Install button switches to "Install Now" so the staged package actually gets applied instead of being left on disk.
 - A handful of upstream modem-management actions stay blocked or limited on Casa because they'd let you push the modem into a state we don't want it in.
 
-## v0.1.12-cfw3212.19.dev
-
-- Software Update now **auto-checks for updates** when you open the page (latest version and release notes card, without loading the full version dropdown).
-- **Version Management** uses a separate **Load saved version list** button (instant from router cache). **Refresh from GitHub** rebuilds the dropdown when you need the newest list.
-
 ## v0.1.12-cfw3212.18.dev
 
+**Testing build** — dev-channel sideload only (not published to the official package repo). Safe to try on a lab router; report anything odd on Software Update.
+
+- Software Update again works like **v0.1.12-cfw3212.16**: one check on page load fills in **Current Release Notes** (Joetooley / Rus | Ame toggle) and the **version dropdown** together. **Check for Updates** forces a fresh GitHub pull.
+- Release notes on `.dev` installs pull changelog text from the nearest official Casa build when the `.dev` tag has no package changelog asset yet.
 - Software Update → Version Management no longer shows a duplicate **Install Now** in the staged-ready banner (install from the version dropdown row).
-- Dev-channel Casa packages are tagged with a `.dev` suffix (for example `v0.1.12-cfw3212.18.dev`). When you are on a `.dev` build, the matching official tag without `.dev` (for example `v0.1.12-cfw3212.18`) appears as an available update.
+- Dev-channel packages use a `.dev` suffix (for example `v0.1.12-cfw3212.18.dev`). The matching official tag without `.dev` (for example `v0.1.12-cfw3212.18`) can still appear as an available update when published.
 
 ## v0.1.12-cfw3212.17
 
