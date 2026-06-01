@@ -301,28 +301,9 @@ if [ "$REQUEST_METHOD" = "GET" ]; then
     include_prerelease=$(qm_update_get include_prerelease 1)
     auto_time=$(qm_update_get auto_update_time "03:00")
     include_prerelease_json="$( [ "$include_prerelease" = "1" ] && echo true || echo false )"
-    # check = latest-version probe (auto on page load). versions = dropdown list (cached).
-    [ -z "$action" ] && action=check
-    UPDATE_SKIP_CHANGELOGS=0
-    UPDATE_SKIP_VERSION_LIST=0
-    UPDATE_VERSIONS_CACHE_ONLY=0
-    case "$action" in
-        check)
-            UPDATE_SKIP_VERSION_LIST=1
-            ;;
-        versions)
-            UPDATE_SKIP_CHANGELOGS=1
-            UPDATE_VERSIONS_CACHE_ONLY=1
-            ;;
-        *)
-            action=check
-            UPDATE_SKIP_VERSION_LIST=1
-            ;;
-    esac
     if query_requests_refresh; then
         QM_UPDATE_FORCE_REFRESH=1
         invalidate_update_release_caches
-        UPDATE_VERSIONS_CACHE_ONLY=0
     else
         QM_UPDATE_FORCE_REFRESH=0
     fi
@@ -439,19 +420,6 @@ if [ "$REQUEST_METHOD" = "GET" ]; then
             > "$RELEASES_PROCESSED_CACHE" 2>/dev/null || true
     fi
 
-    if [ "$UPDATE_VERSIONS_CACHE_ONLY" = "1" ] && [ "$releases_from_cache" = "0" ]; then
-        jq -n \
-            --argjson include_prerelease_bool "$include_prerelease_json" \
-            '{
-                success: true,
-                available_versions: [],
-                versions_from_cache: false,
-                versions_cache_miss: true,
-                include_prerelease: $include_prerelease_bool
-            }'
-        exit 0
-    fi
-
     latest_tag=$(printf '%s' "$releases" | jq -r '.[0].tag_name // empty')
     changelog=""
     current_changelog=""
@@ -460,25 +428,23 @@ if [ "$REQUEST_METHOD" = "GET" ]; then
     upstream_release_url=""
     current_joetooley_changelog=""
     current_upstream_changelog=""
-    if [ "$UPDATE_SKIP_CHANGELOGS" != "1" ]; then
-        changelog=$(printf '%s' "$releases" | jq -r '.[0].body // empty')
-        current_changelog=$(printf '%s' "$releases" | jq -r --arg cv "$current_version" '[ .[] | select(.tag_name == $cv) ][0].body // empty')
+    changelog=$(printf '%s' "$releases" | jq -r '.[0].body // empty')
+    current_changelog=$(printf '%s' "$releases" | jq -r --arg cv "$current_version" '[ .[] | select(.tag_name == $cv) ][0].body // empty')
 
-        latest_changelog_json="/tmp/qm_cfw3212_latest_changelog.json"
-        current_changelog_json="/tmp/qm_cfw3212_current_changelog.json"
-        fetch_changelog_for_tag "$latest_tag" "$latest_changelog_json" "$releases"
-        if [ "$current_version" = "$latest_tag" ]; then
-            cp "$latest_changelog_json" "$current_changelog_json" 2>/dev/null || printf '{}\n' > "$current_changelog_json"
-        else
-            fetch_changelog_for_tag "$current_version" "$current_changelog_json" "$releases"
-        fi
-        joetooley_changelog=$(jq -r '.joetooley_notes // empty' "$latest_changelog_json" 2>/dev/null)
-        upstream_changelog=$(jq -r '.upstream_notes // empty' "$latest_changelog_json" 2>/dev/null)
-        upstream_release_url=$(jq -r '.upstream_release_url // empty' "$latest_changelog_json" 2>/dev/null)
-        current_joetooley_changelog=$(jq -r '.joetooley_notes // empty' "$current_changelog_json" 2>/dev/null)
-        current_upstream_changelog=$(jq -r '.upstream_notes // empty' "$current_changelog_json" 2>/dev/null)
-        rm -f "$latest_changelog_json" "$current_changelog_json"
+    latest_changelog_json="/tmp/qm_cfw3212_latest_changelog.json"
+    current_changelog_json="/tmp/qm_cfw3212_current_changelog.json"
+    fetch_changelog_for_tag "$latest_tag" "$latest_changelog_json" "$releases"
+    if [ "$current_version" = "$latest_tag" ]; then
+        cp "$latest_changelog_json" "$current_changelog_json" 2>/dev/null || printf '{}\n' > "$current_changelog_json"
+    else
+        fetch_changelog_for_tag "$current_version" "$current_changelog_json" "$releases"
     fi
+    joetooley_changelog=$(jq -r '.joetooley_notes // empty' "$latest_changelog_json" 2>/dev/null)
+    upstream_changelog=$(jq -r '.upstream_notes // empty' "$latest_changelog_json" 2>/dev/null)
+    upstream_release_url=$(jq -r '.upstream_release_url // empty' "$latest_changelog_json" 2>/dev/null)
+    current_joetooley_changelog=$(jq -r '.joetooley_notes // empty' "$current_changelog_json" 2>/dev/null)
+    current_upstream_changelog=$(jq -r '.upstream_notes // empty' "$current_changelog_json" 2>/dev/null)
+    rm -f "$latest_changelog_json" "$current_changelog_json"
 
     download_state="null"
     if [ -f "$PID_FILE" ]; then
@@ -497,35 +463,14 @@ if [ "$REQUEST_METHOD" = "GET" ]; then
             '{status: $status, version: $version, message: $message, size: $size}')
     fi
 
-    if [ "$UPDATE_SKIP_VERSION_LIST" = "1" ]; then
-        available_versions='[]'
-    else
-        available_versions=$(printf '%s' "$releases" | jq \
-            --arg cv "$current_version" \
-            '[ .[] | .tag_name as $t | {
-                tag: .tag_name,
-                has_assets: true,
-                asset_size: (((([ .assets[] | select(.name == ("qmanager-cfw3212-" + $t + ".tar.gz")) ][0].size) // ([ .assets[] | select(.name == ("qmanager-cfw3212-" + ($t | split("-cfw3212.")[0]) + ".tar.gz")) ][0].size) // 0) / 1048576 * 10 | floor / 10 | tostring + " MB")),
-                is_current: (.tag_name == $cv)
-            }]')
-    fi
-
-    if [ "$action" = "versions" ]; then
-        versions_from_cache_json=false
-        [ "$releases_from_cache" = "1" ] && versions_from_cache_json=true
-        jq -n \
-            --argjson av "$available_versions" \
-            --argjson include_prerelease_bool "$include_prerelease_json" \
-            --argjson versions_from_cache "$versions_from_cache_json" \
-            '{
-                success: true,
-                available_versions: $av,
-                versions_from_cache: $versions_from_cache,
-                versions_cache_miss: false,
-                include_prerelease: $include_prerelease_bool
-            }'
-        exit 0
-    fi
+    available_versions=$(printf '%s' "$releases" | jq \
+        --arg cv "$current_version" \
+        '[ .[] | .tag_name as $t | {
+            tag: .tag_name,
+            has_assets: true,
+            asset_size: (((([ .assets[] | select(.name == ("qmanager-cfw3212-" + $t + ".tar.gz")) ][0].size) // ([ .assets[] | select(.name == ("qmanager-cfw3212-" + ($t | split("-cfw3212.")[0]) + ".tar.gz")) ][0].size) // 0) / 1048576 * 10 | floor / 10 | tostring + " MB")),
+            is_current: (.tag_name == $cv)
+        }]')
 
     download_url=""
     download_size=""

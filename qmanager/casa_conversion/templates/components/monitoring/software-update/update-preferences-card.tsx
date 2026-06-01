@@ -31,7 +31,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { DownloadIcon, LoaderCircle, RefreshCwIcon } from "lucide-react";
+import { DownloadIcon } from "lucide-react";
 import { toast } from "sonner";
 
 import type { DownloadState, UpdateInfo } from "@/hooks/use-software-update";
@@ -43,11 +43,6 @@ interface UpdatePreferencesCardProps {
   isUpdating: boolean;
   isDownloading: boolean;
   downloadState: DownloadState | null;
-  isLoadingVersions: boolean;
-  versionsLoaded: boolean;
-  versionsCacheMiss: boolean;
-  loadVersionList: () => Promise<void>;
-  refreshVersionList: () => Promise<void>;
   downloadUpdate: (version: string) => Promise<void>;
   installStaged: () => Promise<void>;
   clearStaged: () => Promise<void>;
@@ -74,11 +69,6 @@ export function UpdatePreferencesCard({
   isUpdating,
   isDownloading,
   downloadState,
-  isLoadingVersions,
-  versionsLoaded,
-  versionsCacheMiss,
-  loadVersionList,
-  refreshVersionList,
   downloadUpdate,
   installStaged,
   clearStaged,
@@ -326,47 +316,11 @@ export function UpdatePreferencesCard({
                 <span className="text-xs text-muted-foreground">
                   Select a version to install, reinstall, or rollback.
                 </span>
-                {!versionsLoaded ? (
-                  <div className="flex flex-col gap-2">
-                    <p className="text-xs text-muted-foreground">
-                      {versionsCacheMiss
-                        ? "No saved version list on this router yet. Load from cache after a prior check, or refresh from GitHub."
-                        : "Load the saved release list for rollback and reinstall (fast, no GitHub wait)."}
-                    </p>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => void loadVersionList()}
-                        disabled={isLoadingVersions || isUpdating}
-                      >
-                        {isLoadingVersions ? (
-                          <>
-                            <LoaderCircle className="size-4 animate-spin" />
-                            Loading...
-                          </>
-                        ) : (
-                          "Load saved version list"
-                        )}
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => void refreshVersionList()}
-                        disabled={isLoadingVersions || isUpdating}
-                      >
-                        <RefreshCwIcon className="size-4" />
-                        Refresh from GitHub
-                      </Button>
-                    </div>
-                  </div>
-                ) : (
-                <div className="flex flex-col gap-2">
                 <div className="flex items-center gap-2">
                   <Select
                     value={selectedVersion}
                     onValueChange={setSelectedVersion}
-                    disabled={isUpdating || isDownloading || isLoadingVersions}
+                    disabled={isUpdating || isDownloading}
                   >
                     <SelectTrigger className="flex-1" aria-label="Select version to install">
                       <SelectValue placeholder="Select version..." />
@@ -413,28 +367,6 @@ export function UpdatePreferencesCard({
                     {stagedReadyForSelected ? "Install Now" : "Install"}
                   </Button>
                 </div>
-                <div className="flex justify-end">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => void refreshVersionList()}
-                    disabled={isLoadingVersions || isUpdating}
-                  >
-                    {isLoadingVersions ? (
-                      <>
-                        <LoaderCircle className="size-4 animate-spin" />
-                        Refreshing...
-                      </>
-                    ) : (
-                      <>
-                        <RefreshCwIcon className="size-4" />
-                        Refresh list from GitHub
-                      </>
-                    )}
-                  </Button>
-                </div>
-                </div>
-                )}
               </div>
             </motion.div>
           </motion.div>
