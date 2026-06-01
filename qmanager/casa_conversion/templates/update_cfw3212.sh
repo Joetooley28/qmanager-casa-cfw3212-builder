@@ -213,6 +213,18 @@ changelog_candidates() {
         *.dev)
             stripped="${want%.dev}"
             [ "$stripped" != "$want" ] && printf '%s\n' "$stripped"
+            dev_build="${want##*-cfw3212.}"
+            dev_build="${dev_build%.dev}"
+            dev_build="${dev_build%%.*}"
+            case "$dev_build" in
+                ''|*[!0-9]*) ;;
+                *)
+                    casa_base="${want%%-cfw3212.*}-cfw3212"
+                    if [ "$dev_build" -gt 1 ] 2>/dev/null; then
+                        printf '%s.%s\n' "$casa_base" "$((dev_build - 1))"
+                    fi
+                    ;;
+            esac
             printf '%s' "$releases" | jq -r --arg want "$want" '
               def build_num(t):
                 (t | split("-cfw3212.")[1] // "" | split(".")[0] | tonumber? // 0);
