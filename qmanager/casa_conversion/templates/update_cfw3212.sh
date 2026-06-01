@@ -216,8 +216,10 @@ changelog_candidates() {
             printf '%s' "$releases" | jq -r --arg want "$want" '
               def build_num(t):
                 (t | split("-cfw3212.")[1] // "" | split(".")[0] | tonumber? // 0);
+              # Casa router jq is built without ONIGURUMA — no test()/match().
               def is_official(t):
-                (t | test("-cfw3212\\.[0-9]+$"));
+                (t | split("-cfw3212.")[1] // "") as $s
+                | (($s | index(".")) == null) and ($s != "") and (($s | tonumber?) != null);
               (build_num($want)) as $wb
               | [
                   ([.[] | select(.tag_name | is_official) | select(build_num(.tag_name) <= $wb) | .tag_name] | last),
