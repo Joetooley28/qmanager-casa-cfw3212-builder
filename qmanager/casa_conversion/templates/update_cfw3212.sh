@@ -270,7 +270,6 @@ if [ "$REQUEST_METHOD" = "GET" ]; then
     case "$action" in
         check)
             UPDATE_SKIP_VERSION_LIST=1
-            UPDATE_SKIP_CHANGELOGS=1
             ;;
         versions)
             UPDATE_SKIP_CHANGELOGS=1
@@ -279,7 +278,6 @@ if [ "$REQUEST_METHOD" = "GET" ]; then
         *)
             action=check
             UPDATE_SKIP_VERSION_LIST=1
-            UPDATE_SKIP_CHANGELOGS=1
             ;;
     esac
     if query_requests_refresh; then

@@ -18,7 +18,7 @@
 
 ## v0.1.12-cfw3212.19.dev
 
-- Software Update now **auto-checks for updates** when you open the page (latest version only, no long wait for the full release list).
+- Software Update now **auto-checks for updates** when you open the page (latest version and release notes card, without loading the full version dropdown).
 - **Version Management** uses a separate **Load saved version list** button (instant from router cache). **Refresh from GitHub** rebuilds the dropdown when you need the newest list.
 
 ## v0.1.12-cfw3212.18.dev
