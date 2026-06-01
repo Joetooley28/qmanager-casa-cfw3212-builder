@@ -358,10 +358,14 @@ const SoftwareUpdateComponent = () => {
         />
         <UpdatePreferencesCard
           updateInfo={updateInfo}
-          isLoading={isLoading}
           isUpdating={isUpdating}
           isDownloading={isDownloading}
           downloadState={downloadState}
+          isLoadingVersions={hookData.isLoadingVersions}
+          versionsLoaded={hookData.versionsLoaded}
+          versionsCacheMiss={hookData.versionsCacheMiss}
+          loadVersionList={hookData.loadVersionList}
+          refreshVersionList={hookData.refreshVersionList}
           downloadUpdate={hookData.downloadUpdate}
           installStaged={hookData.installStaged}
           clearStaged={hookData.clearStaged}

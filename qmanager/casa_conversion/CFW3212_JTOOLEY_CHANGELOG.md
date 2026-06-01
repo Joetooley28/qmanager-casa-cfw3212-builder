@@ -18,7 +18,8 @@
 
 ## v0.1.12-cfw3212.19.dev
 
-- Software Update loads much faster when you revisit the page: the router caches the GitHub release list and changelog JSON for a few minutes instead of refetching everything on every tab visit. **Check for Updates** still forces a fresh check.
+- Software Update now **auto-checks for updates** when you open the page (latest version only, no long wait for the full release list).
+- **Version Management** uses a separate **Load saved version list** button (instant from router cache). **Refresh from GitHub** rebuilds the dropdown when you need the newest list.
 
 ## v0.1.12-cfw3212.18.dev
 

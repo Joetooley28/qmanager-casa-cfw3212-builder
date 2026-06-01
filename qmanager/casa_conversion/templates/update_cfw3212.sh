@@ -262,9 +262,30 @@ if [ "$REQUEST_METHOD" = "GET" ]; then
     include_prerelease=$(qm_update_get include_prerelease 1)
     auto_time=$(qm_update_get auto_update_time "03:00")
     include_prerelease_json="$( [ "$include_prerelease" = "1" ] && echo true || echo false )"
+    # check = latest-version probe (auto on page load). versions = dropdown list (cached).
+    [ -z "$action" ] && action=check
+    UPDATE_SKIP_CHANGELOGS=0
+    UPDATE_SKIP_VERSION_LIST=0
+    UPDATE_VERSIONS_CACHE_ONLY=0
+    case "$action" in
+        check)
+            UPDATE_SKIP_VERSION_LIST=1
+            UPDATE_SKIP_CHANGELOGS=1
+            ;;
+        versions)
+            UPDATE_SKIP_CHANGELOGS=1
+            UPDATE_VERSIONS_CACHE_ONLY=1
+            ;;
+        *)
+            action=check
+            UPDATE_SKIP_VERSION_LIST=1
+            UPDATE_SKIP_CHANGELOGS=1
+            ;;
+    esac
     if query_requests_refresh; then
         QM_UPDATE_FORCE_REFRESH=1
         invalidate_update_release_caches
+        UPDATE_VERSIONS_CACHE_ONLY=0
     else
         QM_UPDATE_FORCE_REFRESH=0
     fi
@@ -343,41 +364,34 @@ if [ "$REQUEST_METHOD" = "GET" ]; then
         api_response=$(cat "$tmp_body" 2>/dev/null)
         rm -f "$tmp_body" "$tmp_headers"
 
-    # Only Casa package releases are considered installable.
-    # language-packs and upstream QManager assets are intentionally ignored.
-    casa_filter='[
-      .[]
-      | select(.draft == false)
-      | select(.tag_name | startswith("v"))
-      | select(.tag_name | contains("-cfw3212."))
-      | . as $rel
-      | ($rel.tag_name | split("-cfw3212.")[0]) as $up
-      | ("qmanager-cfw3212-" + $rel.tag_name + ".tar.gz") as $tar_new
-      | ("qmanager-cfw3212-" + $rel.tag_name + ".sha256") as $sha_new
-      | ("qmanager-cfw3212-" + $up + ".tar.gz") as $tar_old
-      | ("qmanager-cfw3212-" + $up + ".sha256") as $sha_old
-      | select(any($rel.assets[]?; .name == $tar_new) or any($rel.assets[]?; .name == $tar_old))
-      | select(any($rel.assets[]?; .name == $sha_new) or any($rel.assets[]?; .name == $sha_old))
-    ]'
+        # Only Casa package releases are considered installable.
+        casa_filter='[
+          .[]
+          | select(.draft == false)
+          | select(.tag_name | startswith("v"))
+          | select(.tag_name | contains("-cfw3212."))
+          | . as $rel
+          | ($rel.tag_name | split("-cfw3212.")[0]) as $up
+          | ("qmanager-cfw3212-" + $rel.tag_name + ".tar.gz") as $tar_new
+          | ("qmanager-cfw3212-" + $rel.tag_name + ".sha256") as $sha_new
+          | ("qmanager-cfw3212-" + $up + ".tar.gz") as $tar_old
+          | ("qmanager-cfw3212-" + $up + ".sha256") as $sha_old
+          | select(any($rel.assets[]?; .name == $tar_new) or any($rel.assets[]?; .name == $tar_old))
+          | select(any($rel.assets[]?; .name == $sha_new) or any($rel.assets[]?; .name == $sha_old))
+        ]'
 
-    releases=$(printf '%s' "$api_response" | jq "$casa_filter" 2>/dev/null)
-    [ -n "$releases" ] || releases="[]"
-    if [ "$include_prerelease" != "1" ]; then
-        releases=$(printf '%s' "$releases" | jq '[ .[] | select(.prerelease == false) ]' 2>/dev/null)
+        releases=$(printf '%s' "$api_response" | jq "$casa_filter" 2>/dev/null)
         [ -n "$releases" ] || releases="[]"
-    fi
+        if [ "$include_prerelease" != "1" ]; then
+            releases=$(printf '%s' "$releases" | jq '[ .[] | select(.prerelease == false) ]' 2>/dev/null)
+            [ -n "$releases" ] || releases="[]"
+        fi
 
-    # Casa build numbers are not sortable via GitHub's release ordering: GitHub
-    # orders the "-cfw3212.<N>" suffix as text (so .10 lands below .9), and when
-    # several releases share a created_at (their tags point at the same, frozen
-    # package-repo commit) GitHub's tie-break is not by build number either.
-    # Sort numerically by base version then build number so .[0] is the true
-    # newest regardless of how GitHub returns the list.
-    releases=$(printf '%s' "$releases" | jq 'sort_by([
-        (.tag_name | ltrimstr("v") | split("-cfw3212.")[0] | split(".") | map(tonumber? // 0)),
-        (.tag_name | split("-cfw3212.")[1] | split(".")[0] | tonumber? // 0),
-        (if (.tag_name | split("-cfw3212.")[1] | contains(".")) then 0 else 1 end)
-      ]) | reverse' 2>/dev/null)
+        releases=$(printf '%s' "$releases" | jq 'sort_by([
+            (.tag_name | ltrimstr("v") | split("-cfw3212.")[0] | split(".") | map(tonumber? // 0)),
+            (.tag_name | split("-cfw3212.")[1] | split(".")[0] | tonumber? // 0),
+            (if (.tag_name | split("-cfw3212.")[1] | contains(".")) then 0 else 1 end)
+          ]) | reverse' 2>/dev/null)
         [ -n "$releases" ] || releases="[]"
 
         jq -n \
@@ -387,24 +401,46 @@ if [ "$REQUEST_METHOD" = "GET" ]; then
             > "$RELEASES_PROCESSED_CACHE" 2>/dev/null || true
     fi
 
-    latest_tag=$(printf '%s' "$releases" | jq -r '.[0].tag_name // empty')
-    changelog=$(printf '%s' "$releases" | jq -r '.[0].body // empty')
-    current_changelog=$(printf '%s' "$releases" | jq -r --arg cv "$current_version" '[ .[] | select(.tag_name == $cv) ][0].body // empty')
-
-    latest_changelog_json="/tmp/qm_cfw3212_latest_changelog.json"
-    current_changelog_json="/tmp/qm_cfw3212_current_changelog.json"
-    fetch_changelog_for_tag "$latest_tag" "$latest_changelog_json"
-    if [ "$current_version" = "$latest_tag" ]; then
-        cp "$latest_changelog_json" "$current_changelog_json" 2>/dev/null || printf '{}\n' > "$current_changelog_json"
-    else
-        fetch_changelog_for_tag "$current_version" "$current_changelog_json"
+    if [ "$UPDATE_VERSIONS_CACHE_ONLY" = "1" ] && [ "$releases_from_cache" = "0" ]; then
+        jq -n \
+            --argjson include_prerelease_bool "$include_prerelease_json" \
+            '{
+                success: true,
+                available_versions: [],
+                versions_from_cache: false,
+                versions_cache_miss: true,
+                include_prerelease: $include_prerelease_bool
+            }'
+        exit 0
     fi
-    joetooley_changelog=$(jq -r '.joetooley_notes // empty' "$latest_changelog_json" 2>/dev/null)
-    upstream_changelog=$(jq -r '.upstream_notes // empty' "$latest_changelog_json" 2>/dev/null)
-    upstream_release_url=$(jq -r '.upstream_release_url // empty' "$latest_changelog_json" 2>/dev/null)
-    current_joetooley_changelog=$(jq -r '.joetooley_notes // empty' "$current_changelog_json" 2>/dev/null)
-    current_upstream_changelog=$(jq -r '.upstream_notes // empty' "$current_changelog_json" 2>/dev/null)
-    rm -f "$latest_changelog_json" "$current_changelog_json"
+
+    latest_tag=$(printf '%s' "$releases" | jq -r '.[0].tag_name // empty')
+    changelog=""
+    current_changelog=""
+    joetooley_changelog=""
+    upstream_changelog=""
+    upstream_release_url=""
+    current_joetooley_changelog=""
+    current_upstream_changelog=""
+    if [ "$UPDATE_SKIP_CHANGELOGS" != "1" ]; then
+        changelog=$(printf '%s' "$releases" | jq -r '.[0].body // empty')
+        current_changelog=$(printf '%s' "$releases" | jq -r --arg cv "$current_version" '[ .[] | select(.tag_name == $cv) ][0].body // empty')
+
+        latest_changelog_json="/tmp/qm_cfw3212_latest_changelog.json"
+        current_changelog_json="/tmp/qm_cfw3212_current_changelog.json"
+        fetch_changelog_for_tag "$latest_tag" "$latest_changelog_json"
+        if [ "$current_version" = "$latest_tag" ]; then
+            cp "$latest_changelog_json" "$current_changelog_json" 2>/dev/null || printf '{}\n' > "$current_changelog_json"
+        else
+            fetch_changelog_for_tag "$current_version" "$current_changelog_json"
+        fi
+        joetooley_changelog=$(jq -r '.joetooley_notes // empty' "$latest_changelog_json" 2>/dev/null)
+        upstream_changelog=$(jq -r '.upstream_notes // empty' "$latest_changelog_json" 2>/dev/null)
+        upstream_release_url=$(jq -r '.upstream_release_url // empty' "$latest_changelog_json" 2>/dev/null)
+        current_joetooley_changelog=$(jq -r '.joetooley_notes // empty' "$current_changelog_json" 2>/dev/null)
+        current_upstream_changelog=$(jq -r '.upstream_notes // empty' "$current_changelog_json" 2>/dev/null)
+        rm -f "$latest_changelog_json" "$current_changelog_json"
+    fi
 
     download_state="null"
     if [ -f "$PID_FILE" ]; then
@@ -423,14 +459,35 @@ if [ "$REQUEST_METHOD" = "GET" ]; then
             '{status: $status, version: $version, message: $message, size: $size}')
     fi
 
-    available_versions=$(printf '%s' "$releases" | jq \
-        --arg cv "$current_version" \
-        '[ .[] | .tag_name as $t | {
-            tag: .tag_name,
-            has_assets: true,
-            asset_size: (((([ .assets[] | select(.name == ("qmanager-cfw3212-" + $t + ".tar.gz")) ][0].size) // ([ .assets[] | select(.name == ("qmanager-cfw3212-" + ($t | split("-cfw3212.")[0]) + ".tar.gz")) ][0].size) // 0) / 1048576 * 10 | floor / 10 | tostring + " MB")),
-            is_current: (.tag_name == $cv)
-        }]')
+    if [ "$UPDATE_SKIP_VERSION_LIST" = "1" ]; then
+        available_versions='[]'
+    else
+        available_versions=$(printf '%s' "$releases" | jq \
+            --arg cv "$current_version" \
+            '[ .[] | .tag_name as $t | {
+                tag: .tag_name,
+                has_assets: true,
+                asset_size: (((([ .assets[] | select(.name == ("qmanager-cfw3212-" + $t + ".tar.gz")) ][0].size) // ([ .assets[] | select(.name == ("qmanager-cfw3212-" + ($t | split("-cfw3212.")[0]) + ".tar.gz")) ][0].size) // 0) / 1048576 * 10 | floor / 10 | tostring + " MB")),
+                is_current: (.tag_name == $cv)
+            }]')
+    fi
+
+    if [ "$action" = "versions" ]; then
+        versions_from_cache_json=false
+        [ "$releases_from_cache" = "1" ] && versions_from_cache_json=true
+        jq -n \
+            --argjson av "$available_versions" \
+            --argjson include_prerelease_bool "$include_prerelease_json" \
+            --argjson versions_from_cache "$versions_from_cache_json" \
+            '{
+                success: true,
+                available_versions: $av,
+                versions_from_cache: $versions_from_cache,
+                versions_cache_miss: false,
+                include_prerelease: $include_prerelease_bool
+            }'
+        exit 0
+    fi
 
     download_url=""
     download_size=""

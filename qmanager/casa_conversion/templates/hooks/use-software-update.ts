@@ -6,7 +6,8 @@ import { authFetch } from "@/lib/auth-fetch";
 // =============================================================================
 // useSoftwareUpdate — Check, download, install QManager updates
 // =============================================================================
-// Checks GitHub Releases via the backend CGI on mount.
+// On mount: action=check (fresh GitHub probe for latest version).
+// Version dropdown: action=versions (cached list; refresh=1 to refetch).
 // Two-step flow: download + verify → install. Polls status during both phases.
 //
 // Backend: GET/POST /cgi-bin/quecmanager/system/update.sh
@@ -71,6 +72,11 @@ export interface UseSoftwareUpdateReturn {
   error: string | null;
   lastChecked: string | null;
   checkForUpdates: () => Promise<void>;
+  loadVersionList: () => Promise<void>;
+  refreshVersionList: () => Promise<void>;
+  isLoadingVersions: boolean;
+  versionsLoaded: boolean;
+  versionsCacheMiss: boolean;
   downloadUpdate: (version?: string) => Promise<void>;
   installStaged: () => Promise<void>;
   clearStaged: () => Promise<void>;
@@ -92,6 +98,9 @@ export function useSoftwareUpdate(): UseSoftwareUpdateReturn {
   const [downloadState, setDownloadState] = useState<DownloadState | null>(null);
   const [isDownloading, setIsDownloading] = useState(false);
   const [lastChecked, setLastChecked] = useState<string | null>(null);
+  const [isLoadingVersions, setIsLoadingVersions] = useState(false);
+  const [versionsLoaded, setVersionsLoaded] = useState(false);
+  const [versionsCacheMiss, setVersionsCacheMiss] = useState(false);
 
   const mountedRef = useRef(true);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -141,17 +150,40 @@ export function useSoftwareUpdate(): UseSoftwareUpdateReturn {
     }, POLL_INTERVAL);
   }, []);
 
-  // ---------------------------------------------------------------------------
-  // Fetch update info from CGI
-  // ---------------------------------------------------------------------------
-  const fetchUpdateInfo = useCallback(async (silent = false) => {
-    if (!silent) setIsLoading(true);
-    setError(null);
+  const applyCheckResponse = useCallback(
+    (json: UpdateInfo) => {
+      setUpdateInfo((prev) => ({
+        ...(prev ?? {}),
+        ...json,
+        available_versions: prev?.available_versions ?? json.available_versions ?? [],
+      } as UpdateInfo));
 
-    try {
-      // Mount uses cached GitHub data; "Check for Updates" passes refresh=1.
-      const refreshParam = silent ? "?refresh=1" : "";
-      const resp = await authFetch(`${CGI_ENDPOINT}${refreshParam}`);
+      if (json.download_state) {
+        setDownloadState(json.download_state);
+        if (
+          json.download_state.status === "downloading" ||
+          json.download_state.status === "verifying"
+        ) {
+          setIsDownloading(true);
+          startDownloadPolling();
+        }
+      }
+
+      const now = new Date().toISOString();
+      localStorage.setItem(LAST_CHECKED_KEY, now);
+      setLastChecked(now);
+    },
+    [startDownloadPolling],
+  );
+
+  // ---------------------------------------------------------------------------
+  // Fetch latest-version check (auto on mount; Check for Updates button)
+  // ---------------------------------------------------------------------------
+  const fetchUpdateCheck = useCallback(
+    async (refresh = true) => {
+      setError(null);
+      const qs = refresh ? "?action=check&refresh=1" : "?action=check";
+      const resp = await authFetch(`${CGI_ENDPOINT}${qs}`);
       if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${resp.statusText}`);
 
       const json = await resp.json();
@@ -162,34 +194,91 @@ export function useSoftwareUpdate(): UseSoftwareUpdateReturn {
         return;
       }
 
-      setUpdateInfo(json as UpdateInfo);
+      applyCheckResponse(json as UpdateInfo);
+    },
+    [applyCheckResponse],
+  );
 
-      // Sync download state from backend
-      const info = json as UpdateInfo;
-      if (info.download_state) {
-        setDownloadState(info.download_state);
-        if (info.download_state.status === "downloading" || info.download_state.status === "verifying") {
-          setIsDownloading(true);
-          startDownloadPolling();
+  // ---------------------------------------------------------------------------
+  // Fetch cached version list for Version Management dropdown
+  // ---------------------------------------------------------------------------
+  const fetchVersionList = useCallback(
+    async (refresh = false) => {
+      setIsLoadingVersions(true);
+      setError(null);
+      try {
+        const qs = refresh
+          ? "?action=versions&refresh=1"
+          : "?action=versions";
+        const resp = await authFetch(`${CGI_ENDPOINT}${qs}`);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${resp.statusText}`);
+
+        const json = await resp.json();
+        if (!mountedRef.current) return;
+
+        if (!json.success) {
+          setError(json.detail || json.error || "Failed to load version list");
+          return;
         }
+
+        const cacheMiss = Boolean(json.versions_cache_miss);
+        setVersionsCacheMiss(cacheMiss);
+        setVersionsLoaded(!cacheMiss && (json.available_versions?.length ?? 0) > 0);
+
+        setUpdateInfo((prev) => ({
+          ...(prev ?? {
+            current_version: "",
+            latest_version: null,
+            update_available: false,
+            changelog: null,
+            current_changelog: null,
+            joetooley_changelog: null,
+            upstream_changelog: null,
+            current_joetooley_changelog: null,
+            current_upstream_changelog: null,
+            upstream_release_url: null,
+            download_url: null,
+            download_size: null,
+            available_versions: [],
+            download_state: null,
+            include_prerelease: json.include_prerelease ?? true,
+            auto_update_enabled: false,
+            auto_update_time: "03:00",
+            check_error: null,
+          }),
+          available_versions: json.available_versions ?? [],
+          include_prerelease:
+            json.include_prerelease ?? prev?.include_prerelease ?? true,
+        } as UpdateInfo));
+      } catch (err) {
+        if (!mountedRef.current) return;
+        setError(err instanceof Error ? err.message : "Failed to load version list");
+      } finally {
+        if (mountedRef.current) setIsLoadingVersions(false);
       }
+    },
+    [],
+  );
 
-      // Update last checked timestamp
-      const now = new Date().toISOString();
-      localStorage.setItem(LAST_CHECKED_KEY, now);
-      setLastChecked(now);
-    } catch (err) {
-      if (!mountedRef.current) return;
-      setError(err instanceof Error ? err.message : "Failed to check for updates");
-    } finally {
-      if (mountedRef.current && !silent) setIsLoading(false);
-    }
-  }, [startDownloadPolling]);
-
-  // Fetch on mount
+  // Auto-check for updates on mount (does not load the full version list).
   useEffect(() => {
-    fetchUpdateInfo();
-  }, [fetchUpdateInfo]);
+    let cancelled = false;
+    (async () => {
+      setIsLoading(true);
+      try {
+        await fetchUpdateCheck(true);
+      } catch (err) {
+        if (!cancelled && mountedRef.current) {
+          setError(err instanceof Error ? err.message : "Failed to check for updates");
+        }
+      } finally {
+        if (!cancelled && mountedRef.current) setIsLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [fetchUpdateCheck]);
 
   // Rehydrate a pending post-install reboot on mount / tab revisit.
   // The install poller only sets reboot_required while it is actively running;
@@ -285,9 +374,24 @@ export function useSoftwareUpdate(): UseSoftwareUpdateReturn {
   // ---------------------------------------------------------------------------
   const checkForUpdates = useCallback(async () => {
     setIsChecking(true);
-    await fetchUpdateInfo(true);
-    if (mountedRef.current) setIsChecking(false);
-  }, [fetchUpdateInfo]);
+    try {
+      await fetchUpdateCheck(true);
+    } catch (err) {
+      if (mountedRef.current) {
+        setError(err instanceof Error ? err.message : "Failed to check for updates");
+      }
+    } finally {
+      if (mountedRef.current) setIsChecking(false);
+    }
+  }, [fetchUpdateCheck]);
+
+  const loadVersionList = useCallback(async () => {
+    await fetchVersionList(false);
+  }, [fetchVersionList]);
+
+  const refreshVersionList = useCallback(async () => {
+    await fetchVersionList(true);
+  }, [fetchVersionList]);
 
   const downloadUpdate = useCallback(async (version?: string) => {
     const targetVersion = version || updateInfo?.latest_version;
@@ -430,13 +534,17 @@ export function useSoftwareUpdate(): UseSoftwareUpdateReturn {
         return;
       }
 
-      // Re-check with new preference
-      await fetchUpdateInfo(true);
+      setVersionsLoaded(false);
+      setVersionsCacheMiss(false);
+      await fetchUpdateCheck(true);
+      if (versionsLoaded) {
+        await fetchVersionList(true);
+      }
     } catch (err) {
       if (!mountedRef.current) return;
       setError(err instanceof Error ? err.message : "Failed to save preference");
     }
-  }, [fetchUpdateInfo]);
+  }, [fetchUpdateCheck, fetchVersionList, versionsLoaded]);
 
   const saveAutoUpdate = useCallback(async (enabled: boolean, time: string) => {
     try {
@@ -452,12 +560,12 @@ export function useSoftwareUpdate(): UseSoftwareUpdateReturn {
         return;
       }
 
-      await fetchUpdateInfo(true);
+      await fetchUpdateCheck(true);
     } catch (err) {
       if (!mountedRef.current) return;
       setError(err instanceof Error ? err.message : "Failed to save auto-update preference");
     }
-  }, [fetchUpdateInfo]);
+  }, [fetchUpdateCheck]);
 
   return {
     updateInfo,
@@ -467,9 +575,14 @@ export function useSoftwareUpdate(): UseSoftwareUpdateReturn {
     isChecking,
     isUpdating,
     isDownloading,
+    isLoadingVersions,
+    versionsLoaded,
+    versionsCacheMiss,
     error,
     lastChecked,
     checkForUpdates,
+    loadVersionList,
+    refreshVersionList,
     downloadUpdate,
     installStaged,
     clearStaged,
