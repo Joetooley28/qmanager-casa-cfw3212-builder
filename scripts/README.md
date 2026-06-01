@@ -11,9 +11,10 @@ cutting a public package release on every change. Public releases stay on
   approval of the protected `official-package-release` environment).
 - **`dev`** — the working branch. Commit changes here. Builds from `dev` (or any
   non-`main` branch) are **forced to a dry run** by the workflow's branch-safety
-  gate (`Normalize inputs` step): `create_release` is ignored and `dry_run=true`
-  is enforced, so a `dev` build can never publish. It still produces a fully
-  installable artifact.
+  gate: `create_release` is ignored, nothing is published to the **package repo**,
+  and GitHub keeps the build as **workflow artifacts** only. Tags are suffixed
+  with `.dev` (for example `v0.1.12-cfw3212.18.dev`) so the router UI shows a
+  dev build after sideload. Use `scripts/cfw3212-dev-load.sh` to install.
 
 ## Build a dev artifact
 

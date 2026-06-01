@@ -5,7 +5,8 @@
 # testing, without cutting a public package release.
 #
 # The builder workflow forces dry_run on any non-main branch, so a `dev` build
-# never publishes — it only uploads a `casa-cfw3212-publish-<tag>` artifact.
+# never publishes to the package repo — it only uploads workflow artifacts
+# (`casa-cfw3212-publish-<tag>` is the install bundle to use).
 # This script pulls that artifact (the fully-converted package) and either does
 # a full offline install or hot-patches individual files onto a running install.
 #
