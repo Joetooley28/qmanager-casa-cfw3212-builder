@@ -365,6 +365,7 @@ if [ "$REQUEST_METHOD" = "GET" ]; then
         rm -f "$tmp_body" "$tmp_headers"
 
         # Only Casa package releases are considered installable.
+        # language-packs and upstream QManager assets are intentionally ignored.
         casa_filter='[
           .[]
           | select(.draft == false)
