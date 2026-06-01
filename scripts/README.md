@@ -1,71 +1,160 @@
 # Dev / working-branch flow
 
-Goal: iterate on builder changes and test them on a live router **without**
-cutting a public package release on every change. Public releases stay on
-`main`; day-to-day work happens on `dev`.
+**For agents / new chats:** This is the **default way to test QManager Casa
+changes on a live CFW-3212 router** without publishing a new release to
+`Joetooley28/qmanager-casa-cfw3212-package` on every edit. Edit on branch
+`dev` → dispatch CI → download **workflow artifacts** → install with
+`scripts/cfw3212-dev-load.sh`. Only merge to `main` and publish when the user
+wants a public package release.
 
-## Branches
+**Canonical script:** `scripts/cfw3212-dev-load.sh` (VPS:
+`github-staging/qmanager-casa-conversion-cfw3212-updater/scripts/cfw3212-dev-load.sh`)
 
-- **`main`** — the public release line. Only `main` can publish a Casa package
-  prerelease (and only via `create_release=true` + `dry_run=false` + manual
-  approval of the protected `official-package-release` environment).
-- **`dev`** — the working branch. Commit changes here. Builds from `dev` (or any
-  non-`main` branch) are **forced to a dry run** by the workflow's branch-safety
-  gate: `create_release` is ignored, nothing is published to the **package repo**,
-  and GitHub keeps the build as **workflow artifacts** only. Tags are suffixed
-  with `.dev` (for example `v0.1.12-cfw3212.18.dev`) so the router UI shows a
-  dev build after sideload. Use `scripts/cfw3212-dev-load.sh` to install.
+Also documented in workspace `AGENTS.md` and `shared-docs-and-notes/WORKSPACE_MAP.md`.
 
-## Build a dev artifact
+## Goal
 
-Manually dispatch the builder workflow on the `dev` branch
-(`Actions → Build Casa CFW-3212 package → Run workflow → Branch: dev`).
-`dry_run` defaults to `true`; leave it. Every successful build uploads:
+Iterate on builder/converter/UI templates and verify on a **live router** many
+times per day. **Do not** cut a package-repo prerelease for each small change.
+Public releases stay on `main` + manual approval of `official-package-release`.
 
-- `casa-cfw3212-<tag>` — tarball + `.sha256`
-- `casa-cfw3212-publish-<tag>` — tarball + `.sha256` + install/uninstall scripts
-  + release notes + updater changelog JSON
+## Typical loop (copy for handoffs)
 
-(There is no auto-build on push — dispatch when you want a build.)
+1. **Code** on branch `dev` in `Joetooley28/qmanager-casa-cfw3212-builder`
+   (VPS: `~/code/cfw3212/github-staging/qmanager-casa-conversion-cfw3212-updater`).
+   Edit Casa **templates** under `qmanager/casa_conversion/templates/`, not
+   generated `out/_next` chunks.
+2. **Commit / push** to `dev` when ready for a test build.
+3. **Dispatch CI** (no auto-build on push):
+   - GitHub → **Actions** → **Build Casa CFW-3212 package** → **Run workflow**
+   - Branch: **`dev`**
+   - Leave defaults (`dry_run=true`, `create_release=false`, `casa_build=next`).
+4. **Wait** for the **Build converted Casa package** job (artifact upload only).
+   - **Do not** approve `official-package-release` for `dev` builds — nothing
+     should publish to the package repo from `dev`.
+5. **Sideload** from the VPS (needs `gh` auth + SSH to modem):
+
+   ```bash
+   cd ~/code/cfw3212/github-staging/qmanager-casa-conversion-cfw3212-updater
+   export CFW3212_BOX=cfw3212-modem   # or your ssh config name
+
+   # Latest successful dev workflow run
+   scripts/cfw3212-dev-load.sh install
+
+   # Or pin a specific Actions run id (from the workflow URL)
+   scripts/cfw3212-dev-load.sh install --run RUN_ID
+
+   # Non-interactive
+   scripts/cfw3212-dev-load.sh install --yes
+   ```
+
+6. **Verify** on the router UI (Software Update, changed screens, `/etc/qmanager/VERSION`).
+   Dev builds use a `.dev` tag (e.g. `v0.1.12-cfw3212.18.dev`) baked into VERSION.
+7. **Repeat** from step 1 until good; then **merge `dev` → `main`** and run an
+   **official** build only when the user wants a public package release.
+
+## Branches and CI behavior
+
+| Branch | Package repo publish | Test artifacts |
+|--------|----------------------|----------------|
+| **`dev`** | **Never** (forced dry run) | Yes — `casa-cfw3212-publish-<tag>` on the workflow run |
+| **`main`** | Only if `create_release=true`, `dry_run=false`, **and** you approve `official-package-release` | Yes when dry run; publish when approved |
+
+- **`dev`** tags include a **`.dev` suffix** (e.g. `v0.1.12-cfw3212.18.dev`) so
+  About / Software Update show a dev build after sideload.
+- **Public repo:** anyone can **download artifacts** from your completed Actions
+  runs (read-only). They **cannot** dispatch workflows or publish packages
+  without write access + your approval.
+
+## Build a dev artifact (CI details)
+
+Manually dispatch **Build Casa CFW-3212 package** on branch **`dev`**.
+
+Every successful build uploads:
+
+- `casa-cfw3212-<tag>` — tarball + `.sha256` only
+- `casa-cfw3212-publish-<tag>` — tarball + `.sha256` + install/uninstall scripts +
+  release notes + updater changelog JSON ← **use this for sideload**
+
+There is **no auto-build on push** — dispatch when you need a fresh package.
+
+```bash
+# From VPS (optional)
+gh workflow run "Build Casa CFW-3212 package" \
+  --repo Joetooley28/qmanager-casa-cfw3212-builder \
+  --ref dev \
+  -f upstream_version=latest \
+  -f casa_build=next \
+  -f dry_run=true \
+  -f create_release=false
+```
 
 ## Load onto a live router — `cfw3212-dev-load.sh`
 
-`scripts/cfw3212-dev-load.sh` pulls the `casa-cfw3212-publish-*` artifact (the
-fully **converted** package) and puts it on the box. Set the target with
-`CFW3212_BOX` (default `cfw3212-router`; set it to your router's ssh target). `scp` uses `-O` (the modem has no sftp).
+Pulls the **`casa-cfw3212-publish-*`** artifact (fully **converted** package;
+never push raw repo templates to the device).
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `CFW3212_BOX` | `cfw3212-router` | SSH target (use `cfw3212-modem` on the VPS) |
+| `BUILDER_REPO` | `Joetooley28/qmanager-casa-cfw3212-builder` | Artifact source repo |
+| `BUILD_BRANCH` | `dev` | Branch for “latest run” when `--run` omitted |
+
+`scp` uses **`-O`** (modem has no sftp subsystem).
 
 ```bash
-# Symlink onto PATH (optional)
+# Optional: on PATH
 ln -sf "$PWD/scripts/cfw3212-dev-load.sh" ~/bin/cfw3212-dev-load
 
-# Just download + extract the latest dev build; prints the .tar.gz path
-cfw3212-dev-load.sh fetch
+# Download only; prints path to .tar.gz
+scripts/cfw3212-dev-load.sh fetch
 
-# Full offline install of the latest dev build onto the box
-cfw3212-dev-load.sh install                 # latest run on 'dev'
-cfw3212-dev-load.sh install --run 12345678  # a specific run
-cfw3212-dev-load.sh install --tarball /path/qmanager-cfw3212-….tar.gz
+# Full offline install (overwrites current QManager install)
+scripts/cfw3212-dev-load.sh install
+scripts/cfw3212-dev-load.sh install --run 12345678
+scripts/cfw3212-dev-load.sh install --tarball /path/qmanager-cfw3212-….tar.gz
 
-# Hot-patch individual converted files onto a running install + restart services
-cfw3212-dev-load.sh hotpatch poller                 # poller daemon (restarts qmanager-poller)
-cfw3212-dev-load.sh hotpatch cgi-update updater     # the Software-Update CGI + worker (restarts lighttpd)
-cfw3212-dev-load.sh hotpatch all                    # cgi-update + updater + poller + platform
-cfw3212-dev-load.sh hotpatch --file ./x.sh:/usrdata/bin/x.sh   # verbatim push (you converted it yourself)
+# Hot-patch selected converted files + restart services (faster, partial)
+scripts/cfw3212-dev-load.sh hotpatch poller
+scripts/cfw3212-dev-load.sh hotpatch cgi-update updater
+scripts/cfw3212-dev-load.sh hotpatch all
+scripts/cfw3212-dev-load.sh hotpatch --file ./local:/usrdata/path/on/device
 ```
 
-It prompts before writing to the live router; pass `--yes` to skip.
+Prompts before writing unless `--yes` / `-y`.
 
-**Why hot-patch sources from the artifact, not the repo templates:** the
-converter transforms the templates on the way into the package (PACKAGE_REPO
-substitution, the `qmanager_poller` AT-command/CR patches, etc.). The
-on-device files are the converter's *output*, so the helper extracts them from
-the converted tarball. Pushing a raw template would not match what runs on
-device. Use `--file` only when you have already converted the file yourself
-(e.g. a manual one-off patch).
+### Full install vs hotpatch (agents)
+
+| Change type | Use |
+|-------------|-----|
+| Next.js UI, static `out/`, most template edits | **`install`** (full package) |
+| `update_cfw3212.sh`, `qmanager_update`, poller, platform CGI | **`hotpatch`** with matching component |
+| Unsure | **`install`** |
+
+Hotpatch reads files **from the converted tarball inside the artifact**, not
+from git templates — the converter rewrites paths, poller patches, etc.
 
 ## Promote to a public release
 
-When a `dev` build tests good on the box: merge `dev` → `main`, then dispatch
-the builder on `main` with `casa_build=next` (or a specific `<N>`) and
-`dry_run=false create_release=true
-force=true` and approve the `official-package-release` environment.
+When a `dev` sideload tests good:
+
+1. Merge **`dev` → `main`** (user approval).
+2. Dispatch builder on **`main`** with `casa_build=next` (or explicit `N`),
+   `dry_run=false`, `create_release=true`, `force=true` if replacing assets.
+3. Approve **`official-package-release`** (publishes to package repo).
+4. Update `CFW3212_JTOOLEY_CHANGELOG.md` with the **exact** Casa tag before build.
+
+Router **Software Update** installs from the **package repo**, not dev artifacts.
+
+## What not to do
+
+- Do **not** tell the user to approve package-repo publish for a **`dev`** branch build.
+- Do **not** use `create_release=true` on `dev` expecting a public release (ignored / blocked).
+- Do **not** copy raw `templates/` files to the modem for “quick UI tests”.
+- Do **not** skip CI and edit `qmanager_work_v*_casa/` trees directly for shipping behavior.
+
+## Security note (optional hardening backlog)
+
+See Linear **AI-61** for deferred branch protection / Actions allowlist. Today
+only the repo owner has write access; package publish still requires environment
+approval.

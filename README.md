@@ -42,6 +42,14 @@ checked out into the existing local workspace layout.
   preserved) so it needs no writable-root `/opt` symlink.
 - Keeps `qmanager_auto_update` disabled for Casa CFW-3212.
 
+## Dev testing on a live router (no package release)
+
+Day-to-day edits use branch **`dev`**: CI produces **workflow artifacts only**
+(`.dev` version tags). Install on the modem with **`scripts/cfw3212-dev-load.sh`**
+— see **[scripts/README.md](scripts/README.md)** for the full loop, hotpatch vs
+full install, and when to promote to `main`. Workspace agents: also read
+`AGENTS.md` in the CFW-3212 monorepo.
+
 ## GitHub Actions
 
 The workflow lives at:
