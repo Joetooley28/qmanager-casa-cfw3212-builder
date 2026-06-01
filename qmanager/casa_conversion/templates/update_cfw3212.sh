@@ -202,33 +202,72 @@ changelog_url_for_tag() {
         "$PACKAGE_REPO" "$tag" "$(changelog_name_for_tag "$tag")"
 }
 
+# Dev sideload tags (v0.1.12-cfw3212.N.dev) are not published on the package repo.
+# Try the exact tag, the stripped tag, then the newest official Casa build that is
+# still on the same upstream base (so release notes stay populated on .dev installs).
+changelog_candidates() {
+    local want="$1" releases="$2" stripped
+    [ -n "$want" ] || return 0
+    printf '%s\n' "$want"
+    case "$want" in
+        *.dev)
+            stripped="${want%.dev}"
+            [ "$stripped" != "$want" ] && printf '%s\n' "$stripped"
+            printf '%s' "$releases" | jq -r --arg want "$want" '
+              def build_num(t):
+                (t | split("-cfw3212.")[1] // "" | split(".")[0] | tonumber? // 0);
+              def is_official(t):
+                (t | test("-cfw3212\\.[0-9]+$"));
+              (build_num($want)) as $wb
+              | [
+                  ([.[] | select(.tag_name | is_official) | select(build_num(.tag_name) <= $wb) | .tag_name] | last),
+                  (.[0].tag_name // empty)
+                ]
+              | map(select(length > 0))
+              | unique
+              | .[]
+            ' 2>/dev/null
+            ;;
+    esac
+}
+
+changelog_json_has_notes() {
+    local file="$1"
+    jq -e '((.joetooley_notes // "") != "") or ((.upstream_notes // "") != "")' "$file" >/dev/null 2>&1
+}
+
 fetch_changelog_for_tag() {
-    local tag="$1" out_file="$2" tmp_body tmp_headers url cache_file
+    local tag="$1" out_file="$2" releases="${3:-}" try_tag tmp_body tmp_headers url cache_file
     [ -n "$tag" ] || { printf '{}\n' > "$out_file"; return 0; }
 
     mkdir -p "$CHANGELOG_CACHE_DIR" 2>/dev/null || true
-    cache_file="$CHANGELOG_CACHE_DIR/${tag}.json"
-    if [ "${QM_UPDATE_FORCE_REFRESH:-0}" = "0" ] \
-        && cache_is_fresh "$cache_file" "$CHANGELOG_CACHE_TTL" \
-        && jq -e 'type == "object"' "$cache_file" >/dev/null 2>&1; then
-        cp "$cache_file" "$out_file" 2>/dev/null || printf '{}\n' > "$out_file"
-        return 0
-    fi
 
-    tmp_body="/tmp/qm_cfw3212_changelog_${tag}.json"
-    tmp_headers="/tmp/qm_cfw3212_changelog_${tag}.headers"
-    url="$(changelog_url_for_tag "$tag")"
-    rm -f "$tmp_body" "$tmp_headers"
+    for try_tag in $(changelog_candidates "$tag" "$releases"); do
+        [ -n "$try_tag" ] || continue
+        cache_file="$CHANGELOG_CACHE_DIR/${try_tag}.json"
+        if [ "${QM_UPDATE_FORCE_REFRESH:-0}" = "0" ] \
+            && cache_is_fresh "$cache_file" "$CHANGELOG_CACHE_TTL" \
+            && changelog_json_has_notes "$cache_file"; then
+            cp "$cache_file" "$out_file" 2>/dev/null || printf '{}\n' > "$out_file"
+            return 0
+        fi
 
-    if http_api_fetch "$url" "$tmp_body" "$tmp_headers" 15 \
-        && jq -e 'type == "object"' "$tmp_body" >/dev/null 2>&1; then
-        cp "$tmp_body" "$out_file" 2>/dev/null || printf '{}\n' > "$out_file"
-        cp "$tmp_body" "$cache_file" 2>/dev/null || true
-    else
-        printf '{}\n' > "$out_file"
-    fi
+        tmp_body="/tmp/qm_cfw3212_changelog_${try_tag}.json"
+        tmp_headers="/tmp/qm_cfw3212_changelog_${try_tag}.headers"
+        url="$(changelog_url_for_tag "$try_tag")"
+        rm -f "$tmp_body" "$tmp_headers"
 
-    rm -f "$tmp_body" "$tmp_headers"
+        if http_api_fetch "$url" "$tmp_body" "$tmp_headers" 15 \
+            && changelog_json_has_notes "$tmp_body"; then
+            cp "$tmp_body" "$out_file" 2>/dev/null || printf '{}\n' > "$out_file"
+            cp "$tmp_body" "$cache_file" 2>/dev/null || true
+            rm -f "$tmp_body" "$tmp_headers"
+            return 0
+        fi
+        rm -f "$tmp_body" "$tmp_headers"
+    done
+
+    printf '{}\n' > "$out_file"
 }
 
 start_update_worker() {
@@ -427,11 +466,11 @@ if [ "$REQUEST_METHOD" = "GET" ]; then
 
         latest_changelog_json="/tmp/qm_cfw3212_latest_changelog.json"
         current_changelog_json="/tmp/qm_cfw3212_current_changelog.json"
-        fetch_changelog_for_tag "$latest_tag" "$latest_changelog_json"
+        fetch_changelog_for_tag "$latest_tag" "$latest_changelog_json" "$releases"
         if [ "$current_version" = "$latest_tag" ]; then
             cp "$latest_changelog_json" "$current_changelog_json" 2>/dev/null || printf '{}\n' > "$current_changelog_json"
         else
-            fetch_changelog_for_tag "$current_version" "$current_changelog_json"
+            fetch_changelog_for_tag "$current_version" "$current_changelog_json" "$releases"
         fi
         joetooley_changelog=$(jq -r '.joetooley_notes // empty' "$latest_changelog_json" 2>/dev/null)
         upstream_changelog=$(jq -r '.upstream_notes // empty' "$latest_changelog_json" 2>/dev/null)
