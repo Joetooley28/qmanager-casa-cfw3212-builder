@@ -61,13 +61,22 @@ http_api_fetch() {
 }
 
 strip_casa_suffix() {
-    printf '%s' "$1" | sed 's/-cfw3212\.[0-9][0-9]*$//'
+    printf '%s' "$1" | sed 's/-cfw3212\..*$//'
 }
 
 casa_build_number() {
     case "$1" in
-        *-cfw3212.*) printf '%s' "${1##*-cfw3212.}" ;;
+        *-cfw3212.*) printf '%s' "${1##*-cfw3212.}" | sed 's/\..*//' ;;
         *) printf '0' ;;
+    esac
+}
+
+# 1 = release channel (vX.Y.Z-cfw3212.N), 0 = dev channel (…N.dev).
+casa_channel_rank() {
+    local suffix="${1##*-cfw3212.}"
+    case "$suffix" in
+        *.*) printf '0' ;;
+        *) printf '1' ;;
     esac
 }
 
@@ -98,6 +107,11 @@ EOF
     [ "$a3" -lt "$b3" ] 2>/dev/null && return 2
     [ "$a_build" -gt "$b_build" ] 2>/dev/null && return 0
     [ "$a_build" -lt "$b_build" ] 2>/dev/null && return 2
+    local a_rank b_rank
+    a_rank="$(casa_channel_rank "$a")"
+    b_rank="$(casa_channel_rank "$b")"
+    [ "$a_rank" -gt "$b_rank" ] && return 0
+    [ "$a_rank" -lt "$b_rank" ] && return 2
     return 1
 }
 
@@ -288,7 +302,8 @@ if [ "$REQUEST_METHOD" = "GET" ]; then
     # newest regardless of how GitHub returns the list.
     releases=$(printf '%s' "$releases" | jq 'sort_by([
         (.tag_name | ltrimstr("v") | split("-cfw3212.")[0] | split(".") | map(tonumber? // 0)),
-        (.tag_name | split("-cfw3212.")[1] | tonumber? // 0)
+        (.tag_name | split("-cfw3212.")[1] | split(".")[0] | tonumber? // 0),
+        (if (.tag_name | split("-cfw3212.")[1] | contains(".")) then 0 else 1 end)
       ]) | reverse' 2>/dev/null)
     [ -n "$releases" ] || releases="[]"
 

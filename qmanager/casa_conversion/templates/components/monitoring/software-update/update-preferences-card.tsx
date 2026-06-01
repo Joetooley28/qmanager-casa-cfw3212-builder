@@ -336,18 +336,6 @@ export function UpdatePreferencesCard({
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
                     <Button
-                      variant="default"
-                      size="sm"
-                      onClick={() => {
-                        setSelectedVersion(downloadState.version);
-                        setShowInstallDialog(true);
-                      }}
-                      disabled={isUpdating || isDiscarding}
-                    >
-                      <DownloadIcon className="size-4" />
-                      Install Now
-                    </Button>
-                    <Button
                       variant="outline"
                       size="sm"
                       onClick={() => setShowDiscardDialog(true)}

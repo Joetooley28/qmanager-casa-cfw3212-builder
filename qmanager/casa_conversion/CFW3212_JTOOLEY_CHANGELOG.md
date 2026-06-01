@@ -16,6 +16,11 @@
 - Software Update → Version Management can now install a different version (including rollbacks). After the download verifies, the Install button switches to "Install Now" so the staged package actually gets applied instead of being left on disk.
 - A handful of upstream modem-management actions stay blocked or limited on Casa because they'd let you push the modem into a state we don't want it in.
 
+## v0.1.12-cfw3212.18.dev
+
+- Software Update → Version Management no longer shows a duplicate **Install Now** in the staged-ready banner (install from the version dropdown row).
+- Dev-channel Casa packages are tagged with a `.dev` suffix (for example `v0.1.12-cfw3212.18.dev`). When you are on a `.dev` build, the matching official tag without `.dev` (for example `v0.1.12-cfw3212.18`) appears as an available update.
+
 ## v0.1.12-cfw3212.17
 
 - Software Update → Version Management works with the router's bundled `jq` build again. The `.16` rollback-history filter used a regex helper that is not available on the router, which could leave the version dropdown empty. The filter now uses a compatible literal split instead.

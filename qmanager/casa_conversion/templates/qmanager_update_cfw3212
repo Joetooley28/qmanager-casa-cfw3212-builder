@@ -74,11 +74,11 @@ http_download() {
 }
 
 validate_tag() {
-    printf '%s' "$1" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+-cfw3212\.[0-9]+$'
+    printf '%s' "$1" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+-cfw3212\.[0-9]+(\.dev)?$'
 }
 
 strip_casa_suffix() {
-    printf '%s' "$1" | sed 's/-cfw3212\.[0-9][0-9]*$//'
+    printf '%s' "$1" | sed 's/-cfw3212\..*$//'
 }
 
 asset_name_for_tag() {

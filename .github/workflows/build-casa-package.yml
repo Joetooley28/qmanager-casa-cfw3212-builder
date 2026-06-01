@@ -55,6 +55,7 @@ jobs:
       sha256: ${{ steps.stage.outputs.sha256 }}
       dry_run: ${{ steps.inputs.outputs.dry_run }}
       create_release: ${{ steps.inputs.outputs.create_release }}
+      dev_channel: ${{ steps.inputs.outputs.dev_channel }}
       force: ${{ steps.inputs.outputs.force }}
       release_exists: ${{ steps.safety.outputs.release_exists }}
     env:
@@ -77,22 +78,23 @@ jobs:
           dry_run="${INPUT_DRY_RUN:-true}"
           create_release="${INPUT_CREATE_RELEASE:-false}"
           force="${INPUT_FORCE:-false}"
-          # Branch safety gate: only the default branch (main) may ever publish.
-          # Any other branch (e.g. the 'dev' working branch) is forced to a
-          # non-publishing dry run -- even if create_release was ticked -- so a
-          # working-branch build can never cut a public package release. The
-          # publish job's `if:` (create_release==true && dry_run!=true) then
-          # cannot fire off-main. main still behaves exactly as before.
+          dev_channel=false
+          # Branch safety gate: only main may publish official (non-.dev) tags.
+          # Working branches (e.g. dev) append .dev to the Casa tag and use the
+          # publish-dev job instead of official-package-release publishing.
           if [ "${GITHUB_REF_NAME:-}" != "main" ]; then
+            dev_channel=true
             if [ "$create_release" = "true" ] || [ "$dry_run" != "true" ]; then
-              echo "::notice::Non-main branch '${GITHUB_REF_NAME:-?}': forcing dry_run=true, create_release=false (publishing is main-only)."
+              echo "::notice::Non-main branch '${GITHUB_REF_NAME:-?}': official publish disabled; dev-channel *.dev publish enabled after build."
             fi
             dry_run=true
             create_release=false
+            force=true
           fi
           {
             echo "dry_run=${dry_run}"
             echo "create_release=${create_release}"
+            echo "dev_channel=${dev_channel}"
             echo "force=${force}"
           } >> "$GITHUB_OUTPUT"
 
@@ -160,7 +162,7 @@ jobs:
           max_build = 0
           for rel in releases:
               tag = rel.get("tag_name") or ""
-              match = re.fullmatch(r"(v\d+\.\d+\.\d+)-cfw3212\.(\d+)", tag)
+              match = re.fullmatch(r"(v\d+\.\d+\.\d+)-cfw3212\.(\d+)(?:\.dev)?", tag)
               if match and match.group(1) == upstream:
                   max_build = max(max_build, int(match.group(2)))
           print(max_build + 1)
@@ -178,6 +180,10 @@ jobs:
           esac
 
           casa_tag="${upstream_tag}-cfw3212.${casa_build}"
+          if [ "${GITHUB_REF_NAME:-}" != "main" ]; then
+            casa_tag="${casa_tag}.dev"
+            echo "Dev-channel Casa tag: ${casa_tag}"
+          fi
           tar_name="qmanager-cfw3212-${casa_tag}.tar.gz"
           sha_name="qmanager-cfw3212-${casa_tag}.sha256"
           changelog_name="qmanager-cfw3212-${casa_tag}-changelog.json"
@@ -227,7 +233,7 @@ jobs:
 
           for rel in releases:
               tag = rel.get("tag_name") or ""
-              match = re.fullmatch(r"(v\d+\.\d+\.\d+)-cfw3212\.(\d+)", tag)
+              match = re.fullmatch(r"(v\d+\.\d+\.\d+)-cfw3212\.(\d+)(?:\.dev)?", tag)
               if not match:
                   continue
               upstream = match.group(1)
@@ -736,7 +742,7 @@ jobs:
           if-no-files-found: error
 
       - name: Dry-run summary
-        if: steps.scheduled_check.outputs.should_build == 'true' && (steps.inputs.outputs.create_release != 'true' || steps.inputs.outputs.dry_run == 'true')
+        if: steps.scheduled_check.outputs.should_build == 'true' && steps.inputs.outputs.dev_channel != 'true' && (steps.inputs.outputs.create_release != 'true' || steps.inputs.outputs.dry_run == 'true')
         shell: bash
         run: |
           set -euo pipefail
@@ -751,6 +757,136 @@ jobs:
             ${{ steps.resolve.outputs.tar_name }}
             ${{ steps.resolve.outputs.sha_name }}
           SHA-256: ${{ steps.stage.outputs.sha256 }}
+          EOF
+
+  publish-dev:
+    name: Publish dev-channel package prerelease
+    needs: build
+    if: needs.build.outputs.should_build == 'true' && needs.build.outputs.dev_channel == 'true'
+    runs-on: ubuntu-latest
+    environment: official-package-release
+    env:
+      GH_TOKEN: ${{ secrets.PACKAGE_RELEASE_TOKEN }}
+      PACKAGE_REPO: Joetooley28/qmanager-casa-cfw3212-package
+
+    steps:
+      - name: Require package release token
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_REPOSITORY" != "Joetooley28/qmanager-casa-cfw3212-builder" ]; then
+            echo "Dev-channel publishing is only allowed from Joetooley28/qmanager-casa-cfw3212-builder." >&2
+            exit 1
+          fi
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "Missing PACKAGE_RELEASE_TOKEN (repo secret or official-package-release environment)." >&2
+            exit 1
+          fi
+
+      - name: Download publish bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: casa-cfw3212-publish-${{ needs.build.outputs.casa_tag }}
+          path: publish
+
+      - name: Advance package repo HEAD for release date ordering
+        shell: bash
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          casa_tag="${{ needs.build.outputs.casa_tag }}"
+          tmp_pkg="$(mktemp -d)"
+          if git clone --depth 1 "https://x-access-token:${GH_TOKEN}@github.com/${PACKAGE_REPO}.git" "$tmp_pkg"; then
+            cd "$tmp_pkg"
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            mkdir -p .release-tracking
+            printf '%s built %s\n' "$casa_tag" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > .release-tracking/last-build.txt
+            git add .release-tracking/last-build.txt
+            git commit --allow-empty -m "Release ${casa_tag}"
+            git push origin HEAD:main || echo "WARN: push to package repo main failed"
+          fi
+
+      - name: Create or update dev-channel prerelease
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          casa_tag="${{ needs.build.outputs.casa_tag }}"
+          tar_path="publish/${{ needs.build.outputs.tar_name }}"
+          sha_path="publish/${{ needs.build.outputs.sha_name }}"
+          install_script="publish/install-qmanager-cfw3212.sh"
+          uninstall_script="publish/uninstall-qmanager-cfw3212.sh"
+          notes_file="publish/release-notes.md"
+          changelog_file="publish/${{ needs.build.outputs.changelog_name }}"
+          force="${{ needs.build.outputs.force }}"
+
+          require_file() {
+            if [ ! -f "$1" ]; then
+              echo "Missing publish bundle file: $1" >&2
+              find publish -maxdepth 3 -type f -print | sort >&2
+              exit 1
+            fi
+          }
+
+          require_file "$tar_path"
+          require_file "$sha_path"
+          require_file "$install_script"
+          require_file "$uninstall_script"
+          require_file "$notes_file"
+          require_file "$changelog_file"
+
+          release_exists=false
+          if gh release view "$casa_tag" --repo "$PACKAGE_REPO" >/dev/null 2>&1; then
+            release_exists=true
+          fi
+
+          upload_assets() {
+            upload_args=(
+              "$casa_tag"
+              "$tar_path"
+              "$sha_path"
+              "$install_script"
+              "$uninstall_script"
+              "$changelog_file"
+              --repo "$PACKAGE_REPO"
+            )
+            if [ "$force" = "true" ]; then
+              upload_args+=(--clobber)
+            fi
+            gh release upload "${upload_args[@]}"
+            echo "Uploaded dev-channel assets for $casa_tag."
+          }
+
+          title="QManager ${casa_tag} for Casa CFW-3212 (dev channel, Actions-built, unverified)"
+
+          if [ "$release_exists" = "true" ]; then
+            if [ "$force" != "true" ]; then
+              echo "Release exists and force=false; refusing to upload dev assets." >&2
+              exit 1
+            fi
+            release_id="$(gh release view "$casa_tag" --repo "$PACKAGE_REPO" --json databaseId --jq '.databaseId')"
+            python3 -c 'import json, pathlib, sys; title, notes = sys.argv[1:3]; print(json.dumps({"name": title, "body": pathlib.Path(notes).read_text(), "prerelease": True, "make_latest": "false"}))' \
+              "$title" "$notes_file" > "$RUNNER_TEMP/update-release.json"
+            gh api --method PATCH "repos/${PACKAGE_REPO}/releases/${release_id}" \
+              -H "Content-Type: application/json" \
+              --input "$RUNNER_TEMP/update-release.json"
+            upload_assets
+          else
+            python3 -c 'import json, pathlib, sys; tag, title, notes = sys.argv[1:4]; print(json.dumps({"tag_name": tag, "target_commitish": "main", "name": title, "body": pathlib.Path(notes).read_text(), "draft": False, "prerelease": True, "make_latest": "false"}))' \
+              "$casa_tag" "$title" "$notes_file" > "$RUNNER_TEMP/create-release.json"
+            gh api --method POST "repos/${PACKAGE_REPO}/releases" \
+              -H "Content-Type: application/json" \
+              --input "$RUNNER_TEMP/create-release.json"
+            upload_assets
+          fi
+
+          cat <<EOF >> "$GITHUB_STEP_SUMMARY"
+          ## Dev-channel publish complete
+
+          - Package: \`${PACKAGE_REPO}\`
+          - Tag: \`${casa_tag}\`
+          - Install: \`curl -fsSL https://github.com/${PACKAGE_REPO}/releases/download/${casa_tag}/install-qmanager-cfw3212.sh | sh\`
           EOF
 
   publish:
