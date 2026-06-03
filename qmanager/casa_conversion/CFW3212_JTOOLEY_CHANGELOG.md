@@ -16,6 +16,15 @@
 - Software Update → Version Management can now install a different version (including rollbacks). After the download verifies, the Install button switches to "Install Now" so the staged package actually gets applied instead of being left on disk.
 - A handful of upstream modem-management actions stay blocked or limited on Casa because they'd let you push the modem into a state we don't want it in.
 
+## v0.1.12-cfw3212.19
+
+- The dashboard/status IP Passthrough fields now follow Casa's real IP handover state instead of always showing disabled. This matches the Local Network → IP Passthrough settings page, which was already reading Casa's RDB state correctly.
+- The upstream Quectel MPDN/QMAP/USB-mode IP Passthrough probes remain blocked on Casa; this change only reads Casa's safe RDB status keys for display.
+
+## v0.1.12-cfw3212.19.dev
+
+**Dev sideload only** — same IP Passthrough status fix as `v0.1.12-cfw3212.19`; use the official `.19` package release for router installs from the package repo once it is published.
+
 ## v0.1.12-cfw3212.18
 
 - Software Update restores the **Current Release Notes** card (Joetooley / Rus | Ame toggle) and **Version Management** dropdown from one check on page load, like build `.16`. **Check for Updates** forces a fresh GitHub pull.

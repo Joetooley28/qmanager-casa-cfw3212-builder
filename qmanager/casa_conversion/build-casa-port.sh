@@ -823,10 +823,19 @@ new = '''
     # Casa CFW-3212 keeps IP Passthrough mapped to ip_handover/RDB state.
     # Do not query upstream MPDN/QMAP/QCFG usbnet status here; it is
     # unsupported on this device and creates noisy qcmd errors.
+    local casa_ippt_enable casa_ippt_mode casa_ippt_service_enable
+    casa_ippt_enable=$(rdb get link.profile.1.ip_handover.enable 2>/dev/null || true)
+    casa_ippt_mode=$(rdb get link.profile.1.ip_handover.mode 2>/dev/null || true)
+    casa_ippt_service_enable=$(rdb get service.ip_handover.enable 2>/dev/null || true)
     boot_ippt_mode="disabled"
-    boot_ippt_mac=""
-    boot_ippt_nat="0"
-    boot_ippt_usbnet="0"
+    if [ "$casa_ippt_enable" = "1" ] && [ "$casa_ippt_service_enable" != "0" ]; then
+        case "$casa_ippt_mode" in
+            eth|enabled|1) boot_ippt_mode="eth" ;;
+        esac
+    fi
+    boot_ippt_mac=$(rdb get service.ip_handover.mac_address 2>/dev/null || true)
+    boot_ippt_nat="1"
+    boot_ippt_usbnet="1"
     boot_ippt_dhcpv4dns="disabled"'''
 text = text.replace(old, new)
 
@@ -847,10 +856,19 @@ new = '''
     # Casa CFW-3212 keeps IP Passthrough mapped to ip_handover/RDB state.
     # Do not query upstream MPDN/QMAP/QCFG usbnet status here; it is
     # unsupported on this device and creates noisy qcmd errors.
+    local casa_ippt_enable casa_ippt_mode casa_ippt_service_enable
+    casa_ippt_enable=$(rdb get link.profile.1.ip_handover.enable 2>/dev/null || true)
+    casa_ippt_mode=$(rdb get link.profile.1.ip_handover.mode 2>/dev/null || true)
+    casa_ippt_service_enable=$(rdb get service.ip_handover.enable 2>/dev/null || true)
     boot_ippt_mode="disabled"
-    boot_ippt_mac=""
-    boot_ippt_nat="0"
-    boot_ippt_usbnet="0"
+    if [ "$casa_ippt_enable" = "1" ] && [ "$casa_ippt_service_enable" != "0" ]; then
+        case "$casa_ippt_mode" in
+            eth|enabled|1) boot_ippt_mode="eth" ;;
+        esac
+    fi
+    boot_ippt_mac=$(rdb get service.ip_handover.mac_address 2>/dev/null || true)
+    boot_ippt_nat="1"
+    boot_ippt_usbnet="1"
     boot_ippt_dhcpv4dns="disabled"'''
 text = text.replace(old, new)
 
@@ -3826,6 +3844,10 @@ safety_checks() {
     require_rg_clean "ECM|MBIM|RNDIS|USB Tethering|Enter Manually|QCFG" \
         "$TARGET/components/local-network/ip-passthrough/ip-passthrough-card.tsx" \
         "Casa IPPT frontend exposes unsafe USB/MAC controls"
+    require_rg_present "link.profile.1.ip_handover.enable" "$TARGET/scripts/usr/bin/qmanager_poller" \
+        "Casa poller must report IPPT status from RDB ip_handover state"
+    require_rg_present "service.ip_handover.mac_address" "$TARGET/scripts/usr/bin/qmanager_poller" \
+        "Casa poller must report IPPT MAC from RDB ip_handover state"
 
     require_rg_present "Joetooley28/qmanager-casa-cfw3212-package" "$TARGET/scripts/www/cgi-bin/quecmanager/system/update.sh" \
         "system/update.sh must check the Casa package repo"
