@@ -944,6 +944,16 @@ PY
         || fail "Could not apply Casa QManager version poller patch"
 }
 
+patch_qmanager_poller_lib_paths_cfw3212() {
+    local poller="$TARGET/scripts/usr/bin/qmanager_poller"
+    [ -f "$poller" ] || fail "Target missing qmanager_poller"
+
+    sed -i 's#/usr/lib/qmanager/#/usrdata/qmanager/lib/#g' "$poller"
+
+    grep -q "/usrdata/qmanager/lib/parse_at.sh" "$poller" \
+        || fail "Could not patch qmanager_poller library paths for Casa"
+}
+
 # CFW-3212: the upstream System Health Check pauses the poller with
 # `systemctl stop qmanager-poller` and relies on an EXIT/INT/TERM trap to
 # restart it. SIGKILL is uncatchable, so if the CGI is OOM-killed or its HTTP
@@ -3639,6 +3649,7 @@ apply_casa_overlays() {
     patch_qmanager_health_check_paths_cfw3212
     patch_qmanager_health_check_poller_pause_cfw3212
     patch_qmanager_poller
+    patch_qmanager_poller_lib_paths_cfw3212
     patch_speedtest_poller_pause_cfw3212
     patch_disable_orientation_probe_cfw3212
     patch_disable_profile_auto_apply
@@ -3848,6 +3859,11 @@ safety_checks() {
         "Casa poller must report IPPT status from RDB ip_handover state"
     require_rg_present "service.ip_handover.mac_address" "$TARGET/scripts/usr/bin/qmanager_poller" \
         "Casa poller must report IPPT MAC from RDB ip_handover state"
+    require_rg_present "/usrdata/qmanager/lib/parse_at.sh" "$TARGET/scripts/usr/bin/qmanager_poller" \
+        "Casa poller must source libraries from /usrdata/qmanager/lib"
+    require_rg_clean "/usr/lib/qmanager/(parse_at|events|qlog|profile_mgr|email_alerts|sms_alerts)\\.sh" \
+        "$TARGET/scripts/usr/bin/qmanager_poller" \
+        "Casa poller still sources upstream /usr/lib/qmanager library paths"
 
     require_rg_present "Joetooley28/qmanager-casa-cfw3212-package" "$TARGET/scripts/www/cgi-bin/quecmanager/system/update.sh" \
         "system/update.sh must check the Casa package repo"
