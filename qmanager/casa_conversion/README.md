@@ -132,6 +132,32 @@ Most rootfs path conversion is intentionally handled by `install_cfw3212.sh`
 at install time, because the upstream package still carries RM520N-style
 source paths under `scripts/`.
 
+## Casa Web Service Port Map
+
+QManager must coexist with Casa's stock web stack rather than replace it.
+Live Box 2 testing on `v0.1.12-cfw3212.20.dev` verified this layout:
+
+```text
+Stock Casa UI             0.0.0.0:80      turbontc.service
+Stock Casa remote UI path 0.0.0.0:8080    turbontc.service
+Casa authenticate service 0.0.0.0:27068   da_authenticate.service
+QManager HTTPS UI         0.0.0.0:9000    qmanager-lighttpd.service
+QManager HTTP redirect    0.0.0.0:9080    qmanager-lighttpd.service
+QManager web console      127.0.0.1:9081  qmanager-console.service / ttyd
+```
+
+Do not use generic `lighttpd.service` for QManager on Casa. Casa ships that
+unit masked behind the stock web service. The installer removes any older
+QManager-owned `lighttpd.service` override, masks generic `lighttpd` back to
+Casa's stock state, and installs QManager's Entware web server as
+`qmanager-lighttpd.service`.
+
+Do not bind QManager console/ttyd to `8080`. Stock `turbontc.lua` binds both
+`80` and `8080`; if QManager takes `8080`, `turbontc.service` starts and then
+fails with `Could not bind to address. Address already in use`, leaving
+`http://192.168.20.1/` closed. QManager's `/console` proxy therefore points to
+the loopback-only ttyd backend on `127.0.0.1:9081`.
+
 ## Safety checks
 
 The converter fails if it detects:
@@ -148,6 +174,9 @@ The converter fails if it detects:
 - Changed `dependencies/atcli_smd11` SHA-256.
 - Upstream RM520N paths or `80/443` lighttpd labels left in
   `scripts/usr/bin/qmanager_health_check` after conversion.
+- QManager web service or console config that tries to use Casa stock web
+  ports (`80`, `443`, or console backend `8080`) instead of
+  `qmanager-lighttpd` on `9080`/`9000` and ttyd on `127.0.0.1:9081`.
 
 It also runs `bash -n` over shell scripts and script-like files.
 
