@@ -529,7 +529,7 @@ $HTTP["url"] =~ "/cgi-bin/" {
 
 $HTTP["url"] =~ "(^/console)" {
     proxy.header = ("map-urlpath" => ( "/console" => "/" ), "upgrade" => "enable" )
-    proxy.server = ( "" => (( "host" => "127.0.0.1", "port" => 8080 )))
+    proxy.server = ( "" => (( "host" => "127.0.0.1", "port" => 9081 )))
 }
 EOF
 info "lighttpd.conf rewritten for Casa (ports 9080/9000)"

@@ -20,6 +20,7 @@
 
 - QManager now uses its own `qmanager-lighttpd` service for the QManager web UI on ports `9080` and `9000`, instead of taking over Casa's generic `lighttpd` service name. This lets Casa's stock web UI stay on its normal port `80` path while QManager runs beside it.
 - Upgrading from earlier builds removes the old QManager-owned `lighttpd.service` override, restores Casa's masked `lighttpd` state, and starts the stock `turbontc` web UI service when it is present.
+- The optional QManager web console now uses an internal backend on `9081` instead of `8080`, because Casa's stock UI also uses `8080` while starting its normal web service.
 - System Health Check now reports QManager's web service as `qmanager-lighttpd.service`, so the service check matches the new coexistence layout.
 
 ## v0.1.12-cfw3212.20.dev

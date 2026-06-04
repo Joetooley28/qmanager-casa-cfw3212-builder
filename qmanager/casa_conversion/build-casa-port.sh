@@ -1249,6 +1249,31 @@ patch_qmanager_lighttpd_unit_name_cfw3212() {
     log "Scoped QManager service dependencies to qmanager-lighttpd.service"
 }
 
+patch_qmanager_console_port_cfw3212() {
+    local unit="$TARGET/scripts/etc/systemd/system/qmanager-console.service"
+    local conf="$TARGET/scripts/usrdata/qmanager/lighttpd.conf"
+
+    if [ -f "$unit" ]; then
+        sed -i 's/-p 8080 /-p 9081 /g' "$unit"
+
+        grep -q -- "-p 9081 " "$unit" \
+            || fail "qmanager-console.service did not move ttyd to port 9081"
+        ! grep -q -- "-p 8080 " "$unit" \
+            || fail "qmanager-console.service still uses Casa stock UI port 8080"
+    fi
+
+    if [ -f "$conf" ]; then
+        sed -i 's/"port" => 8080/"port" => 9081/g' "$conf"
+
+        grep -q '"port" => 9081' "$conf" \
+            || fail "lighttpd.conf did not move /console proxy to port 9081"
+        ! grep -q '"port" => 8080' "$conf" \
+            || fail "lighttpd.conf still proxies /console to Casa stock UI port 8080"
+    fi
+
+    log "Moved QManager web console backend to 127.0.0.1:9081"
+}
+
 patch_qmanager_health_check_paths_cfw3212() {
     local worker="$TARGET/scripts/usr/bin/qmanager_health_check"
     [ -f "$worker" ] || fail "Target missing qmanager_health_check worker"
@@ -3670,6 +3695,7 @@ apply_casa_overlays() {
 
     pin_casa_stable_ping_rust
     patch_qmanager_lighttpd_unit_name_cfw3212
+    patch_qmanager_console_port_cfw3212
     patch_qmanager_health_check_paths_cfw3212
     patch_qmanager_health_check_poller_pause_cfw3212
     patch_qmanager_poller
@@ -3855,6 +3881,10 @@ safety_checks() {
         "Casa installer must configure HTTP 9080"
     require_rg_present "9000" "$TARGET/install_cfw3212.sh" \
         "Casa installer must configure HTTPS 9000"
+    require_rg_present '"port" => 9081' "$TARGET/install_cfw3212.sh" \
+        "Casa installer must proxy /console to QManager ttyd on 9081"
+    require_rg_clean '"port" => 8080|-p 8080 ' "$TARGET/install_cfw3212.sh" \
+        "Casa installer must not reserve Casa stock UI port 8080 for QManager console"
 
     local health_check="$TARGET/scripts/usr/bin/qmanager_health_check"
     [ -f "$health_check" ] || fail "Converted tree missing qmanager_health_check worker"
@@ -3881,6 +3911,18 @@ safety_checks() {
     require_rg_clean "ECM|MBIM|RNDIS|USB Tethering|Enter Manually|QCFG" \
         "$TARGET/components/local-network/ip-passthrough/ip-passthrough-card.tsx" \
         "Casa IPPT frontend exposes unsafe USB/MAC controls"
+    if [ -f "$TARGET/scripts/etc/systemd/system/qmanager-console.service" ]; then
+        require_rg_present "[-]p 9081 " "$TARGET/scripts/etc/systemd/system/qmanager-console.service" \
+            "QManager console service must use 9081, not Casa stock UI port 8080"
+        require_rg_clean "[-]p 8080 " "$TARGET/scripts/etc/systemd/system/qmanager-console.service" \
+            "QManager console service still uses Casa stock UI port 8080"
+    fi
+    if [ -f "$TARGET/scripts/usrdata/qmanager/lighttpd.conf" ]; then
+        require_rg_present '"port" => 9081' "$TARGET/scripts/usrdata/qmanager/lighttpd.conf" \
+            "Packaged QManager lighttpd.conf must proxy /console to 9081"
+        require_rg_clean '"port" => 8080' "$TARGET/scripts/usrdata/qmanager/lighttpd.conf" \
+            "Packaged QManager lighttpd.conf still proxies /console to Casa stock UI port 8080"
+    fi
     require_rg_present "link.profile.1.ip_handover.enable" "$TARGET/scripts/usr/bin/qmanager_poller" \
         "Casa poller must report IPPT status from RDB ip_handover state"
     require_rg_present "service.ip_handover.mac_address" "$TARGET/scripts/usr/bin/qmanager_poller" \
