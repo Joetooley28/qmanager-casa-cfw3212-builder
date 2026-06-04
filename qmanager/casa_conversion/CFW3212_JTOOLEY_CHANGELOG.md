@@ -22,6 +22,10 @@
 - Upgrading from earlier builds removes the old QManager-owned `lighttpd.service` override, restores Casa's masked `lighttpd` state, and starts the stock `turbontc` web UI service when it is present.
 - System Health Check now reports QManager's web service as `qmanager-lighttpd.service`, so the service check matches the new coexistence layout.
 
+## v0.1.12-cfw3212.20.dev
+
+**Dev sideload only** — same stock UI / QManager web service coexistence fix as `v0.1.12-cfw3212.20`; use the official `.20` package release for router installs from the package repo once it is published.
+
 ## v0.1.12-cfw3212.19
 
 - The dashboard/status IP Passthrough fields now follow Casa's real IP handover state instead of always showing disabled. This matches the Local Network → IP Passthrough settings page, which was already reading Casa's RDB state correctly.
