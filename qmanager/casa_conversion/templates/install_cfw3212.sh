@@ -14,7 +14,7 @@
 #   - Entware       → /usrdata/opt  (/opt -> /usrdata/opt symlink for ELF paths)
 #   - Systemd units → /etc/systemd/system  (writable via overlay)
 #   - Wants symlinks→ /etc/systemd/system/multi-user.target.wants
-#   - lighttpd on port 9000 (HTTPS) — port 80 is Casa's turbontc
+#   - qmanager-lighttpd on port 9000 (HTTPS) — port 80 is Casa's turbontc
 #   - /dev/smd11 exists and is free — atcli_smd11 works as-is
 # =============================================================================
 
@@ -1125,9 +1125,9 @@ else
 fi
 
 # Keep QManager quiet before the flash-heavy file sync sections. This lowers
-# contention from lighttpd/poller work while /usrdata is being checked/written.
+# contention from qmanager-lighttpd/poller work while /usrdata is being checked/written.
 step "Stopping existing QManager services"
-for svc in qmanager-poller qmanager-ping qmanager-setup qmanager-ttl qmanager-mtu lighttpd; do
+for svc in qmanager-poller qmanager-ping qmanager-setup qmanager-ttl qmanager-mtu qmanager-lighttpd lighttpd; do
     systemctl stop "$svc" 2>/dev/null || true
 done
 pkill -f qmanager_poller 2>/dev/null || true
@@ -1316,6 +1316,17 @@ step "Installing systemd units to $SYSTEMD_DIR"
 
 mkdir -p "$WANTS_DIR"
 
+rm -f "$SYSTEMD_DIR/lighttpd.service" "$WANTS_DIR/lighttpd.service"
+systemctl mask lighttpd 2>/dev/null || true
+info "Removed legacy QManager lighttpd.service override"
+
+if systemctl list-unit-files turbontc.service >/dev/null 2>&1; then
+    systemctl reset-failed turbontc.service 2>/dev/null || true
+    systemctl start turbontc.service 2>/dev/null \
+        && info "Casa stock UI turbontc.service is running" \
+        || warn "Casa stock UI turbontc.service did not start — check: systemctl status turbontc"
+fi
+
 for f in "$SRC_SCRIPTS/etc/systemd/system"/qmanager*.service; do
     [ -f "$f" ] || continue
     cp "$f" "$SYSTEMD_DIR/"
@@ -1368,19 +1379,13 @@ WantedBy=multi-user.target
 EOF
 fi
 
-# lighttpd.service — overrides the null-mask in squashfs.
-# Write a clean Casa-specific unit instead of trying to rewrite the upstream
-# one again after the earlier generic /opt -> /usrdata/opt patching pass.
-#
-# Casa ships lighttpd.service masked (a symlink to /dev/null). Clear the mask
-# first: otherwise `cat >` writes through the symlink to /dev/null and the
-# follow-up `sed -i` leaves a 0-byte regular file — which systemd still treats
-# as masked, so `systemctl start lighttpd` fails.
-systemctl unmask lighttpd 2>/dev/null || true
-rm -f "$SYSTEMD_DIR/lighttpd.service"
-cat > "$SYSTEMD_DIR/lighttpd.service" << EOF
+# qmanager-lighttpd.service — keep QManager's Entware web server separate from
+# Casa's stock web stack. Stock Casa masks lighttpd.service and serves the
+# browser UI through turbontc.service on port 80; QManager stays on 9080/9000.
+rm -f "$SYSTEMD_DIR/qmanager-lighttpd.service"
+cat > "$SYSTEMD_DIR/qmanager-lighttpd.service" << EOF
 [Unit]
-Description=Lighttpd Daemon
+Description=QManager Lighttpd Daemon
 After=network.target
 
 [Service]
@@ -1394,11 +1399,11 @@ Restart=on-failure
 [Install]
 WantedBy=multi-user.target
 EOF
-sed -i 's/\r$//' "$SYSTEMD_DIR/lighttpd.service"
-info "lighttpd.service installed (overrides squashfs null-mask)"
+sed -i 's/\r$//' "$SYSTEMD_DIR/qmanager-lighttpd.service"
+info "qmanager-lighttpd.service installed (QManager web UI only)"
 
 # Enable services
-for svc in lighttpd qmanager-firewall qmanager-setup qmanager-ping \
+for svc in qmanager-lighttpd qmanager-firewall qmanager-setup qmanager-ping \
            qmanager-poller qmanager-ttl qmanager-mtu qmanager-imei-check; do
     f="$SYSTEMD_DIR/${svc}.service"
     if [ -f "$f" ]; then
@@ -1438,11 +1443,11 @@ sleep 1
 
 # Verify lighttpd config before starting
 if $LIGHTTPD_LAUNCHER -tt -f "$LIGHTTPD_CONF" >/dev/null 2>&1; then
-    systemctl start lighttpd 2>/dev/null \
-        && info "lighttpd started" \
-        || warn "lighttpd failed — check: systemctl status lighttpd"
+    systemctl start qmanager-lighttpd 2>/dev/null \
+        && info "qmanager-lighttpd started" \
+        || warn "qmanager-lighttpd failed — check: systemctl status qmanager-lighttpd"
 else
-    warn "lighttpd config check failed — not starting"
+    warn "qmanager-lighttpd config check failed — not starting"
     warn "Debug: $LIGHTTPD_LAUNCHER -tt -f $LIGHTTPD_CONF"
 fi
 
@@ -1522,7 +1527,7 @@ fi
 echo ""
 printf "${GREEN}${BOLD}QManager install complete.${NC}\n"
 echo ""
-printf "${YELLOW}  Note: lighttpd was restarted. If the web UI appears blank,${NC}\n"
+printf "${YELLOW}  Note: qmanager-lighttpd was restarted. If the web UI appears blank,${NC}\n"
 printf "${YELLOW}  do a hard refresh (Ctrl+F5 / Cmd+Shift+R) — do not wait.${NC}\n"
 printf "${YELLOW}  Your login session is preserved across updates.${NC}\n"
 printf "${YELLOW}  A reboot is recommended when convenient, but this installer does not reboot automatically.${NC}\n"
@@ -1531,7 +1536,7 @@ echo "  Web UI:   https://<router-lan-ip>:9000/"
 echo "  Setup:    create the QManager password on first login"
 echo ""
 echo "  Check status:"
-echo "    systemctl status lighttpd"
+echo "    systemctl status qmanager-lighttpd"
 echo "    systemctl status qmanager-poller"
 echo ""
 echo "  lighttpd config test:"

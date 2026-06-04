@@ -335,7 +335,7 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-SERVICES="lighttpd \
+SERVICES="qmanager-lighttpd lighttpd \
     qmanager-poller qmanager-ping qmanager-firewall qmanager-setup \
     qmanager-ttl qmanager-mtu qmanager-imei-check qmanager-watchcat \
     qmanager-tower-failover qmanager-traffic qmanager-console \
@@ -1238,6 +1238,17 @@ pin_casa_stable_ping_rust() {
     log "Pinned qmanager_ping Rust binary from Casa-tested reference"
 }
 
+patch_qmanager_lighttpd_unit_name_cfw3212() {
+    local f
+
+    for f in "$TARGET/scripts/etc/systemd/system"/qmanager*.service; do
+        [ -f "$f" ] || continue
+        sed -i 's/lighttpd\.service/qmanager-lighttpd.service/g' "$f"
+    done
+
+    log "Scoped QManager service dependencies to qmanager-lighttpd.service"
+}
+
 patch_qmanager_health_check_paths_cfw3212() {
     local worker="$TARGET/scripts/usr/bin/qmanager_health_check"
     [ -f "$worker" ] || fail "Target missing qmanager_health_check worker"
@@ -1270,11 +1281,19 @@ rules = [
     ("/etc/sudoers.d/qmanager",       "/usrdata/opt/etc/sudoers.d/qmanager"),
     ("/lib/systemd/system/multi-user.target.wants",
      "/etc/systemd/system/multi-user.target.wants"),
+    ('label:"lighttpd.service"',
+     'label:"qmanager-lighttpd.service"'),
+    ('"lighttpd.service"',
+     '"qmanager-lighttpd.service"'),
+    ("_svc_check lighttpd.service 1",
+     "_svc_check qmanager-lighttpd.service 1"),
+    ("lighttpd.service tailscaled.service",
+     "qmanager-lighttpd.service tailscaled.service"),
     # Lighttpd port check — Casa exposes 9080/9000 instead of 80/443.
     (r"grep -qE '[:.](80)\b'",        r"grep -qE '[:.](9080)\b'"),
     (r"grep -qE '[:.](443)\b'",       r"grep -qE '[:.](9000)\b'"),
     # Cosmetic strings tied to the port test — labels and result messages.
-    ("lighttpd listening on 80/443",  "lighttpd listening on 9080/9000"),
+    ("lighttpd listening on 80/443",  "qmanager-lighttpd listening on 9080/9000"),
     ("listening on 80 and 443",       "listening on 9080 and 9000"),
     ("listening on only one of 80/443", "listening on only one of 9080/9000"),
     ("not listening on 80 or 443",    "not listening on 9080 or 9000"),
@@ -1297,7 +1316,7 @@ rules = [
     ('"fail|/opt/bin not in lighttpd.conf and not in cgi_base.sh"',
      '"fail|/usrdata/opt/bin not in lighttpd.conf and not in cgi_base.sh"'),
     ("lighttpd CGI PATH includes /opt/bin",
-     "lighttpd CGI PATH includes /usrdata/opt/bin"),
+     "qmanager-lighttpd CGI PATH includes /usrdata/opt/bin"),
 ]
 
 # Build a single replacement table indexed by left-most match position so
@@ -1366,8 +1385,12 @@ PY
     sudoers_casa=$(grep -c "/usrdata/opt/etc/sudoers\.d/qmanager" "$worker" || echo 0)
     [ "$sudoers_total" = "$sudoers_casa" ] \
         || fail "Health-check worker has non-Casa /etc/sudoers.d/qmanager references"
-    grep -q "lighttpd listening on 9080/9000" "$worker" \
+    grep -q "qmanager-lighttpd listening on 9080/9000" "$worker" \
         || fail "Health-check worker still has 80/443 in lighttpd_listen label"
+    grep -q "_svc_check qmanager-lighttpd.service 1" "$worker" \
+        || fail "Health-check worker missing qmanager-lighttpd service check"
+    ! grep -q "_svc_check lighttpd.service" "$worker" \
+        || fail "Health-check worker still checks generic lighttpd.service"
     ! grep -q "listening on only one of 80/443" "$worker" \
         || fail "Health-check worker still has 80/443 in lighttpd_listen warn message"
     ! grep -q "|| echo unknown)" "$worker" \
@@ -1390,7 +1413,7 @@ PY
     fi
     grep -q "local cgi_base=/usrdata/qmanager/lib/cgi_base.sh" "$worker" \
         || fail "Health-check worker still has upstream /usr/lib/qmanager/cgi_base.sh path"
-    grep -q "lighttpd CGI PATH includes /usrdata/opt/bin" "$worker" \
+    grep -q "qmanager-lighttpd CGI PATH includes /usrdata/opt/bin" "$worker" \
         || fail "Health-check worker cfg.cgi_path_opt label still says /opt/bin"
 }
 
@@ -3646,6 +3669,7 @@ apply_casa_overlays() {
     write_update_cfw3212
 
     pin_casa_stable_ping_rust
+    patch_qmanager_lighttpd_unit_name_cfw3212
     patch_qmanager_health_check_paths_cfw3212
     patch_qmanager_health_check_poller_pause_cfw3212
     patch_qmanager_poller
@@ -3705,7 +3729,7 @@ Build: @VERSION_NAME@-cfw3212.1
 
 ## Service checks
 
-- `systemctl status lighttpd`
+- `systemctl status qmanager-lighttpd`
 - `systemctl status qmanager-poller`
 - `systemctl status qmanager-ping`
 - `/usrdata/opt/lib/ld-linux.so.3 --library-path /usrdata/opt/lib /usrdata/opt/sbin/lighttpd -tt -f /usrdata/qmanager/lighttpd.conf`
@@ -3836,9 +3860,11 @@ safety_checks() {
     [ -f "$health_check" ] || fail "Converted tree missing qmanager_health_check worker"
     require_rg_present "/usrdata/opt/bin/jq" "$health_check" \
         "Health-check worker must use Casa /usrdata/opt/bin helpers"
-    require_rg_present "lighttpd listening on 9080/9000" "$health_check" \
+    require_rg_present "qmanager-lighttpd listening on 9080/9000" "$health_check" \
         "Health-check worker must use Casa lighttpd ports 9080/9000"
-    require_rg_clean "/usr/bin/atcli_smd11|listening on only one of 80/443|_check_bin jq          /opt/bin/jq|_check_bin curl        /opt/bin/curl|_check_bin openssl     /opt/bin/openssl" \
+    require_rg_present "_svc_check qmanager-lighttpd.service 1" "$health_check" \
+        "Health-check worker must check qmanager-lighttpd.service"
+    require_rg_clean "_svc_check lighttpd.service|/usr/bin/atcli_smd11|listening on only one of 80/443|_check_bin jq          /opt/bin/jq|_check_bin curl        /opt/bin/curl|_check_bin openssl     /opt/bin/openssl" \
         "$health_check" \
         "Health-check worker still contains upstream RM520N paths or port labels"
     require_rg_present 'POLLER_PAUSE_FLAG="/tmp/qmanager_speedtest_polling_pause"' "$health_check" \

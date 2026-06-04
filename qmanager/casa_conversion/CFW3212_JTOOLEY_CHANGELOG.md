@@ -16,6 +16,12 @@
 - Software Update → Version Management can now install a different version (including rollbacks). After the download verifies, the Install button switches to "Install Now" so the staged package actually gets applied instead of being left on disk.
 - A handful of upstream modem-management actions stay blocked or limited on Casa because they'd let you push the modem into a state we don't want it in.
 
+## v0.1.12-cfw3212.20
+
+- QManager now uses its own `qmanager-lighttpd` service for the QManager web UI on ports `9080` and `9000`, instead of taking over Casa's generic `lighttpd` service name. This lets Casa's stock web UI stay on its normal port `80` path while QManager runs beside it.
+- Upgrading from earlier builds removes the old QManager-owned `lighttpd.service` override, restores Casa's masked `lighttpd` state, and starts the stock `turbontc` web UI service when it is present.
+- System Health Check now reports QManager's web service as `qmanager-lighttpd.service`, so the service check matches the new coexistence layout.
+
 ## v0.1.12-cfw3212.19
 
 - The dashboard/status IP Passthrough fields now follow Casa's real IP handover state instead of always showing disabled. This matches the Local Network → IP Passthrough settings page, which was already reading Casa's RDB state correctly.

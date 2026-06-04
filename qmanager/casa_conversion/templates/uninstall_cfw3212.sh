@@ -16,7 +16,7 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-SERVICES="lighttpd \
+SERVICES="qmanager-lighttpd lighttpd \
     qmanager-poller qmanager-ping qmanager-firewall qmanager-setup \
     qmanager-ttl qmanager-mtu qmanager-imei-check qmanager-watchcat \
     qmanager-tower-failover qmanager-traffic qmanager-console \
@@ -35,7 +35,7 @@ for svc in $SERVICES; do
     rm -f "/etc/systemd/system/multi-user.target.wants/$svc.service"
 done
 # Casa ships lighttpd masked behind its stock web service. Restore that state
-# after removing the QManager override unit.
+# after removing any older QManager override unit.
 systemctl mask lighttpd 2>/dev/null || true
 info "QManager service units removed"
 
