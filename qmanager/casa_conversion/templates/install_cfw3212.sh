@@ -647,6 +647,9 @@ if [ "$REQUEST_METHOD" = "POST" ]; then
     policy_enable="$(rdb get "$PROFILE_POLICY_ENABLE_RDB" 2>/dev/null)"
     [ -z "$policy_enable" ] && policy_enable="1"
     rdb set "$PROFILE_TRIGGER_RDB" "$policy_enable" 2>/dev/null || true
+    if [ -x /usrdata/bin/qmanager_ippt_dns_repair ]; then
+        /usrdata/bin/qmanager_ippt_dns_repair --if-poisoned >/dev/null 2>&1 || true
+    fi
 
     emit_state
     exit 0
@@ -656,6 +659,117 @@ cgi_method_not_allowed
 EOF
 chmod 755 "$SRC_SCRIPTS/www/cgi-bin/quecmanager/network/ip_passthrough.sh" 2>/dev/null || true
 info "Casa IP Passthrough mapped to ip_handover with usbnet control still blocked"
+
+mkdir -p "$SRC_SCRIPTS/usr/bin"
+cat > "$SRC_SCRIPTS/usr/bin/qmanager_ippt_dns_repair" << 'EOF'
+#!/bin/sh
+set -u
+
+DNSMASQ_CONF="/etc/data/dnsmasq.conf"
+TMP_CONF="/tmp/qmanager-ippt-dns-repair.$$"
+BEGIN="# QMANAGER-DNS-RECOVERY-BEGIN"
+END="# QMANAGER-DNS-RECOVERY-END"
+CUSTOM_BEGIN="# QMANAGER-CUSTOM-DNS-BEGIN v1"
+
+log() {
+    logger -t qmanager-ippt-dns-repair "$*" 2>/dev/null || true
+}
+
+rdb_read() {
+    rdb get "$1" 2>/dev/null || true
+}
+
+ippt_enabled() {
+    profile_enabled="$(rdb_read link.profile.1.ip_handover.enable)"
+    service_enabled="$(rdb_read service.ip_handover.enable)"
+    [ "$profile_enabled" = "1" ] || [ "$service_enabled" = "1" ]
+}
+
+dns_poisoned() {
+    policy_dns="$(rdb_read link.policy.1.dns1)"
+    prev_dns="$(rdb_read service.dns.prev_server)"
+    if [ "$policy_dns" = "192.0.0.1" ]; then
+        return 0
+    fi
+    if printf '%s\n' "$prev_dns" | grep -q '192\.0\.0\.1'; then
+        return 0
+    fi
+    if grep -q '^nameserver 192\.0\.0\.1$' /run/resolv.conf /etc/resolv.conf 2>/dev/null; then
+        return 0
+    fi
+    return 1
+}
+
+restart_dnsmasq() {
+    systemctl restart dnsmasq_service@0.service 2>/dev/null || \
+        /bin/systemctl restart dnsmasq_service@0.service 2>/dev/null || true
+}
+
+strip_recovery_block() {
+    src="$1"
+    dst="$2"
+    awk -v begin="$BEGIN" -v end="$END" '
+        $0 == begin { skip = 1; next }
+        $0 == end { skip = 0; next }
+        skip != 1 { print }
+    ' "$src" > "$dst"
+}
+
+apply_recovery_block() {
+    [ -f "$DNSMASQ_CONF" ] || {
+        log "missing $DNSMASQ_CONF; cannot install recovery block"
+        return 1
+    }
+
+    if grep -q "^$CUSTOM_BEGIN$" "$DNSMASQ_CONF" 2>/dev/null; then
+        log "custom DNS block present; leaving it authoritative"
+        restart_dnsmasq
+        return 0
+    fi
+
+    strip_recovery_block "$DNSMASQ_CONF" "$TMP_CONF" || return 1
+    {
+        printf '%s\n' "$BEGIN"
+        printf '%s\n' "no-resolv"
+        printf '%s\n' "server=1.1.1.1"
+        printf '%s\n' "server=8.8.8.8"
+        printf '%s\n' "server=8.8.4.4"
+        printf '%s\n' "$END"
+    } >> "$TMP_CONF"
+
+    if command -v dnsmasq >/dev/null 2>&1; then
+        if ! dnsmasq --test --conf-file="$TMP_CONF" >/tmp/qmanager-ippt-dns-repair-test.log 2>&1; then
+            log "dnsmasq validation failed; leaving existing config unchanged"
+            rm -f "$TMP_CONF"
+            return 1
+        fi
+    fi
+
+    cp "$DNSMASQ_CONF" "$DNSMASQ_CONF.bak-qmanager-ippt-dns-$(date +%Y%m%d%H%M%S)" 2>/dev/null || true
+    cat "$TMP_CONF" > "$DNSMASQ_CONF" || {
+        rm -f "$TMP_CONF"
+        return 1
+    }
+    rm -f "$TMP_CONF"
+    chown radio:radio "$DNSMASQ_CONF" 2>/dev/null || true
+    chmod 0644 "$DNSMASQ_CONF" 2>/dev/null || true
+    restart_dnsmasq
+    log "installed IPPT DNS recovery block"
+}
+
+case "${1:---if-poisoned}" in
+    --if-poisoned) ;;
+    *) echo "usage: qmanager_ippt_dns_repair [--if-poisoned]" >&2; exit 2 ;;
+esac
+
+if ippt_enabled && dns_poisoned; then
+    apply_recovery_block
+else
+    rm -f "$TMP_CONF" 2>/dev/null || true
+fi
+EOF
+chmod 755 "$SRC_SCRIPTS/usr/bin/qmanager_ippt_dns_repair" 2>/dev/null || true
+info "Casa IPPT DNS recovery helper staged"
 
 # Casa keeps the upstream SIM Profile UI/manual apply path enabled. Profiles
 # can save/delete JSON state and, when manually applied by the user, can set APN,
@@ -699,6 +813,11 @@ if [ -d "$SRC_SCRIPTS/usr/bin" ]; then
         copy_if_changed "$f" "$BIN_DIR/$fname" 755 || true
     done
     info "$(ls "$SRC_SCRIPTS/usr/bin" | wc -l) daemons installed to $BIN_DIR"
+fi
+
+if [ -x "$BIN_DIR/qmanager_ippt_dns_repair" ]; then
+    "$BIN_DIR/qmanager_ippt_dns_repair" --if-poisoned >/dev/null 2>&1 || \
+        warn "IPPT DNS recovery check did not complete"
 fi
 
 # Preserve the upstream Rust qmanager_ping as the primary implementation, but

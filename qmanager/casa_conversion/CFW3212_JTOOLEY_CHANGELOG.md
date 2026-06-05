@@ -11,10 +11,21 @@
 - Discord Bot backend is now part of the Casa package, so you can plug in your own Discord bot token and user ID and try the UI. (wired up, not tested yet)
 - SIM Profiles can be saved, applied, deleted, and deactivated by hand on Casa. That includes APN, TTL/HL, IMEI, and the modem reboot apply step. The blind "auto-apply by ICCID" behavior is still off by default.
 - Custom DNS works from the QManager UI, including custom upstream resolvers for LAN clients without changing DHCP leases or rebooting the router.
+- IP Passthrough now has a package-level DNS recovery guard for boxes that previously ended up forwarding DNS to the passthrough gateway instead of a real upstream resolver.
 - The Reconnect Network menu action now uses Casa's connection manager path instead of forcing a modem deregister/re-register.
 - Reconnect Network now keeps a small progress window open so you can watch elapsed time, network registration, WAN IP, and internet status while the router comes back online.
 - Software Update → Version Management can now install a different version (including rollbacks). After the download verifies, the Install button switches to "Install Now" so the staged package actually gets applied instead of being left on disk.
 - A handful of upstream modem-management actions stay blocked or limited on Casa because they'd let you push the modem into a state we don't want it in.
+
+## v0.1.12-cfw3212.21
+
+- Adds an IP Passthrough DNS recovery check during install/upgrade. If an older install left the router using the passthrough gateway as its DNS upstream, the package now adds a QManager-managed dnsmasq recovery block with working public resolvers and restarts dnsmasq.
+- The IP Passthrough apply path now runs the same recovery check after a toggle, so enabling or disabling IP Passthrough does not leave the dashboard stuck at "DNS resolution failed" while raw internet still works.
+- Existing QManager Custom DNS settings are left authoritative. If Custom DNS is already configured, the recovery helper does not overwrite it.
+
+## v0.1.12-cfw3212.21.dev
+
+**Dev sideload only** — same IP Passthrough DNS recovery guard as `v0.1.12-cfw3212.21`; use the official `.21` package release for router installs from the package repo once it is published.
 
 ## v0.1.12-cfw3212.20
 

@@ -513,6 +513,9 @@ if [ "$REQUEST_METHOD" = "POST" ]; then
             exit 0
             ;;
     esac
+    if [ -x /usrdata/bin/qmanager_ippt_dns_repair ]; then
+        /usrdata/bin/qmanager_ippt_dns_repair --if-poisoned >/dev/null 2>&1 || true
+    fi
     mkdir -p "$(dirname "$CONFIG")"
     jq -n --arg mode "$mode" '{mode:$mode, mac:"", nat:"1", usb_mode:"1", dns_proxy:"disabled"}' > "$CONFIG" 2>/dev/null || true
     jq -n --arg mode "$mode" '{success:true, passthrough_mode:$mode}'
@@ -3905,6 +3908,8 @@ safety_checks() {
 
     require_rg_present "ip_handover" "$TARGET/scripts/www/cgi-bin/quecmanager/network/ip_passthrough.sh" \
         "Casa IPPT backend must use RDB ip_handover"
+    require_rg_present "qmanager_ippt_dns_repair" "$TARGET/install_cfw3212.sh" \
+        "Casa installer missing IPPT DNS recovery helper"
     require_rg_clean 'QCFG="usbnet"|QMAP="MPDN_rule"|QMAP="IPPT_NAT"|QMAP="DHCPV4DNS"|QMAPWAC|(^|[^[:alnum:]_])reboot([^[:alnum:]_]|$)' \
         "$TARGET/scripts/www/cgi-bin/quecmanager/network/ip_passthrough.sh" \
         "Casa IPPT backend contains upstream modem-write/reboot controls"
