@@ -2013,10 +2013,10 @@ setup = replace_once(
     '''# CGI (www-data) writes cron entries for root — needs write access to spool dir
 chmod 777 /var/spool/cron/crontabs
 ''',
-    '''# Keep the cron spool root-owned; QManager cron changes should go through
-# crontab/sudo helpers rather than a world-writable spool directory.
-chown root:root /var/spool/cron /var/spool/cron/crontabs 2>/dev/null || true
-chmod 755 /var/spool/cron /var/spool/cron/crontabs
+    '''# Keep the cron spool root-owned and non-world-writable while preserving
+# current CGI schedule writers that update root's crontab directly.
+chown root:www-data /var/spool/cron /var/spool/cron/crontabs 2>/dev/null || true
+chmod 775 /var/spool/cron /var/spool/cron/crontabs
 ''',
     "qmanager_setup cron permissions",
 )
@@ -2127,7 +2127,7 @@ PY
         || fail "Could not apply data_used durable flush function"
     grep -q 'QLOG_TO_SYSLOG="${QLOG_TO_SYSLOG:-0}"' "$qlog" \
         || fail "Could not disable Casa syslog forwarding default"
-    grep -q 'chmod 755 /var/spool/cron /var/spool/cron/crontabs' "$setup" \
+    grep -q 'chmod 775 /var/spool/cron /var/spool/cron/crontabs' "$setup" \
         || fail "Could not harden cron spool permissions"
     grep -q 'auth_unavailable' "$cgi_base" \
         || fail "Could not apply CGI auth fail-closed fallback"
@@ -2135,6 +2135,111 @@ PY
         || fail "Could not apply CGI POST size limit"
     grep -q 'local f=/tmp/qmanager_data_used.json' "$health" \
         || fail "Could not move Health Check data_used freshness to hot state"
+}
+
+patch_ai62_cookie_cors_config_hardening_cfw3212() {
+    local cgi_auth="$TARGET/scripts/usr/lib/qmanager/cgi_auth.sh"
+    local cgi_base="$TARGET/scripts/usr/lib/qmanager/cgi_base.sh"
+    local setup="$TARGET/scripts/usr/bin/qmanager_setup"
+
+    [ -f "$cgi_auth" ] || fail "Target missing cgi_auth.sh"
+    [ -f "$cgi_base" ] || fail "Target missing cgi_base.sh"
+    [ -f "$setup" ] || fail "Target missing qmanager_setup"
+
+    python3 - "$cgi_auth" "$cgi_base" "$setup" <<'PY'
+from pathlib import Path
+import sys
+
+cgi_auth_path, cgi_base_path, setup_path = map(Path, sys.argv[1:])
+
+def replace_once(text, old, new, label):
+    if old not in text:
+        raise SystemExit(f"{label} marker not found")
+    return text.replace(old, new, 1)
+
+cgi_auth = cgi_auth_path.read_text()
+cgi_auth = replace_once(
+    cgi_auth,
+    '''qm_set_session_cookies() {
+    echo "Set-Cookie: ${COOKIE_SESSION}=${1}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_MAX_AGE}"
+    echo "Set-Cookie: ${COOKIE_INDICATOR}=1; SameSite=Strict; Path=/; Max-Age=${SESSION_MAX_AGE}"
+}
+
+# Emit Set-Cookie headers that clear both cookies
+qm_clear_session_cookies() {
+    echo "Set-Cookie: ${COOKIE_SESSION}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0"
+    echo "Set-Cookie: ${COOKIE_INDICATOR}=; SameSite=Strict; Path=/; Max-Age=0"
+}
+''',
+    '''qm_set_session_cookies() {
+    echo "Set-Cookie: ${COOKIE_SESSION}=${1}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=${SESSION_MAX_AGE}"
+    echo "Set-Cookie: ${COOKIE_INDICATOR}=1; Secure; SameSite=Strict; Path=/; Max-Age=${SESSION_MAX_AGE}"
+}
+
+# Emit Set-Cookie headers that clear both cookies
+qm_clear_session_cookies() {
+    echo "Set-Cookie: ${COOKIE_SESSION}=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0"
+    echo "Set-Cookie: ${COOKIE_INDICATOR}=; Secure; SameSite=Strict; Path=/; Max-Age=0"
+}
+''',
+    "cgi_auth secure cookie headers",
+)
+cgi_auth_path.write_text(cgi_auth)
+
+cgi_base = cgi_base_path.read_text()
+cgi_base = cgi_base.replace(
+    "# Emit full JSON + CORS headers followed by the required blank line.",
+    "# Emit full JSON headers followed by the required blank line.",
+    1,
+)
+cgi_base = replace_once(
+    cgi_base,
+    '''    echo "Cache-Control: no-cache, no-store, must-revalidate"
+    echo "Access-Control-Allow-Origin: *"
+    echo "Access-Control-Allow-Methods: GET, POST, OPTIONS"
+    echo "Access-Control-Allow-Headers: Content-Type, Authorization"
+    echo ""
+''',
+    '''    echo "Cache-Control: no-cache, no-store, must-revalidate"
+    echo ""
+''',
+    "cgi_base wildcard CORS headers",
+)
+cgi_base_path.write_text(cgi_base)
+
+setup = setup_path.read_text()
+setup = replace_once(
+    setup,
+    '''# Config directory — www-data needs write access for auth.json, profiles
+chown -R www-data:www-data /etc/qmanager
+
+# Make all qmanager binaries executable
+''',
+    '''# Config directory — www-data needs write access for auth.json, profiles,
+# settings, and schedule state. Deny world access to persistent config.
+chown -R www-data:www-data /etc/qmanager
+find /etc/qmanager -type d -exec chmod 750 {} \\; 2>/dev/null || true
+find /etc/qmanager -type f -exec chmod 640 {} \\; 2>/dev/null || true
+[ -f /etc/qmanager/auth.json ] && chmod 600 /etc/qmanager/auth.json
+
+# Make all qmanager binaries executable
+''',
+    "qmanager_setup config permissions",
+)
+setup_path.write_text(setup)
+PY
+
+    grep -q 'HttpOnly; Secure; SameSite=Strict' "$cgi_auth" \
+        || fail "Could not add Secure to session cookie"
+    grep -q 'COOKIE_INDICATOR.*Secure; SameSite=Strict' "$cgi_auth" \
+        || fail "Could not add Secure to indicator cookie"
+    if grep -q 'Access-Control-Allow-Origin: \*' "$cgi_base"; then
+        fail "CGI base still emits wildcard CORS"
+    fi
+    grep -q 'find /etc/qmanager -type d -exec chmod 750' "$setup" \
+        || fail "Could not tighten /etc/qmanager directory modes"
+    grep -q 'find /etc/qmanager -type f -exec chmod 640' "$setup" \
+        || fail "Could not tighten /etc/qmanager file modes"
 }
 
 replace_with_stub() {
@@ -4057,6 +4162,7 @@ apply_casa_overlays() {
     patch_casa_iccid_and_staleness_cfw3212
     patch_logging_cfw3212
     patch_ai62_flash_and_cgi_hardening_cfw3212
+    patch_ai62_cookie_cors_config_hardening_cfw3212
     patch_qmanager_display_version
     patch_casa_display_name
     patch_casa_reboot
@@ -4296,8 +4402,18 @@ safety_checks() {
         "CGI auth library fallback must fail closed"
     require_rg_present "QM_MAX_POST_SIZE:=65536" "$TARGET/scripts/usr/lib/qmanager/cgi_base.sh" \
         "CGI POST body reader must enforce default size limit"
-    require_rg_present "chmod 755 /var/spool/cron /var/spool/cron/crontabs" "$TARGET/scripts/usr/bin/qmanager_setup" \
+    require_rg_present "chmod 775 /var/spool/cron /var/spool/cron/crontabs" "$TARGET/scripts/usr/bin/qmanager_setup" \
         "qmanager_setup must not leave cron spool world-writable"
+    require_rg_present "find /etc/qmanager -type d -exec chmod 750" "$TARGET/scripts/usr/bin/qmanager_setup" \
+        "qmanager_setup must restrict /etc/qmanager directory permissions"
+    require_rg_present "find /etc/qmanager -type f -exec chmod 640" "$TARGET/scripts/usr/bin/qmanager_setup" \
+        "qmanager_setup must restrict /etc/qmanager file permissions"
+    require_rg_present "HttpOnly; Secure; SameSite=Strict" "$TARGET/scripts/usr/lib/qmanager/cgi_auth.sh" \
+        "QManager session cookie must include Secure"
+    require_rg_present "COOKIE_INDICATOR.*Secure; SameSite=Strict" "$TARGET/scripts/usr/lib/qmanager/cgi_auth.sh" \
+        "QManager login indicator cookie must include Secure"
+    require_rg_clean "Access-Control-Allow-Origin: \\*" "$TARGET/scripts/usr/lib/qmanager/cgi_base.sh" \
+        "CGI base must not emit wildcard CORS by default"
     require_rg_present "local f=/tmp/qmanager_data_used.json" "$TARGET/scripts/usr/bin/qmanager_health_check" \
         "Health Check must use data_used hot-state freshness, not durable flash mtime"
 

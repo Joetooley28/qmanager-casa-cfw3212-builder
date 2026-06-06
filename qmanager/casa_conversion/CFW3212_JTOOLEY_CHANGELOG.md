@@ -24,7 +24,8 @@
 - Reduces flash wear from the data-usage counter. The poller now keeps the every-few-seconds hot counter state in `/tmp` and flushes the durable `/usrdata/qmanager/data_used.json` copy on a bounded cadence and important events instead of rewriting persistent flash every poll cycle.
 - Turns off QManager's syslog forwarding by default on Casa, because Casa stores syslog under `/usrdata/log/messages`. The normal capped QManager log stays in `/tmp`.
 - Hardens CGI handling by failing closed if the auth library is unavailable and by rejecting oversized POST bodies before reading them into memory.
-- Removes the old world-writable cron spool setup behavior and updates System Health Check to watch the RAM-backed data-usage hot state for poller freshness.
+- Adds the `Secure` attribute to QManager login cookies and removes wildcard CORS headers from CGI responses; the UI and API are served from the same HTTPS origin.
+- Removes the old world-writable cron spool setup behavior while preserving QManager's current schedule writers, tightens `/etc/qmanager` file and directory permissions, and updates System Health Check to watch the RAM-backed data-usage hot state for poller freshness.
 
 ## v0.1.12-cfw3212.22.dev
 
