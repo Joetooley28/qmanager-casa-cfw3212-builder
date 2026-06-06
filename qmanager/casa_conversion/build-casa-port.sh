@@ -2251,6 +2251,89 @@ PY
         || fail "Could not tighten /etc/qmanager file modes"
 }
 
+patch_ai62_sudoers_narrowing_cfw3212() {
+    local sudoers="$TARGET/scripts/etc/sudoers.d/qmanager"
+
+    [ -f "$sudoers" ] || fail "Target missing etc/sudoers.d/qmanager"
+
+    python3 - "$sudoers" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+
+# AI-62 phase 1: align Custom DNS sudo rules with Casa /tmp staging + systemctl
+# reload, drop unused crontab (Casa CGI writes /var/spool/cron/crontabs/root
+# directly), and narrow systemctl to known QManager/tailscaled/dnsmasq units.
+new_text = """# QManager — sudoers rules for CGI scripts (lighttpd runs as www-data)
+# Install location: /usrdata/opt/etc/sudoers.d/qmanager on Casa CFW-3212
+
+# Service control — qmanager units, tailscaled, Casa dnsmasq only (AI-62)
+www-data ALL=(root) NOPASSWD: /bin/systemctl start qmanager-*, /bin/systemctl stop qmanager-*, /bin/systemctl restart qmanager-*, /bin/systemctl is-active qmanager-*
+www-data ALL=(root) NOPASSWD: /bin/systemctl start tailscaled, /bin/systemctl stop tailscaled, /bin/systemctl restart tailscaled, /bin/systemctl is-active tailscaled
+www-data ALL=(root) NOPASSWD: /bin/systemctl start dnsmasq_service@0.service, /bin/systemctl stop dnsmasq_service@0.service, /bin/systemctl restart dnsmasq_service@0.service, /bin/systemctl is-active dnsmasq_service@0.service
+
+# Boot persistence (symlink-based — systemctl enable doesn't work on RM520N-GL / Casa)
+www-data ALL=(root) NOPASSWD: /bin/ln -sf /lib/systemd/system/qmanager*.service /lib/systemd/system/multi-user.target.wants/qmanager*.service
+www-data ALL=(root) NOPASSWD: /bin/rm -f /lib/systemd/system/multi-user.target.wants/qmanager*.service
+
+# Firewall rules (used by TTL via run_iptables — phase 2 may wrap in helper)
+www-data ALL=(root) NOPASSWD: /usr/sbin/iptables, /usr/sbin/iptables-restore, /usr/sbin/ip6tables, /usr/sbin/ip6tables-restore
+
+# System reboot (used by system/reboot.sh, update installer)
+www-data ALL=(root) NOPASSWD: /sbin/reboot
+
+# SSH password management (reads password from stdin, updates /etc/shadow)
+www-data ALL=(root) NOPASSWD: /usr/bin/qmanager_set_ssh_password
+
+# Tailscale VPN management
+www-data ALL=(root) NOPASSWD: /usr/bin/qmanager_tailscale_mgr
+www-data ALL=(root) NOPASSWD: /usrdata/tailscale/tailscale
+www-data ALL=(root) NOPASSWD: /usrdata/tailscale/tailscaled --version
+
+# Tailscale boot persistence (symlink-based)
+www-data ALL=(root) NOPASSWD: /bin/ln -sf /lib/systemd/system/tailscaled.service /lib/systemd/system/multi-user.target.wants/tailscaled.service
+www-data ALL=(root) NOPASSWD: /bin/rm -f /lib/systemd/system/multi-user.target.wants/tailscaled.service
+
+# Web console management
+www-data ALL=(root) NOPASSWD: /usr/bin/qmanager_console_mgr
+
+# OTA updater (download/stage/install/rollback — needs full root for install.sh)
+www-data ALL=(root) NOPASSWD: /usr/bin/qmanager_update
+
+# System Health Check (privileged runner that probes binaries, AT, services, sudoers)
+www-data ALL=(root) NOPASSWD: /usr/bin/qmanager_health_check
+
+# Ethernet link speed limit management
+www-data ALL=(root) NOPASSWD: /usr/bin/qmanager_ethernet_apply
+
+# Custom DNS management (Casa: tmp staging + systemctl restart dnsmasq)
+# Note: chown's "radio:radio" argument has the colon backslash-escaped because
+# sudoers treats ':' as the user:group separator in any token unless escaped.
+www-data ALL=(root) NOPASSWD: /bin/mv /tmp/qmanager-dnsmasq.conf.new /etc/data/dnsmasq.conf
+www-data ALL=(root) NOPASSWD: /bin/chown radio\\:radio /etc/data/dnsmasq.conf
+"""
+
+if text == new_text:
+    raise SystemExit("sudoers already narrowed — duplicate patch?")
+path.write_text(new_text)
+PY
+
+    grep -q 'systemctl start qmanager-\*' "$sudoers" \
+        || fail "Could not narrow sudoers systemctl rules to qmanager-*"
+    grep -q '/tmp/qmanager-dnsmasq.conf.new /etc/data/dnsmasq.conf' "$sudoers" \
+        || fail "Could not align sudoers Custom DNS mv rule with /tmp staging"
+    grep -q 'systemctl restart dnsmasq_service@0.service' "$sudoers" \
+        || fail "Could not add sudoers dnsmasq_service restart allowance"
+    grep -q '/usr/bin/crontab' "$sudoers" \
+        && fail "sudoers still allows broad crontab after AI-62 narrowing"
+    grep -q 'killall -HUP dnsmasq' "$sudoers" \
+        && fail "sudoers still allows obsolete dnsmasq killall reload"
+    grep -q '/bin/systemctl start \*' "$sudoers" \
+        && fail "sudoers still allows broad systemctl start *"
+}
+
 replace_with_stub() {
     local rel="$1"
     local message="$2"
@@ -4172,6 +4255,8 @@ apply_casa_overlays() {
     patch_logging_cfw3212
     patch_ai62_flash_and_cgi_hardening_cfw3212
     patch_ai62_cookie_cors_config_hardening_cfw3212
+    patch_casa_custom_dns_cfw3212
+    patch_ai62_sudoers_narrowing_cfw3212
     patch_qmanager_display_version
     patch_casa_display_name
     patch_casa_reboot
@@ -4181,7 +4266,6 @@ apply_casa_overlays() {
     copy_template_or_fallback "components/monitoring/software-update/software-update.tsx" "$TEMPLATE_DIR/components/monitoring/software-update/software-update.tsx"
     copy_template_or_fallback "hooks/use-software-update.ts" "$TEMPLATE_DIR/hooks/use-software-update.ts"
     copy_template_or_fallback "components/reboot/reboot-countdown.tsx" "$TEMPLATE_DIR/components/reboot/reboot-countdown.tsx"
-    patch_casa_custom_dns_cfw3212
     patch_casa_tailscale_tiny_cfw3212
     patch_casa_tailscale_install_label_cfw3212
     patch_casa_poller_boot_identity_cfw3212
@@ -4425,6 +4509,16 @@ safety_checks() {
         "CGI base must not emit wildcard CORS by default"
     require_rg_present "local f=/tmp/qmanager_data_used.json" "$TARGET/scripts/usr/bin/qmanager_health_check" \
         "Health Check must use data_used hot-state freshness, not durable flash mtime"
+    require_rg_present "systemctl start qmanager-*" "$TARGET/scripts/etc/sudoers.d/qmanager" \
+        "sudoers must narrow systemctl to qmanager-* units (AI-62)"
+    require_rg_present "/tmp/qmanager-dnsmasq.conf.new /etc/data/dnsmasq.conf" "$TARGET/scripts/etc/sudoers.d/qmanager" \
+        "sudoers Custom DNS mv rule must match Casa /tmp staging path (AI-62)"
+    require_rg_clean "/bin/systemctl start \\*" "$TARGET/scripts/etc/sudoers.d/qmanager" \
+        "sudoers must not allow broad systemctl start * (AI-62)"
+    require_rg_clean "/usr/bin/crontab" "$TARGET/scripts/etc/sudoers.d/qmanager" \
+        "sudoers must not allow crontab on Casa (AI-62)"
+    require_rg_clean "killall -HUP dnsmasq" "$TARGET/scripts/etc/sudoers.d/qmanager" \
+        "sudoers must not use obsolete dnsmasq killall reload (AI-62)"
 
     require_rg_present "Joetooley28/qmanager-casa-cfw3212-package" "$TARGET/scripts/www/cgi-bin/quecmanager/system/update.sh" \
         "system/update.sh must check the Casa package repo"

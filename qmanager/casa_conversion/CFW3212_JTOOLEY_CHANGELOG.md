@@ -29,7 +29,10 @@
 
 ## v0.1.12-cfw3212.22.dev
 
-**Dev sideload only** — same System Health Check sudoers/path normalization fix and AI-62 flash/security hardening as `v0.1.12-cfw3212.22`; use the official `.22` package release for router installs from the package repo once it is published.
+**Dev sideload only** — same System Health Check sudoers/path normalization fix and AI-62 flash/security hardening as `v0.1.12-cfw3212.22`, plus AI-62 sudoers phase-1 narrowing (known `systemctl` units only, Custom DNS `/tmp` staging path, no broad `crontab` rule); use the official `.22` package release for router installs from the package repo once it is published.
+- Narrows QManager sudo helpers to known `qmanager-*`, `tailscaled`, and `dnsmasq_service@0.service` units instead of allowing any `systemctl` target.
+- Aligns Custom DNS sudo rules with the Casa `/tmp` staging file and `systemctl` dnsmasq reload path.
+- Drops the unused broad `crontab` sudo rule on Casa; schedule CGIs still write root cron files directly.
 
 ## v0.1.12-cfw3212.21
 
