@@ -2326,12 +2326,15 @@ PY
         || fail "Could not align sudoers Custom DNS mv rule with /tmp staging"
     grep -q 'systemctl restart dnsmasq_service@0.service' "$sudoers" \
         || fail "Could not add sudoers dnsmasq_service restart allowance"
-    grep -q '/usr/bin/crontab' "$sudoers" \
-        && fail "sudoers still allows broad crontab after AI-62 narrowing"
-    grep -q 'killall -HUP dnsmasq' "$sudoers" \
-        && fail "sudoers still allows obsolete dnsmasq killall reload"
-    grep -q '/bin/systemctl start \*' "$sudoers" \
-        && fail "sudoers still allows broad systemctl start *"
+    if grep -q '/usr/bin/crontab' "$sudoers"; then
+        fail "sudoers still allows broad crontab after AI-62 narrowing"
+    fi
+    if grep -q 'killall -HUP dnsmasq' "$sudoers"; then
+        fail "sudoers still allows obsolete dnsmasq killall reload"
+    fi
+    if grep -q '/bin/systemctl start \*' "$sudoers"; then
+        fail "sudoers still allows broad systemctl start *"
+    fi
 }
 
 replace_with_stub() {
