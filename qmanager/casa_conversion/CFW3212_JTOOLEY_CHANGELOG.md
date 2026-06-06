@@ -17,6 +17,19 @@
 - Software Update → Version Management can now install a different version (including rollbacks). After the download verifies, the Install button switches to "Install Now" so the staged package actually gets applied instead of being left on disk.
 - A handful of upstream modem-management actions stay blocked or limited on Casa because they'd let you push the modem into a state we don't want it in.
 
+## v0.1.12-cfw3212.22
+
+- Fixes a System Health Check sudoers false failure. On Casa, QManager's sudo helper rules live under `/usrdata/opt/etc/sudoers.d/qmanager`; the health check now treats that installed helper file as valid instead of failing because the Casa sudo shim does not print a normal `sudo -l` listing.
+- The installer now protects already-Casa `/usrdata/opt/...` paths during its install-time path normalization, preventing repeated `/usrdata` prefixes in installed helper scripts.
+- Reduces flash wear from the data-usage counter. The poller now keeps the every-few-seconds hot counter state in `/tmp` and flushes the durable `/usrdata/qmanager/data_used.json` copy on a bounded cadence and important events instead of rewriting persistent flash every poll cycle.
+- Turns off QManager's syslog forwarding by default on Casa, because Casa stores syslog under `/usrdata/log/messages`. The normal capped QManager log stays in `/tmp`.
+- Hardens CGI handling by failing closed if the auth library is unavailable and by rejecting oversized POST bodies before reading them into memory.
+- Removes the old world-writable cron spool setup behavior and updates System Health Check to watch the RAM-backed data-usage hot state for poller freshness.
+
+## v0.1.12-cfw3212.22.dev
+
+**Dev sideload only** — same System Health Check sudoers/path normalization fix and AI-62 flash/security hardening as `v0.1.12-cfw3212.22`; use the official `.22` package release for router installs from the package repo once it is published.
+
 ## v0.1.12-cfw3212.21
 
 - Adds an IP Passthrough DNS recovery check during install/upgrade. If an older install left the router using the passthrough gateway as its DNS upstream, the package now adds a QManager-managed dnsmasq recovery block with working public resolvers and restarts dnsmasq.

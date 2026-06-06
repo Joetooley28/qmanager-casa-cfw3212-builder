@@ -1392,6 +1392,19 @@ svc_check_new = (
 if svc_check_old in new_text:
     new_text = new_text.replace(svc_check_old, svc_check_new, 1)
 
+sudo_list_old = (
+    '    elif [ -f /usrdata/opt/etc/sudoers.d/qmanager ] && '
+    "grep -q 'qmanager' /usrdata/opt/etc/sudoers.d/qmanager 2>/dev/null; then\n"
+    '        echo "warn|sudoers file present but no helpers in -l output"\n'
+)
+sudo_list_new = (
+    '    elif [ -f /usrdata/opt/etc/sudoers.d/qmanager ] && '
+    "grep -q 'qmanager' /usrdata/opt/etc/sudoers.d/qmanager 2>/dev/null; then\n"
+    '        echo "pass|sudoers file present with qmanager helpers"\n'
+)
+if sudo_list_old in new_text:
+    new_text = new_text.replace(sudo_list_old, sudo_list_new, 1)
+
 if new_text != text:
     path.write_text(new_text)
 PY
@@ -1413,6 +1426,8 @@ PY
     sudoers_casa=$(grep -c "/usrdata/opt/etc/sudoers\.d/qmanager" "$worker" || echo 0)
     [ "$sudoers_total" = "$sudoers_casa" ] \
         || fail "Health-check worker has non-Casa /etc/sudoers.d/qmanager references"
+    grep -q "pass|sudoers file present with qmanager helpers" "$worker" \
+        || fail "Health-check worker still warns when Casa sudoers file is present"
     grep -q "qmanager-lighttpd listening on 9080/9000" "$worker" \
         || fail "Health-check worker still has 80/443 in lighttpd_listen label"
     grep -q "_svc_check qmanager-lighttpd.service 1" "$worker" \
@@ -1787,6 +1802,339 @@ PY
         grep -q 'qlog_debug "data_used block absent' "$data_used" \
             || fail "Could not quiet data_used fallback log"
     fi
+}
+
+patch_ai62_flash_and_cgi_hardening_cfw3212() {
+    local poller="$TARGET/scripts/usr/bin/qmanager_poller"
+    local qlog="$TARGET/scripts/usr/lib/qmanager/qlog.sh"
+    local setup="$TARGET/scripts/usr/bin/qmanager_setup"
+    local cgi_base="$TARGET/scripts/usr/lib/qmanager/cgi_base.sh"
+    local health="$TARGET/scripts/usr/bin/qmanager_health_check"
+
+    [ -f "$poller" ] || fail "Target missing qmanager_poller"
+    [ -f "$qlog" ] || fail "Target missing qlog.sh"
+    [ -f "$setup" ] || fail "Target missing qmanager_setup"
+    [ -f "$cgi_base" ] || fail "Target missing cgi_base.sh"
+    [ -f "$health" ] || fail "Target missing qmanager_health_check"
+
+    python3 - "$poller" "$qlog" "$setup" "$cgi_base" "$health" <<'PY'
+from pathlib import Path
+import sys
+
+poller_path, qlog_path, setup_path, cgi_base_path, health_path = map(Path, sys.argv[1:])
+
+def replace_once(text, old, new, label):
+    if old not in text:
+        raise SystemExit(f"{label} marker not found")
+    return text.replace(old, new, 1)
+
+poller = poller_path.read_text()
+poller = replace_once(
+    poller,
+    '''# --- Persistent Data Used counter (Tier 1) -----------------------------------
+DATA_USED_FILE="/usrdata/qmanager/data_used.json"
+DATA_USED_TMP="/usrdata/qmanager/data_used.json.tmp"
+DATA_USED_RESET_FLAG="/tmp/qmanager_data_used_reset"
+''',
+    '''# --- Persistent Data Used counter (Tier 1) -----------------------------------
+DATA_USED_FILE="/usrdata/qmanager/data_used.json"
+DATA_USED_HOT_FILE="/tmp/qmanager_data_used.json"
+DATA_USED_RESET_FLAG="/tmp/qmanager_data_used_reset"
+DATA_USED_FLUSH_INTERVAL="${DATA_USED_FLUSH_INTERVAL:-300}"
+''',
+    "poller data_used constants",
+)
+poller = replace_once(
+    poller,
+    "du_modem_reset_count=0\n\n# Orientation detection state.",
+    "du_modem_reset_count=0\ndu_last_flush_ts=0\n\n# Orientation detection state.",
+    "poller flush timestamp state",
+)
+poller = poller.replace(
+    "# to DATA_USED_FILE each tick.",
+    "# to a RAM-backed hot file each tick and to persistent flash on a bounded cadence.",
+    1,
+)
+old_func = '''write_data_used_state() {
+    mkdir -p /usrdata/qmanager 2>/dev/null
+    local _hist_sw_json
+    if [ "$orientation_history_swapped" = "true" ]; then
+        _hist_sw_json=true
+    else
+        _hist_sw_json=false
+    fi
+    jq -n \\
+        --argjson schema    "$DATA_USED_SCHEMA" \\
+        --argjson acc_rx    "$du_accumulated_rx" \\
+        --argjson acc_tx    "$du_accumulated_tx" \\
+        --arg     sel       "$du_selected_counter" \\
+        --argjson prev_i_rx "$du_prev_ipa_rx" \\
+        --argjson prev_i_tx "$du_prev_ipa_tx" \\
+        --argjson last_upd  "$du_last_update_ts" \\
+        --argjson last_rst  "$du_last_reset_ts" \\
+        --argjson modem_rst "$du_modem_reset_count" \\
+        --argjson hist_sw   "$_hist_sw_json" \\
+        '{
+            schema:               $schema,
+            accumulated_rx_bytes: $acc_rx,
+            accumulated_tx_bytes: $acc_tx,
+            selected_counter:     $sel,
+            prev_ipa_rx:          $prev_i_rx,
+            prev_ipa_tx:          $prev_i_tx,
+            last_update_ts:       $last_upd,
+            last_reset_ts:        $last_rst,
+            modem_reset_count:    $modem_rst,
+            orientation_history_swapped: $hist_sw
+        }' > "$DATA_USED_TMP" && mv "$DATA_USED_TMP" "$DATA_USED_FILE"
+}
+'''
+new_func = '''_write_data_used_state_file() {
+    local _file="$1" _tmp _dir _hist_sw_json
+    [ -n "$_file" ] || return 1
+    _tmp="${_file}.tmp"
+    _dir=$(dirname "$_file")
+    mkdir -p "$_dir" 2>/dev/null || return 1
+    if [ "$orientation_history_swapped" = "true" ]; then
+        _hist_sw_json=true
+    else
+        _hist_sw_json=false
+    fi
+    jq -n \\
+        --argjson schema    "$DATA_USED_SCHEMA" \\
+        --argjson acc_rx    "$du_accumulated_rx" \\
+        --argjson acc_tx    "$du_accumulated_tx" \\
+        --arg     sel       "$du_selected_counter" \\
+        --argjson prev_i_rx "$du_prev_ipa_rx" \\
+        --argjson prev_i_tx "$du_prev_ipa_tx" \\
+        --argjson last_upd  "$du_last_update_ts" \\
+        --argjson last_rst  "$du_last_reset_ts" \\
+        --argjson modem_rst "$du_modem_reset_count" \\
+        --argjson hist_sw   "$_hist_sw_json" \\
+        '{
+            schema:               $schema,
+            accumulated_rx_bytes: $acc_rx,
+            accumulated_tx_bytes: $acc_tx,
+            selected_counter:     $sel,
+            prev_ipa_rx:          $prev_i_rx,
+            prev_ipa_tx:          $prev_i_tx,
+            last_update_ts:       $last_upd,
+            last_reset_ts:        $last_rst,
+            modem_reset_count:    $modem_rst,
+            orientation_history_swapped: $hist_sw
+        }' > "$_tmp" && mv "$_tmp" "$_file"
+}
+
+write_data_used_state() {
+    _write_data_used_state_file "$DATA_USED_HOT_FILE"
+}
+
+flush_data_used_state() {
+    local _force="${1:-0}" _now
+    [ "$du_loaded" = "true" ] || return 0
+    _now=$(date +%s)
+    if [ "$_force" = "1" ] \\
+        || [ "$du_last_flush_ts" = "0" ] \\
+        || [ $((_now - du_last_flush_ts)) -ge "$DATA_USED_FLUSH_INTERVAL" ]; then
+        if _write_data_used_state_file "$DATA_USED_FILE"; then
+            du_last_flush_ts="$_now"
+        fi
+    fi
+}
+'''
+poller = replace_once(poller, old_func, new_func, "poller write_data_used_state function")
+poller = poller.replace(
+    "                qlog_info \"orientation: swapped persisted accumulators (schema v4 migration)\"\n"
+    "                write_data_used_state\n",
+    "                qlog_info \"orientation: swapped persisted accumulators (schema v4 migration)\"\n"
+    "                write_data_used_state\n"
+    "                flush_data_used_state 1\n",
+    1,
+)
+poller = poller.replace(
+    "                    qlog_info \"data_used: migrated schema v${_on_disk_schema:-0} → v${DATA_USED_SCHEMA} (preserving accumulators)\"\n"
+    "                    write_data_used_state\n",
+    "                    qlog_info \"data_used: migrated schema v${_on_disk_schema:-0} → v${DATA_USED_SCHEMA} (preserving accumulators)\"\n"
+    "                    write_data_used_state\n"
+    "                    flush_data_used_state 1\n",
+    1,
+)
+poller = poller.replace(
+    "        # Persist the zeroed state now so an early return (e.g. interface\n"
+    "        # absent) or a crash before Step 6 cannot resurrect the old counters.\n"
+    "        write_data_used_state\n",
+    "        # Persist the zeroed state now so an early return (e.g. interface\n"
+    "        # absent) or a crash before Step 6 cannot resurrect the old counters.\n"
+    "        write_data_used_state\n"
+    "        flush_data_used_state 1\n",
+    1,
+)
+poller = poller.replace(
+    "        write_data_used_state\n        return 0\n",
+    "        write_data_used_state\n        flush_data_used_state\n        return 0\n",
+    1,
+)
+poller = poller.replace(
+    "    # Step 6: persist for the next tick.\n"
+    "    du_prev_ipa_rx=\"$ipa_rx\"\n"
+    "    du_prev_ipa_tx=\"$ipa_tx\"\n"
+    "    du_selected_counter=\"$NETWORK_IFACE\"\n"
+    "    du_last_update_ts=$(date +%s)\n"
+    "    write_data_used_state\n",
+    "    # Step 6: keep hot state fresh every tick, but flush flash on a bounded cadence.\n"
+    "    du_prev_ipa_rx=\"$ipa_rx\"\n"
+    "    du_prev_ipa_tx=\"$ipa_tx\"\n"
+    "    du_selected_counter=\"$NETWORK_IFACE\"\n"
+    "    du_last_update_ts=$(date +%s)\n"
+    "    write_data_used_state\n"
+    "    flush_data_used_state\n",
+    1,
+)
+poller = replace_once(
+    poller,
+    '''    collect_boot_data
+''',
+    '''    trap 'flush_data_used_state 1 >/dev/null 2>&1 || true' EXIT
+    trap 'flush_data_used_state 1 >/dev/null 2>&1 || true; exit 0' INT TERM
+
+    collect_boot_data
+''',
+    "poller shutdown flush trap",
+)
+poller_path.write_text(poller)
+
+qlog = qlog_path.read_text()
+qlog = qlog.replace("QLOG_TO_SYSLOG   — Also log to syslog: 1|0 (default: 1)", "QLOG_TO_SYSLOG   — Also log to syslog: 1|0 (default: 0)", 1)
+qlog = qlog.replace('QLOG_TO_SYSLOG="${QLOG_TO_SYSLOG:-1}"', 'QLOG_TO_SYSLOG="${QLOG_TO_SYSLOG:-0}"', 1)
+qlog_path.write_text(qlog)
+
+setup = setup_path.read_text()
+setup = replace_once(
+    setup,
+    '''# CGI (www-data) writes cron entries for root — needs write access to spool dir
+chmod 777 /var/spool/cron/crontabs
+''',
+    '''# Keep the cron spool root-owned; QManager cron changes should go through
+# crontab/sudo helpers rather than a world-writable spool directory.
+chown root:root /var/spool/cron /var/spool/cron/crontabs 2>/dev/null || true
+chmod 755 /var/spool/cron /var/spool/cron/crontabs
+''',
+    "qmanager_setup cron permissions",
+)
+setup_path.write_text(setup)
+
+cgi = cgi_base_path.read_text()
+cgi = cgi.replace("export PATH=\"/opt/bin:/opt/sbin:/usr/bin:/usr/sbin:/bin:/sbin:$PATH\"", "export PATH=\"/usrdata/opt/bin:/usrdata/opt/sbin:/opt/bin:/opt/sbin:/usr/bin:/usr/sbin:/bin:/sbin:$PATH\"", 1)
+cgi = cgi.replace("# Authentication — source cgi_auth.sh with no-op fallbacks if missing", "# Authentication — source cgi_auth.sh with fail-closed fallbacks if missing", 1)
+cgi = replace_once(
+    cgi,
+    '''. /usr/lib/qmanager/cgi_auth.sh 2>/dev/null || {
+    require_auth()          { :; }
+    is_setup_required()     { return 1; }
+''',
+    '''. /usr/lib/qmanager/cgi_auth.sh 2>/dev/null || {
+    require_auth() {
+        cgi_headers
+        cgi_error "auth_unavailable" "Authentication library is unavailable"
+        exit 0
+    }
+    is_setup_required()     { return 1; }
+''',
+    "cgi_base auth fallback",
+)
+cgi = replace_once(
+    cgi,
+    '''# Reads stdin into POST_DATA using CONTENT_LENGTH.
+# Exits with a JSON error response if the body is missing or empty.
+# ---------------------------------------------------------------------------
+cgi_read_post() {
+    if [ -n "$CONTENT_LENGTH" ] && [ "$CONTENT_LENGTH" -gt 0 ] 2>/dev/null; then
+        POST_DATA=$(dd bs=1 count="$CONTENT_LENGTH" 2>/dev/null)
+    else
+        cgi_error "no_body" "POST body is empty"
+        exit 0
+    fi
+}
+''',
+    '''# Reads stdin into POST_DATA using CONTENT_LENGTH.
+# Exits with a JSON error response if the body is missing, empty, or too large.
+# ---------------------------------------------------------------------------
+cgi_read_post() {
+    : "${QM_MAX_POST_SIZE:=65536}"
+    if ! [ -n "$CONTENT_LENGTH" ] || ! [ "$CONTENT_LENGTH" -gt 0 ] 2>/dev/null; then
+        cgi_error "no_body" "POST body is empty"
+        exit 0
+    fi
+    if [ "$CONTENT_LENGTH" -gt "$QM_MAX_POST_SIZE" ] 2>/dev/null; then
+        cgi_error "body_too_large" "POST body exceeds maximum size"
+        exit 0
+    fi
+    POST_DATA=$(dd bs=1 count="$CONTENT_LENGTH" 2>/dev/null)
+}
+''',
+    "cgi_base post size limit",
+)
+cgi_base_path.write_text(cgi)
+
+health = health_path.read_text()
+health = health.replace('label:"data_used.json fresh (mtime < 60s)"', 'label:"data_used hot state fresh (mtime < 60s)"', 1)
+health = replace_once(
+    health,
+    '''t_cfg_data_used_fresh() {
+    local f=/usrdata/qmanager/data_used.json
+    if [ ! -f "$f" ]; then
+        echo "missing $f" >> "$OUTPUT_FILE"
+        echo "fail|missing (poller has never run successfully)"
+        return
+    fi
+    local age; age=$(( $(date +%s) - $(stat -c %Y "$f") ))
+    echo "path=$f age=${age}s" >> "$OUTPUT_FILE"
+    if [ "$age" -lt 60 ]; then echo "pass|age ${age}s"
+    else echo "warn|age ${age}s (>60s)"; fi
+}
+''',
+    '''t_cfg_data_used_fresh() {
+    local f=/tmp/qmanager_data_used.json
+    if [ ! -f "$f" ]; then
+        local durable=/usrdata/qmanager/data_used.json
+        if [ -f "$durable" ]; then
+            local d_age; d_age=$(( $(date +%s) - $(stat -c %Y "$durable") ))
+            echo "hot state missing; durable path=$durable age=${d_age}s" >> "$OUTPUT_FILE"
+            if [ "$d_age" -lt 600 ]; then echo "warn|hot missing; durable age ${d_age}s"
+            else echo "fail|hot missing; durable age ${d_age}s"; fi
+            return
+        fi
+        echo "missing $f" >> "$OUTPUT_FILE"
+        echo "fail|missing (poller has never run successfully)"
+        return
+    fi
+    local age; age=$(( $(date +%s) - $(stat -c %Y "$f") ))
+    echo "path=$f age=${age}s" >> "$OUTPUT_FILE"
+    if [ "$age" -lt 60 ]; then echo "pass|age ${age}s"
+    elif [ "$age" -lt 300 ]; then echo "warn|age ${age}s (>60s)"
+    else echo "fail|age ${age}s (poller may be stalled)"; fi
+}
+''',
+    "health check data_used freshness",
+)
+health_path.write_text(health)
+PY
+
+    grep -q 'DATA_USED_HOT_FILE="/tmp/qmanager_data_used.json"' "$poller" \
+        || fail "Could not apply data_used hot-state patch"
+    grep -q 'DATA_USED_FLUSH_INTERVAL="${DATA_USED_FLUSH_INTERVAL:-300}"' "$poller" \
+        || fail "Could not apply data_used flush interval patch"
+    grep -q 'flush_data_used_state' "$poller" \
+        || fail "Could not apply data_used durable flush function"
+    grep -q 'QLOG_TO_SYSLOG="${QLOG_TO_SYSLOG:-0}"' "$qlog" \
+        || fail "Could not disable Casa syslog forwarding default"
+    grep -q 'chmod 755 /var/spool/cron /var/spool/cron/crontabs' "$setup" \
+        || fail "Could not harden cron spool permissions"
+    grep -q 'auth_unavailable' "$cgi_base" \
+        || fail "Could not apply CGI auth fail-closed fallback"
+    grep -q 'QM_MAX_POST_SIZE:=65536' "$cgi_base" \
+        || fail "Could not apply CGI POST size limit"
+    grep -q 'local f=/tmp/qmanager_data_used.json' "$health" \
+        || fail "Could not move Health Check data_used freshness to hot state"
 }
 
 replace_with_stub() {
@@ -3708,6 +4056,7 @@ apply_casa_overlays() {
     patch_disable_profile_auto_apply
     patch_casa_iccid_and_staleness_cfw3212
     patch_logging_cfw3212
+    patch_ai62_flash_and_cgi_hardening_cfw3212
     patch_qmanager_display_version
     patch_casa_display_name
     patch_casa_reboot
@@ -3934,9 +4283,23 @@ safety_checks() {
         "Casa poller must report IPPT MAC from RDB ip_handover state"
     require_rg_present "/usrdata/qmanager/lib/parse_at.sh" "$TARGET/scripts/usr/bin/qmanager_poller" \
         "Casa poller must source libraries from /usrdata/qmanager/lib"
+    require_rg_present 'DATA_USED_HOT_FILE="/tmp/qmanager_data_used.json"' "$TARGET/scripts/usr/bin/qmanager_poller" \
+        "Casa poller must keep hot data_used state in /tmp"
+    require_rg_present 'DATA_USED_FLUSH_INTERVAL="\$\{DATA_USED_FLUSH_INTERVAL:-300\}"' "$TARGET/scripts/usr/bin/qmanager_poller" \
+        "Casa poller must throttle durable data_used flushes"
     require_rg_clean "/usr/lib/qmanager/(parse_at|events|qlog|profile_mgr|email_alerts|sms_alerts)\\.sh" \
         "$TARGET/scripts/usr/bin/qmanager_poller" \
         "Casa poller still sources upstream /usr/lib/qmanager library paths"
+    require_rg_present 'QLOG_TO_SYSLOG="\$\{QLOG_TO_SYSLOG:-0\}"' "$TARGET/scripts/usr/lib/qmanager/qlog.sh" \
+        "Casa qlog must default syslog forwarding off"
+    require_rg_present "auth_unavailable" "$TARGET/scripts/usr/lib/qmanager/cgi_base.sh" \
+        "CGI auth library fallback must fail closed"
+    require_rg_present "QM_MAX_POST_SIZE:=65536" "$TARGET/scripts/usr/lib/qmanager/cgi_base.sh" \
+        "CGI POST body reader must enforce default size limit"
+    require_rg_present "chmod 755 /var/spool/cron /var/spool/cron/crontabs" "$TARGET/scripts/usr/bin/qmanager_setup" \
+        "qmanager_setup must not leave cron spool world-writable"
+    require_rg_present "local f=/tmp/qmanager_data_used.json" "$TARGET/scripts/usr/bin/qmanager_health_check" \
+        "Health Check must use data_used hot-state freshness, not durable flash mtime"
 
     require_rg_present "Joetooley28/qmanager-casa-cfw3212-package" "$TARGET/scripts/www/cgi-bin/quecmanager/system/update.sh" \
         "system/update.sh must check the Casa package repo"

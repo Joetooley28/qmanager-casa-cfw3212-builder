@@ -405,6 +405,10 @@ step "Patching path references for CFW-3212"
 
 _patch_file() {
     sed -i \
+        -e 's|/usrdata/opt/bin|@QM_USRDATA_OPT_BIN@|g' \
+        -e 's|/usrdata/opt/sbin|@QM_USRDATA_OPT_SBIN@|g' \
+        -e 's|/usrdata/opt/etc|@QM_USRDATA_OPT_ETC@|g' \
+        -e 's|/usrdata/opt/lib|@QM_USRDATA_OPT_LIB@|g' \
         -e 's|/usr/lib/qmanager|/usrdata/qmanager/lib|g' \
         -e 's|/usr/bin/qmanager_|/usrdata/bin/qmanager_|g' \
         -e 's|/usr/bin/qcmd\b|/usrdata/bin/qcmd|g' \
@@ -416,6 +420,10 @@ _patch_file() {
         -e 's|/opt/sbin/\([a-z]\)|/usrdata/opt/sbin/\1|g' \
         -e 's|/opt/etc/\([a-z]\)|/usrdata/opt/etc/\1|g' \
         -e 's|/opt/lib/\([a-z]\)|/usrdata/opt/lib/\1|g' \
+        -e 's|@QM_USRDATA_OPT_BIN@|/usrdata/opt/bin|g' \
+        -e 's|@QM_USRDATA_OPT_SBIN@|/usrdata/opt/sbin|g' \
+        -e 's|@QM_USRDATA_OPT_ETC@|/usrdata/opt/etc|g' \
+        -e 's|@QM_USRDATA_OPT_LIB@|/usrdata/opt/lib|g' \
         "$1" 2>/dev/null || true
 }
 
