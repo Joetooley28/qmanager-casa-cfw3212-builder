@@ -20,6 +20,7 @@
 ## v0.1.12-cfw3212.22
 
 - Fixes a System Health Check sudoers false failure. On Casa, QManager's sudo helper rules live under `/usrdata/opt/etc/sudoers.d/qmanager`; the health check now treats that installed helper file as valid instead of failing because the Casa sudo shim does not print a normal `sudo -l` listing.
+- Fixes a System Health Check DNS false failure on routers with IP Passthrough active. Casa leaves `192.0.0.1` in `/etc/resolv.conf`, which does not answer DNS even though dnsmasq on the LAN bridge still resolves correctly; the health check now queries the bridge LAN resolver instead of the poisoned nameserver.
 - The installer now protects already-Casa `/usrdata/opt/...` paths during its install-time path normalization, preventing repeated `/usrdata` prefixes in installed helper scripts.
 - Reduces flash wear from the data-usage counter. The poller now keeps the every-few-seconds hot counter state in `/tmp` and flushes the durable `/usrdata/qmanager/data_used.json` copy on a bounded cadence and important events instead of rewriting persistent flash every poll cycle.
 - Turns off QManager's syslog forwarding by default on Casa, because Casa stores syslog under `/usrdata/log/messages`. The normal capped QManager log stays in `/tmp`.

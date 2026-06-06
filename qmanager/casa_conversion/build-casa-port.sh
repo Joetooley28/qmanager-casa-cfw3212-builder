@@ -1046,6 +1046,77 @@ PYEOF
         || fail "health-check still starts qmanager-poller via systemctl"
 }
 
+patch_qmanager_health_check_net_dns_cfw3212() {
+    local worker="$TARGET/scripts/usr/bin/qmanager_health_check"
+    [ -f "$worker" ] || fail "Target missing qmanager_health_check worker"
+
+    python3 - "$worker" <<'PYEOF'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+
+marker = "Casa CFW-3212 IP passthrough: /etc/resolv.conf often lists the handover"
+if marker in text:
+    sys.exit(0)
+
+start = text.find("t_net_dns() {")
+end = text.find("t_net_ping()", start)
+if start < 0 or end < 0:
+    raise SystemExit("t_net_dns() block not found (upstream changed?)")
+
+new = """t_net_dns() {
+    # Bound the test to 5s — nslookup against unreachable DNS can stall 30s+
+    # per nameserver and timeout the CGI response. Prefer getent if available.
+    #
+    # Casa CFW-3212 IP passthrough: /etc/resolv.conf often lists the handover
+    # placeholder 192.0.0.1 which does not answer DNS. dnsmasq on bridge0 LAN
+    # still proxies correctly — query that instead when the poisoned nameserver
+    # is detected.
+    local out rc resolver="" poisoned=0
+    if grep -qE '^nameserver[[:space:]]+192\\.0\\.0\\.[12][[:space:]]*$' \\
+            /etc/resolv.conf /run/resolv.conf 2>/dev/null; then
+        poisoned=1
+        resolver=$(ip -o -4 addr show dev bridge0 2>/dev/null \\
+            | awk '{print $4}' | cut -d/ -f1 \\
+            | grep -E '^192\\.168\\.' | head -1)
+        [ -z "$resolver" ] && resolver="1.1.1.1"
+    fi
+    if [ "$poisoned" = "0" ] && command -v getent >/dev/null 2>&1; then
+        out=$(timeout 5 getent hosts install.speedtest.net 2>&1); rc=$?
+    elif command -v nslookup >/dev/null 2>&1; then
+        if [ -n "$resolver" ]; then
+            out=$(timeout 5 nslookup install.speedtest.net "$resolver" 2>&1); rc=$?
+        else
+            out=$(timeout 5 nslookup install.speedtest.net 2>&1); rc=$?
+        fi
+    else
+        echo "no resolver tool available" >> "$OUTPUT_FILE"
+        echo "fail|no getent or nslookup"; return
+    fi
+    echo "$out" >> "$OUTPUT_FILE"
+    if [ "$rc" = "124" ]; then
+        echo "fail|DNS timed out (5s)"
+    elif [ "$rc" -ne 0 ]; then
+        echo "fail|resolution failed (rc=$rc)"
+    elif echo "$out" | grep -qE '^[0-9a-fA-F:.]+[[:space:]]+install\\.speedtest\\.net|Name:[[:space:]]+install\\.speedtest\\.net'; then
+        echo "pass|resolved"
+    elif echo "$out" | grep -qE 'install\\.speedtest\\.net'; then
+        echo "pass|resolved"
+    else
+        echo "fail|no answer for install.speedtest.net"
+    fi
+}
+"""
+
+path.write_text(text[:start] + new + text[end:])
+PYEOF
+
+    grep -q 'Casa CFW-3212 IP passthrough: /etc/resolv.conf often lists the handover' "$worker" \
+        || fail "Could not apply health-check net.dns IPPT resolv bypass to qmanager_health_check"
+}
+
 patch_speedtest_poller_pause_cfw3212() {
     local poller="$TARGET/scripts/usr/bin/qmanager_poller"
     local speedtest_start="$TARGET/scripts/www/cgi-bin/quecmanager/at_cmd/speedtest_start.sh"
@@ -4249,6 +4320,7 @@ apply_casa_overlays() {
     patch_qmanager_console_port_cfw3212
     patch_qmanager_health_check_paths_cfw3212
     patch_qmanager_health_check_poller_pause_cfw3212
+    patch_qmanager_health_check_net_dns_cfw3212
     patch_qmanager_poller
     patch_qmanager_poller_lib_paths_cfw3212
     patch_speedtest_poller_pause_cfw3212
@@ -4512,6 +4584,9 @@ safety_checks() {
         "CGI base must not emit wildcard CORS by default"
     require_rg_present "local f=/tmp/qmanager_data_used.json" "$TARGET/scripts/usr/bin/qmanager_health_check" \
         "Health Check must use data_used hot-state freshness, not durable flash mtime"
+    require_rg_present "Casa CFW-3212 IP passthrough: /etc/resolv.conf often lists the handover" \
+        "$TARGET/scripts/usr/bin/qmanager_health_check" \
+        "Health Check net.dns must bypass IPPT poisoned 192.0.0.1 resolv.conf"
     require_rg_present "systemctl start qmanager-*" "$TARGET/scripts/etc/sudoers.d/qmanager" \
         "sudoers must narrow systemctl to qmanager-* units (AI-62)"
     require_rg_present "/tmp/qmanager-dnsmasq.conf.new /etc/data/dnsmasq.conf" "$TARGET/scripts/etc/sudoers.d/qmanager" \
