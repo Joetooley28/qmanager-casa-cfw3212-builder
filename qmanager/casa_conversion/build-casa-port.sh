@@ -1287,6 +1287,13 @@ import sys
 
 path = Path(sys.argv[1])
 text = path.read_text()
+if 'export PATH="/usrdata/bin:/usrdata/opt/bin:' not in text:
+    text = text.replace(
+        'set -u\n\n',
+        'set -u\n'
+        'export PATH="/usrdata/bin:/usrdata/opt/bin:/usr/bin:/usr/sbin:/bin:/sbin:${PATH:-}"\n\n',
+        1,
+    )
 
 # Single-pass replacements — each rule uses a distinct upstream-only key so
 # the output of one rule never re-matches another. (str.replace is
@@ -1428,6 +1435,8 @@ PY
         || fail "Health-check worker has non-Casa /etc/sudoers.d/qmanager references"
     grep -q "pass|sudoers file present with qmanager helpers" "$worker" \
         || fail "Health-check worker still warns when Casa sudoers file is present"
+    grep -q 'export PATH="/usrdata/bin:/usrdata/opt/bin:' "$worker" \
+        || fail "Health-check worker must export Casa PATH for direct/manual runs"
     grep -q "qmanager-lighttpd listening on 9080/9000" "$worker" \
         || fail "Health-check worker still has 80/443 in lighttpd_listen label"
     grep -q "_svc_check qmanager-lighttpd.service 1" "$worker" \
