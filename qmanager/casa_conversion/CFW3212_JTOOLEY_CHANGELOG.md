@@ -17,56 +17,42 @@
 - Software Update → Version Management can now install a different version (including rollbacks). After the download verifies, the Install button switches to "Install Now" so the staged package actually gets applied instead of being left on disk.
 - A handful of upstream modem-management actions stay blocked or limited on Casa because they'd let you push the modem into a state we don't want it in.
 
-## v0.1.12-cfw3212.23
-
-- Rebuilds how Casa keeps DNS working under IP Passthrough. A background reconciler now checks every 30 seconds whether the router/LAN resolver can reach real carrier DNS and corrects it automatically — it restores carrier DNS when IP Passthrough is turned off and only falls back to public DNS when no carrier resolver answers. This replaces the previous one-shot guard, which could leave the router stuck on public DNS after IP Passthrough was disabled.
-- The reconciler is probe-based: it treats carrier DNS as working if any carrier nameserver (IPv4 or IPv6) actually answers, instead of assuming DNS is broken just because the IP Passthrough placeholder `192.0.0.1` is present in `resolv.conf`. It only rewrites the dnsmasq config when something needs to change, so it adds no steady-state flash wear.
-- Fixes the dashboard Online/Offline badge falsely showing Offline (DNS) under IP Passthrough while the internet actually works. The connectivity probe now uses the normal system resolver (which includes the carrier IPv6 nameservers that answer under IPPT) instead of assuming the IPv4 handover placeholder `192.0.0.1` means DNS is down and force-routing the probe to the LAN resolver.
-- Adds two small status badges next to the dashboard Online/Offline badge: one shows whether IP Passthrough is On or Off, and one shows where the router/LAN DNS is currently coming from — Carrier, your QManager Custom DNS, or a public fallback. The DNS-source badge describes the router/LAN resolver only; a device in IP Passthrough mode still receives DNS straight from the carrier, which the router cannot report on.
-
-## v0.1.12-cfw3212.23.dev
-
-**Dev sideload only** — same LAN DNS reconciler and dashboard IPPT/DNS-source badges as `v0.1.12-cfw3212.23`; use the official `.23` package release for router installs from the package repo once it is published.
-
-## v0.1.12-cfw3212.22
-
-- Fixes a System Health Check sudoers false failure. On Casa, QManager's sudo helper rules live under `/usrdata/opt/etc/sudoers.d/qmanager`; the health check now treats that installed helper file as valid instead of failing because the Casa sudo shim does not print a normal `sudo -l` listing.
-- Fixes a System Health Check DNS false failure on routers with IP Passthrough active. Casa leaves `192.0.0.1` in `/etc/resolv.conf`, which does not answer DNS even though dnsmasq on the LAN bridge still resolves correctly; the health check now queries the bridge LAN resolver instead of the poisoned nameserver.
-- Fixes the dashboard Online/Offline badge falsely showing Offline (DNS) on IP Passthrough routers while real internet traffic still works. The Rust connectivity probe (`qmanager_ping`) now uses the same bridge-LAN DNS bypass when poisoned handover nameservers are detected; IPPT off still uses the normal system resolver and full HTTP probe behavior.
-- The installer now protects already-Casa `/usrdata/opt/...` paths during its install-time path normalization, preventing repeated `/usrdata` prefixes in installed helper scripts.
-- Reduces flash wear from the data-usage counter. The poller now keeps the every-few-seconds hot counter state in `/tmp` and flushes the durable `/usrdata/qmanager/data_used.json` copy on a bounded cadence and important events instead of rewriting persistent flash every poll cycle.
-- Turns off QManager's syslog forwarding by default on Casa, because Casa stores syslog under `/usrdata/log/messages`. The normal capped QManager log stays in `/tmp`.
-- Hardens CGI handling by failing closed if the auth library is unavailable and by rejecting oversized POST bodies before reading them into memory.
-- Adds the `Secure` attribute to QManager login cookies and removes wildcard CORS headers from CGI responses; the UI and API are served from the same HTTPS origin.
-- Removes the old world-writable cron spool setup behavior while preserving QManager's current schedule writers, tightens `/etc/qmanager` file and directory permissions, and updates System Health Check to watch the RAM-backed data-usage hot state for poller freshness.
-
-## v0.1.12-cfw3212.22.dev
-
-**Dev sideload only** — same System Health Check sudoers/path normalization fix and AI-62 flash/security hardening as `v0.1.12-cfw3212.22`, plus AI-62 sudoers phase-1 narrowing (known `systemctl` units only, Custom DNS `/tmp` staging path, no broad `crontab` rule); use the official `.22` package release for router installs from the package repo once it is published.
-- Narrows QManager sudo helpers to known `qmanager-*`, `tailscaled`, and `dnsmasq_service@0.service` units instead of allowing any `systemctl` target.
-- Aligns Custom DNS sudo rules with the Casa `/tmp` staging file and `systemctl` dnsmasq reload path.
-- Drops the unused broad `crontab` sudo rule on Casa; schedule CGIs still write root cron files directly.
-
-## v0.1.12-cfw3212.21
-
-- Adds an IP Passthrough DNS recovery check during install/upgrade. If an older install left the router using the passthrough gateway as its DNS upstream, the package now adds a QManager-managed dnsmasq recovery block with working public resolvers and restarts dnsmasq.
-- The IP Passthrough apply path now runs the same recovery check after a toggle, so enabling or disabling IP Passthrough does not leave the dashboard stuck at "DNS resolution failed" while raw internet still works.
-- Existing QManager Custom DNS settings are left authoritative. If Custom DNS is already configured, the recovery helper does not overwrite it.
-
-## v0.1.12-cfw3212.21.dev
-
-**Dev sideload only** — same IP Passthrough DNS recovery guard as `v0.1.12-cfw3212.21`; use the official `.21` package release for router installs from the package repo once it is published.
-
 ## v0.1.12-cfw3212.20
+
+This is the first public release since `.19`. It rolls up all of the stock-UI coexistence, IP Passthrough DNS, dashboard, and security/flash-health work that was previously only sideloaded for testing.
+
+**Stock UI coexistence**
 
 - QManager now uses its own `qmanager-lighttpd` service for the QManager web UI on ports `9080` and `9000`, instead of taking over Casa's generic `lighttpd` service name. This lets Casa's stock web UI stay on its normal port `80` path while QManager runs beside it.
 - Upgrading from earlier builds removes the old QManager-owned `lighttpd.service` override, restores Casa's masked `lighttpd` state, and starts the stock `turbontc` web UI service when it is present.
 - The optional QManager web console now uses an internal backend on `9081` instead of `8080`, because Casa's stock UI also uses `8080` while starting its normal web service.
 - System Health Check now reports QManager's web service as `qmanager-lighttpd.service`, so the service check matches the new coexistence layout.
 
-## v0.1.12-cfw3212.20.dev
+**IP Passthrough DNS and dashboard**
 
-**Dev sideload only** — same stock UI / QManager web service coexistence fix as `v0.1.12-cfw3212.20`; use the official `.20` package release for router installs from the package repo once it is published.
+- Keeps Casa's router/LAN DNS working automatically under IP Passthrough. A background reconciler checks every 30 seconds whether the router/LAN resolver can reach real carrier DNS and corrects it — it restores carrier DNS when IP Passthrough is turned off and only falls back to public DNS when no carrier resolver answers.
+- The reconciler is probe-based: it treats carrier DNS as working if any carrier nameserver (IPv4 or IPv6) actually answers, instead of assuming DNS is broken just because the IP Passthrough placeholder `192.0.0.1` is present in `resolv.conf`. It only rewrites the dnsmasq config when something needs to change, so it adds no steady-state flash wear.
+- Fixes the dashboard Online/Offline badge falsely showing Offline (DNS) under IP Passthrough while the internet actually works. The connectivity probe now uses the normal system resolver (which includes the carrier IPv6 nameservers that answer under IPPT) instead of assuming the IPv4 handover placeholder `192.0.0.1` means DNS is down.
+- Adds two small status badges next to the dashboard Online/Offline badge: one shows whether IP Passthrough is On or Off, and one shows where the router/LAN DNS is currently coming from — Carrier, your QManager Custom DNS, or a public fallback. The DNS-source badge describes the router/LAN resolver only; a device in IP Passthrough mode still receives DNS straight from the carrier, which the router cannot report on.
+
+**System Health Check fixes**
+
+- Fixes a sudoers false failure. On Casa, QManager's sudo helper rules live under `/usrdata/opt/etc/sudoers.d/qmanager`; the health check now treats that installed helper file as valid instead of failing because the Casa sudo shim does not print a normal `sudo -l` listing.
+- Fixes a DNS (`net.dns`) false failure on routers with IP Passthrough active. Casa leaves `192.0.0.1` in `/etc/resolv.conf`, which does not answer DNS even though dnsmasq on the LAN bridge still resolves correctly; the health check now queries the bridge LAN resolver instead of the poisoned nameserver.
+
+**Flash-health and security hardening**
+
+- Reduces flash wear from the data-usage counter. The poller now keeps the every-few-seconds hot counter state in `/tmp` and flushes the durable `/usrdata/qmanager/data_used.json` copy on a bounded cadence and important events instead of rewriting persistent flash every poll cycle.
+- Turns off QManager's syslog forwarding by default on Casa, because Casa stores syslog under `/usrdata/log/messages`. The normal capped QManager log stays in `/tmp`.
+- Hardens CGI handling by failing closed if the auth library is unavailable and by rejecting oversized POST bodies before reading them into memory.
+- Adds the `Secure` attribute to QManager login cookies and removes wildcard CORS headers from CGI responses; the UI and API are served from the same HTTPS origin.
+- Removes the old world-writable cron spool setup behavior while preserving QManager's current schedule writers, and tightens `/etc/qmanager` file and directory permissions.
+- Narrows QManager sudo helpers to known `qmanager-*`, `tailscaled`, and `dnsmasq_service@0.service` units instead of allowing any `systemctl` target, aligns the Custom DNS sudo rules with the Casa `/tmp` staging file and `systemctl` dnsmasq reload path, and drops the unused broad `crontab` sudo rule.
+- The installer now protects already-Casa `/usrdata/opt/...` paths during its install-time path normalization, preventing repeated `/usrdata` prefixes in installed helper scripts.
+
+## v0.1.12-cfw3212.20.1.dev
+
+**Dev sideload only** — same release as `v0.1.12-cfw3212.20`. Dev sideload builds toward a public release are now numbered `.<release>.<iteration>.dev` (for example `.20.1.dev`, `.20.2.dev`); use the official `.20` package release from the package repo once it is published.
 
 ## v0.1.12-cfw3212.19
 

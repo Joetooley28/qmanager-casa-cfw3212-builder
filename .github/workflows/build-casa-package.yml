@@ -8,7 +8,7 @@ on:
         required: true
         default: latest
       casa_build:
-        description: "Casa build suffix: enter a number (e.g. 17), or next to auto-pick highest published + 1 for the selected upstream"
+        description: "Casa build: a number N (e.g. 20) for an official release, a dev sub-build N.M (e.g. 20.1, dev branch only) that publishes as N, or next to auto-pick highest published + 1"
         required: true
         default: next
       dry_run:
@@ -171,8 +171,21 @@ jobs:
               ;;
             *)
               casa_build="$casa_build_input"
+              # Accept a public build number "N" or a dev sub-build "N.M".
+              # Two-level "N.M" is dev-channel only; official (main) releases use a
+              # plain integer "N" so the public sequence advances one per release
+              # while dev iterations churn the ".M" suffix (.20.1.dev, .20.2.dev ...).
               case "$casa_build" in
-                ''|*[!0-9]*) echo "casa_build must be a positive integer or 'next'" >&2; exit 1 ;;
+                ''|.*|*.|*.*.*|*[!0-9.]*)
+                  echo "casa_build must be 'next', an integer N, or a dev sub-build N.M" >&2; exit 1 ;;
+              esac
+              case "$casa_build" in
+                *.*)
+                  if [ "${GITHUB_REF_NAME:-}" = "main" ]; then
+                    echo "Two-level casa_build '${casa_build}' is dev-only; publish official releases with a plain integer." >&2
+                    exit 1
+                  fi
+                  ;;
               esac
               echo "casa_build input '${casa_build_input}' used as-is (manual override)"
               ;;
