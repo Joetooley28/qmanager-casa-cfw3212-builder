@@ -4482,10 +4482,13 @@ ns_p.write_text(ns)
 hc = hc_p.read_text()
 n = [0]
 def add_dns(m):
+    # Insert dnsStatus as the first prop of <NetworkStatusComponent> only.
+    # Other components (e.g. LiveLatency) also take connectivity but NOT dnsStatus,
+    # so anchor on the component tag, not on the connectivity line.
     n[0] += 1
-    return m.group(0) + "\n" + m.group(1) + "dnsStatus={data?.dns_status ?? null}"
-hc2 = re.sub(r'(^[ \t]*)connectivity=\{data\?\.connectivity \?\? null\}', add_dns, hc, flags=re.M)
-assert n[0] >= 1, "no NetworkStatusComponent connectivity usage found"
+    return m.group(1) + m.group(2) + "dnsStatus={data?.dns_status ?? null}\n" + m.group(2)
+hc2 = re.sub(r'(<NetworkStatusComponent\n)([ \t]*)', add_dns, hc)
+assert n[0] >= 1, "no <NetworkStatusComponent> usage found"
 hc_p.write_text(hc2)
 print(f"DNS badges patched: ns+ty+hc ({n[0]} home-component usages threaded)")
 PYBADGE
