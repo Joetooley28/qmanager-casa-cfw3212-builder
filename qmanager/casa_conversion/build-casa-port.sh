@@ -513,8 +513,8 @@ if [ "$REQUEST_METHOD" = "POST" ]; then
             exit 0
             ;;
     esac
-    if [ -x /usrdata/bin/qmanager_ippt_dns_repair ]; then
-        /usrdata/bin/qmanager_ippt_dns_repair --if-poisoned >/dev/null 2>&1 || true
+    if [ -x /usrdata/bin/qmanager_dns_reconcile ]; then
+        /usrdata/bin/qmanager_dns_reconcile --once >/dev/null 2>&1 || true
     fi
     mkdir -p "$(dirname "$CONFIG")"
     jq -n --arg mode "$mode" '{mode:$mode, mac:"", nat:"1", usb_mode:"1", dns_proxy:"disabled"}' > "$CONFIG" 2>/dev/null || true
@@ -4277,6 +4277,240 @@ prepare_target() {
     [ "$KEEP_FETCH" = "1" ] || rm -rf "$FETCH_DIR"
 }
 
+patch_casa_dns_status_merge_cfw3212() {
+    local f="$TARGET/scripts/www/cgi-bin/quecmanager/at_cmd/fetch_data.sh"
+    [ -f "$f" ] || { warn "fetch_data.sh missing; skipping dns_status merge"; return 0; }
+    if grep -q "qmanager_dns_state.json" "$f"; then
+        log "fetch_data.sh already merges dns_status"
+        return 0
+    fi
+    python3 - "$f" <<'PYMERGE'
+from pathlib import Path
+import sys
+p = Path(sys.argv[1])
+t = p.read_text()
+old = '    cat "$CACHE_FILE"\n'
+new = (
+    '    # Casa CFW-3212 (AI-64): fold the LAN DNS reconciler state into the\n'
+    '    # dashboard payload so the IPPT + DNS-source badges need no extra poll.\n'
+    '    DNS_STATE="/tmp/qmanager_dns_state.json"\n'
+    '    if [ -f "$DNS_STATE" ] && command -v jq >/dev/null 2>&1; then\n'
+    '        jq -s \'.[0] + {dns_status: .[1]}\' "$CACHE_FILE" "$DNS_STATE" 2>/dev/null || cat "$CACHE_FILE"\n'
+    '    else\n'
+    '        cat "$CACHE_FILE"\n'
+    '    fi\n'
+)
+if old not in t:
+    raise SystemExit("fetch_data.sh serve line not found (upstream changed?)")
+p.write_text(t.replace(old, new, 1))
+PYMERGE
+    grep -q "qmanager_dns_state.json" "$f" || fail "dns_status merge not applied to fetch_data.sh"
+    log "fetch_data.sh now merges dns_status (AI-64)"
+}
+
+patch_casa_dns_badges_cfw3212() {
+    local ns="$TARGET/components/dashboard/network-status.tsx"
+    local hc="$TARGET/components/dashboard/home-component.tsx"
+    local ty="$TARGET/types/modem-status.ts"
+    local comp="$TARGET/components/dashboard/dns-source-badges.tsx"
+    for x in "$ns" "$hc" "$ty"; do
+        [ -f "$x" ] || fail "DNS badges: missing $x"
+    done
+    if grep -q "DnsSourceBadges" "$ns"; then
+        log "DNS badges already applied"
+        return 0
+    fi
+
+    cat > "$comp" << 'TSXEOF'
+"use client";
+
+// Casa CFW-3212 (AI-64): small dashboard badges shown next to the upstream
+// Online/Offline badge. One reports IP Passthrough on/off; the other reports
+// where the router/LAN dnsmasq resolver is getting DNS from. Scope is the
+// router/LAN resolver only — it cannot represent the passthrough device's
+// carrier-direct DNS. Follows the project Status Badge Pattern (outline
+// variant, semantic color classes, size-3 lucide icons).
+
+import { Badge } from "@/components/ui/badge";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
+  RouterIcon,
+  GlobeIcon,
+  ShieldCheckIcon,
+  TriangleAlertIcon,
+  MinusCircleIcon,
+} from "lucide-react";
+import type { DnsStatus } from "@/types/modem-status";
+
+export function DnsSourceBadges({ dnsStatus }: { dnsStatus: DnsStatus | null }) {
+  if (!dnsStatus) return null;
+
+  const ipptOn = dnsStatus.ippt_on === true;
+  const ipptBadge = (
+    <Badge
+      variant="outline"
+      className={
+        ipptOn
+          ? "bg-info/15 text-info hover:bg-info/20 border-info/30"
+          : "bg-muted/50 text-muted-foreground border-muted-foreground/30"
+      }
+    >
+      <RouterIcon className="size-3" />
+      IPPT {ipptOn ? "On" : "Off"}
+    </Badge>
+  );
+
+  let cls = "bg-muted/50 text-muted-foreground border-muted-foreground/30";
+  let label = "Unknown";
+  let Icon = MinusCircleIcon;
+  let tip = "Router/LAN DNS source unknown";
+
+  switch (dnsStatus.dns_source) {
+    case "carrier":
+      cls = "bg-success/15 text-success hover:bg-success/20 border-success/30";
+      label = "Carrier";
+      Icon = ShieldCheckIcon;
+      tip = "Router/LAN DNS: carrier resolvers";
+      break;
+    case "custom":
+      cls = "bg-info/15 text-info hover:bg-info/20 border-info/30";
+      label = "Custom";
+      Icon = GlobeIcon;
+      tip = "Router/LAN DNS: QManager Custom DNS";
+      break;
+    case "public_fallback":
+      cls = "bg-warning/15 text-warning hover:bg-warning/20 border-warning/30";
+      label = "Public";
+      Icon = TriangleAlertIcon;
+      tip = "Router/LAN DNS: public fallback (carrier DNS unreachable)";
+      break;
+    case "poisoned":
+      cls =
+        "bg-destructive/15 text-destructive hover:bg-destructive/20 border-destructive/30";
+      label = "Poisoned";
+      Icon = TriangleAlertIcon;
+      tip = "Router/LAN DNS: handover placeholder, no working resolver";
+      break;
+    default:
+      break;
+  }
+
+  const dnsBadge = (
+    <Badge variant="outline" className={cls}>
+      <Icon className="size-3" />
+      DNS: {label}
+    </Badge>
+  );
+
+  return (
+    <>
+      {ipptBadge}
+      <Tooltip>
+        <TooltipTrigger asChild>{dnsBadge}</TooltipTrigger>
+        <TooltipContent>{tip}</TooltipContent>
+      </Tooltip>
+    </>
+  );
+}
+TSXEOF
+
+    python3 - "$ns" "$hc" "$ty" << 'PYBADGE'
+import sys, re
+from pathlib import Path
+ns_p, hc_p, ty_p = (Path(p) for p in sys.argv[1:4])
+
+# --- types/modem-status.ts ---
+ty = ty_p.read_text()
+dns_iface = (
+    "/** Casa CFW-3212 LAN DNS reconciler state (AI-64). Router/LAN scope. */\n"
+    "export interface DnsStatus {\n"
+    "  ippt_on: boolean;\n"
+    "  dns_source: \"carrier\" | \"custom\" | \"public_fallback\" | \"poisoned\" | \"unknown\";\n"
+    "  carrier_reachable: boolean;\n"
+    "  scope: string;\n"
+    "  checked_at: number;\n"
+    "}\n\n"
+)
+anchor_ms = "export interface ModemStatus {"
+assert ty.count(anchor_ms) == 1, "ModemStatus interface anchor"
+ty = ty.replace(anchor_ms, dns_iface + anchor_ms, 1)
+conn_field = "  /** Internet connectivity and latency (from ping daemon) */\n  connectivity: ConnectivityStatus;\n"
+assert ty.count(conn_field) == 1, "connectivity field anchor"
+ty = ty.replace(
+    conn_field,
+    conn_field + "  /** LAN DNS reconciler state (AI-64) */\n  dns_status?: DnsStatus;\n",
+    1,
+)
+ty_p.write_text(ty)
+
+# --- network-status.tsx ---
+ns = ns_p.read_text()
+ns = ns.replace(
+    "  NetworkStatus,\n  ConnectivityStatus,\n  ServiceStatus,\n  PingTriState,\n} from \"@/types/modem-status\";",
+    "  NetworkStatus,\n  ConnectivityStatus,\n  ServiceStatus,\n  PingTriState,\n  DnsStatus,\n} from \"@/types/modem-status\";",
+    1,
+)
+ns = ns.replace(
+    "} from \"@/components/ui/tooltip\";\n",
+    "} from \"@/components/ui/tooltip\";\nimport { DnsSourceBadges } from \"./dns-source-badges\";\n",
+    1,
+)
+ns = ns.replace(
+    "  connectivity: ConnectivityStatus | null;\n",
+    "  connectivity: ConnectivityStatus | null;\n  dnsStatus: DnsStatus | null;\n",
+    1,
+)
+ns = ns.replace(
+    "const NetworkStatusComponent = ({\n  data,\n  connectivity,\n",
+    "const NetworkStatusComponent = ({\n  data,\n  connectivity,\n  dnsStatus,\n",
+    1,
+)
+render_anchor = "              })()}\n            </div>\n          )}\n        </div>"
+assert ns.count(render_anchor) == 1, "render anchor"
+ns = ns.replace(
+    render_anchor,
+    "              })()}\n              {/* Casa CFW-3212 (AI-64): IPPT + LAN DNS source badges */}\n              <DnsSourceBadges dnsStatus={dnsStatus} />\n            </div>\n          )}\n        </div>",
+    1,
+)
+# AI-64: let the header badge row wrap so the added IPPT/DNS badges plus
+# transient badges (e.g. "Data Delayed") do not overflow the card.
+ns = ns.replace(
+    '<div className="flex md:flex-row flex-col xl:items-center justify-center xl:justify-between gap-2">',
+    '<div className="flex flex-wrap md:flex-row flex-col xl:items-center justify-center xl:justify-between gap-2">',
+    1,
+)
+ns = ns.replace(
+    '<div className="flex items-center gap-x-1.5">\n              {/* Stale indicator */}',
+    '<div className="flex flex-wrap items-center gap-1.5">\n              {/* Stale indicator */}',
+    1,
+)
+assert "flex flex-wrap items-center gap-1.5" in ns, "badge-row wrap not applied"
+ns_p.write_text(ns)
+
+# --- home-component.tsx (thread to all usages, preserve indent) ---
+hc = hc_p.read_text()
+n = [0]
+def add_dns(m):
+    # Insert dnsStatus as the first prop of <NetworkStatusComponent> only.
+    # Other components (e.g. LiveLatency) also take connectivity but NOT dnsStatus,
+    # so anchor on the component tag, not on the connectivity line.
+    n[0] += 1
+    return m.group(1) + m.group(2) + "dnsStatus={data?.dns_status ?? null}\n" + m.group(2)
+hc2 = re.sub(r'(<NetworkStatusComponent\n)([ \t]*)', add_dns, hc)
+assert n[0] >= 1, "no <NetworkStatusComponent> usage found"
+hc_p.write_text(hc2)
+print(f"DNS badges patched: ns+ty+hc ({n[0]} home-component usages threaded)")
+PYBADGE
+    grep -q "DnsSourceBadges" "$ns" || fail "DNS badges: network-status insertion failed"
+    grep -q "dns_status" "$hc" || fail "DNS badges: home-component threading failed"
+    grep -q "export interface DnsStatus" "$ty" || fail "DNS badges: DnsStatus type missing"
+    log "Casa IPPT + DNS-source dashboard badges applied (AI-64)"
+}
+
 apply_casa_overlays() {
     log "Applying Casa CFW-3212 overlays from $REF_DIR"
 
@@ -4331,6 +4565,8 @@ apply_casa_overlays() {
     patch_ai62_flash_and_cgi_hardening_cfw3212
     patch_ai62_cookie_cors_config_hardening_cfw3212
     patch_casa_custom_dns_cfw3212
+    patch_casa_dns_status_merge_cfw3212
+    patch_casa_dns_badges_cfw3212
     patch_ai62_sudoers_narrowing_cfw3212
     patch_qmanager_display_version
     patch_casa_display_name
@@ -4531,8 +4767,12 @@ safety_checks() {
 
     require_rg_present "ip_handover" "$TARGET/scripts/www/cgi-bin/quecmanager/network/ip_passthrough.sh" \
         "Casa IPPT backend must use RDB ip_handover"
-    require_rg_present "qmanager_ippt_dns_repair" "$TARGET/install_cfw3212.sh" \
-        "Casa installer missing IPPT DNS recovery helper"
+    require_rg_present "qmanager_dns_reconcile" "$TARGET/install_cfw3212.sh" \
+        "Casa installer missing LAN DNS reconciler (AI-64)"
+    require_rg_present "qmanager-dns-reconcile.timer" "$TARGET/install_cfw3212.sh" \
+        "Casa installer missing LAN DNS reconciler systemd timer (AI-64)"
+    require_rg_present "qmanager_dns_state.json" "$TARGET/scripts/www/cgi-bin/quecmanager/at_cmd/fetch_data.sh" \
+        "fetch_data.sh must merge LAN DNS reconciler state into dashboard payload (AI-64)"
     require_rg_clean 'QCFG="usbnet"|QMAP="MPDN_rule"|QMAP="IPPT_NAT"|QMAP="DHCPV4DNS"|QMAPWAC|(^|[^[:alnum:]_])reboot([^[:alnum:]_]|$)' \
         "$TARGET/scripts/www/cgi-bin/quecmanager/network/ip_passthrough.sh" \
         "Casa IPPT backend contains upstream modem-write/reboot controls"

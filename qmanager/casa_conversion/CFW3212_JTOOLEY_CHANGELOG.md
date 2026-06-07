@@ -11,11 +11,22 @@
 - Discord Bot backend is now part of the Casa package, so you can plug in your own Discord bot token and user ID and try the UI. (wired up, not tested yet)
 - SIM Profiles can be saved, applied, deleted, and deactivated by hand on Casa. That includes APN, TTL/HL, IMEI, and the modem reboot apply step. The blind "auto-apply by ICCID" behavior is still off by default.
 - Custom DNS works from the QManager UI, including custom upstream resolvers for LAN clients without changing DHCP leases or rebooting the router.
-- IP Passthrough now has a package-level DNS recovery guard for boxes that previously ended up forwarding DNS to the passthrough gateway instead of a real upstream resolver.
+- IP Passthrough keeps the router/LAN DNS correct automatically: a background reconciler restores carrier DNS when passthrough is turned off and falls back to public DNS only when carrier DNS is actually unreachable. The dashboard shows whether IP Passthrough is on and where the router/LAN DNS is currently coming from.
 - The Reconnect Network menu action now uses Casa's connection manager path instead of forcing a modem deregister/re-register.
 - Reconnect Network now keeps a small progress window open so you can watch elapsed time, network registration, WAN IP, and internet status while the router comes back online.
 - Software Update → Version Management can now install a different version (including rollbacks). After the download verifies, the Install button switches to "Install Now" so the staged package actually gets applied instead of being left on disk.
 - A handful of upstream modem-management actions stay blocked or limited on Casa because they'd let you push the modem into a state we don't want it in.
+
+## v0.1.12-cfw3212.23
+
+- Rebuilds how Casa keeps DNS working under IP Passthrough. A background reconciler now checks every 30 seconds whether the router/LAN resolver can reach real carrier DNS and corrects it automatically — it restores carrier DNS when IP Passthrough is turned off and only falls back to public DNS when no carrier resolver answers. This replaces the previous one-shot guard, which could leave the router stuck on public DNS after IP Passthrough was disabled.
+- The reconciler is probe-based: it treats carrier DNS as working if any carrier nameserver (IPv4 or IPv6) actually answers, instead of assuming DNS is broken just because the IP Passthrough placeholder `192.0.0.1` is present in `resolv.conf`. It only rewrites the dnsmasq config when something needs to change, so it adds no steady-state flash wear.
+- Fixes the dashboard Online/Offline badge falsely showing Offline (DNS) under IP Passthrough while the internet actually works. The connectivity probe now uses the normal system resolver (which includes the carrier IPv6 nameservers that answer under IPPT) instead of assuming the IPv4 handover placeholder `192.0.0.1` means DNS is down and force-routing the probe to the LAN resolver.
+- Adds two small status badges next to the dashboard Online/Offline badge: one shows whether IP Passthrough is On or Off, and one shows where the router/LAN DNS is currently coming from — Carrier, your QManager Custom DNS, or a public fallback. The DNS-source badge describes the router/LAN resolver only; a device in IP Passthrough mode still receives DNS straight from the carrier, which the router cannot report on.
+
+## v0.1.12-cfw3212.23.dev
+
+**Dev sideload only** — same LAN DNS reconciler and dashboard IPPT/DNS-source badges as `v0.1.12-cfw3212.23`; use the official `.23` package release for router installs from the package repo once it is published.
 
 ## v0.1.12-cfw3212.22
 
