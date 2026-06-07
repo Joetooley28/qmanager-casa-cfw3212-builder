@@ -326,6 +326,19 @@ jobs:
           printf 'dry_run=%s create_release=%s force=%s release_exists=%s existing_prerelease=%s\n' \
             "$dry_run" "$create_release" "$force" "$release_exists" "$existing_prerelease"
 
+      - name: Build CFW-3212 qmanager_ping (IPPT DNS fix)
+        if: steps.scheduled_check.outputs.should_build == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq gcc-arm-linux-gnueabihf
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+          # shellcheck disable=SC1091
+          source "$HOME/.cargo/env"
+          rustup target add armv7-unknown-linux-musleabihf
+          bash qmanager/casa_conversion/ping-daemon/build-ping-daemon-cfw3212.sh
+
       - name: Build Casa package off-device
         if: steps.scheduled_check.outputs.should_build == 'true'
         shell: bash
