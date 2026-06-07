@@ -107,6 +107,37 @@ if [ "$PURGE" = "1" ]; then
     systemctl reset-failed tailscaled 2>/dev/null || true
     info "Optional Tailscale/Ookla/msmtp state removed"
 
+    step "Removing QManager DNS config from /etc/data/dnsmasq.conf"
+    # QManager writes two managed blocks into Casa's persistent dnsmasq config:
+    #   # QMANAGER-CUSTOM-DNS-BEGIN/END v1   (user-set Custom DNS upstreams)
+    #   # QMANAGER-DNS-RECOVERY-BEGIN/END    (auto public 1.1.1.1/8.8.8.8 fallback,
+    #                                         with no-resolv, when carrier DNS is down)
+    # Left behind, these keep forcing the router/LAN resolver after QManager is
+    # gone, with no UI to manage them. Strip both on --purge and restart dnsmasq.
+    DNSMASQ_CONF="/etc/data/dnsmasq.conf"
+    if [ -f "$DNSMASQ_CONF" ] && grep -qE '^# QMANAGER-(CUSTOM-DNS|DNS-RECOVERY)-BEGIN' "$DNSMASQ_CONF"; then
+        DNS_TMP="$(mktemp /tmp/qmanager-dnsmasq.purge.XXXXXX 2>/dev/null || echo "/tmp/qmanager-dnsmasq.purge.$$")"
+        if awk '
+            /^# QMANAGER-CUSTOM-DNS-BEGIN/   { skip = 1; next }
+            /^# QMANAGER-CUSTOM-DNS-END/     { skip = 0; next }
+            /^# QMANAGER-DNS-RECOVERY-BEGIN/ { skip = 1; next }
+            /^# QMANAGER-DNS-RECOVERY-END/   { skip = 0; next }
+            skip != 1 { print }
+        ' "$DNSMASQ_CONF" > "$DNS_TMP"; then
+            cp "$DNSMASQ_CONF" "$DNSMASQ_CONF.bak-qmanager-purge-$(date +%Y%m%d%H%M%S)" 2>/dev/null || true
+            cat "$DNS_TMP" > "$DNSMASQ_CONF"
+            chown radio:radio "$DNSMASQ_CONF" 2>/dev/null || true
+            chmod 0644 "$DNSMASQ_CONF" 2>/dev/null || true
+            systemctl restart dnsmasq_service@0.service 2>/dev/null || true
+            info "QManager Custom DNS / public-fallback blocks removed; dnsmasq restarted"
+        else
+            info "Could not rewrite $DNSMASQ_CONF; left unchanged"
+        fi
+        rm -f "$DNS_TMP"
+    else
+        info "No QManager DNS blocks present in $DNSMASQ_CONF"
+    fi
+
     step "Purging preserved config and bundled Entware state"
     # Remove only include lines written by this installer. The bundled Entware
     # sudoers file is ours; /etc/sudoers may contain a pre-existing include.

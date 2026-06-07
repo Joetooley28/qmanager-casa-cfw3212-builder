@@ -20,6 +20,7 @@
 ## v0.1.12-cfw3212.21
 
 - After a Software Update install, if the browser session drops while QManager's web server restarts, the page now reloads the **Software Update** page instead of jumping to the dashboard/home page, so you land back on the install status (and any "reboot required" prompt) where you started.
+- The `--purge` uninstall now also removes QManager's DNS changes from the router's persistent dnsmasq config (`/etc/data/dnsmasq.conf`) — both the Custom DNS upstreams and the automatic public-DNS fallback block (`1.1.1.1` / `8.8.8.8`) the IP Passthrough reconciler adds when carrier DNS is down — and restarts dnsmasq so the router/LAN resolver reverts to stock/carrier DNS. A plain uninstall still leaves these in place (alongside other preserved config) for reinstall.
 
 ## v0.1.12-cfw3212.20
 
