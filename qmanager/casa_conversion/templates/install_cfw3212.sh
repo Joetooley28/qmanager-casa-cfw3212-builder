@@ -655,8 +655,8 @@ if [ "$REQUEST_METHOD" = "POST" ]; then
     policy_enable="$(rdb get "$PROFILE_POLICY_ENABLE_RDB" 2>/dev/null)"
     [ -z "$policy_enable" ] && policy_enable="1"
     rdb set "$PROFILE_TRIGGER_RDB" "$policy_enable" 2>/dev/null || true
-    if [ -x /usrdata/bin/qmanager_ippt_dns_repair ]; then
-        /usrdata/bin/qmanager_ippt_dns_repair --if-poisoned >/dev/null 2>&1 || true
+    if [ -x /usrdata/bin/qmanager_dns_reconcile ]; then
+        /usrdata/bin/qmanager_dns_reconcile --once >/dev/null 2>&1 || true
     fi
 
     emit_state
@@ -669,42 +669,71 @@ chmod 755 "$SRC_SCRIPTS/www/cgi-bin/quecmanager/network/ip_passthrough.sh" 2>/de
 info "Casa IP Passthrough mapped to ip_handover with usbnet control still blocked"
 
 mkdir -p "$SRC_SCRIPTS/usr/bin"
-cat > "$SRC_SCRIPTS/usr/bin/qmanager_ippt_dns_repair" << 'EOF'
+cat > "$SRC_SCRIPTS/usr/bin/qmanager_dns_reconcile" << 'EOF'
 #!/bin/sh
+# qmanager_dns_reconcile -- Casa CFW-3212 LAN DNS reconciler (AI-64)
+#
+# Single source of truth for the router/LAN dnsmasq upstream under IP
+# Passthrough (IPPT). Decides the authoritative DNS source and writes a small
+# state file the dashboard reads.
+#
+# Probe-based, NOT presence-based: carrier DNS counts as working if ANY carrier
+# nameserver (IPv4 or IPv6) actually answers, even when /etc/resolv.conf still
+# lists the IPPT handover placeholder 192.0.0.1 (which itself does not answer).
+#
+# Decision priority:  QManager Custom DNS  >  Carrier (if it answers)  >  Public
+#
+# Flash-safe: only rewrites /etc/data/dnsmasq.conf + restarts dnsmasq when the
+# recovery-block presence must change. Steady state performs zero flash writes.
 set -u
 
 DNSMASQ_CONF="/etc/data/dnsmasq.conf"
-TMP_CONF="/tmp/qmanager-ippt-dns-repair.$$"
+STATE_FILE="/tmp/qmanager_dns_state.json"
+TMP_CONF="/tmp/qmanager-dns-reconcile.$$"
 BEGIN="# QMANAGER-DNS-RECOVERY-BEGIN"
 END="# QMANAGER-DNS-RECOVERY-END"
 CUSTOM_BEGIN="# QMANAGER-CUSTOM-DNS-BEGIN v1"
+PROBE_NAME="cp.cloudflare.com"
+PROBE_TIMEOUT=3
 
-log() {
-    logger -t qmanager-ippt-dns-repair "$*" 2>/dev/null || true
-}
-
-rdb_read() {
-    rdb get "$1" 2>/dev/null || true
-}
+log() { logger -t qmanager-dns-reconcile "$*" 2>/dev/null || true; }
+rdb_read() { rdb get "$1" 2>/dev/null || true; }
 
 ippt_enabled() {
-    profile_enabled="$(rdb_read link.profile.1.ip_handover.enable)"
-    service_enabled="$(rdb_read service.ip_handover.enable)"
-    [ "$profile_enabled" = "1" ] || [ "$service_enabled" = "1" ]
+    pe="$(rdb_read link.profile.1.ip_handover.enable)"
+    se="$(rdb_read service.ip_handover.enable)"
+    [ "$pe" = "1" ] || [ "$se" = "1" ]
 }
 
-dns_poisoned() {
-    policy_dns="$(rdb_read link.policy.1.dns1)"
-    prev_dns="$(rdb_read service.dns.prev_server)"
-    if [ "$policy_dns" = "192.0.0.1" ]; then
-        return 0
-    fi
-    if printf '%s\n' "$prev_dns" | grep -q '192\.0\.0\.1'; then
-        return 0
-    fi
-    if grep -q '^nameserver 192\.0\.0\.1$' /run/resolv.conf /etc/resolv.conf 2>/dev/null; then
-        return 0
-    fi
+custom_dns_active() {
+    grep -qxF "$CUSTOM_BEGIN" "$DNSMASQ_CONF" 2>/dev/null
+}
+
+recovery_block_present() {
+    grep -qxF "$BEGIN" "$DNSMASQ_CONF" 2>/dev/null
+}
+
+# Candidate carrier nameservers (IPv4 + IPv6), excluding the IPPT placeholder.
+carrier_nameservers() {
+    {
+        rdb_read link.policy.1.dns1
+        rdb_read link.policy.1.dns2
+        rdb_read service.dns.prev_server
+        sed -n 's/^nameserver[[:space:]][[:space:]]*//p' /run/resolv.conf 2>/dev/null
+        sed -n 's/^nameserver[[:space:]][[:space:]]*//p' /etc/resolv.conf 2>/dev/null
+    } | tr ' ' '\n' | grep -vE '^$|^192\.0\.0\.[12]$' | sort -u
+}
+
+# True if at least one carrier nameserver actually answers a real query.
+carrier_reachable() {
+    ns_list="$(carrier_nameservers)"
+    [ -n "$ns_list" ] || return 1
+    for ns in $ns_list; do
+        if timeout "$PROBE_TIMEOUT" nslookup "$PROBE_NAME" "$ns" 2>/dev/null \
+            | grep -q '^Name:'; then
+            return 0
+        fi
+    done
     return 1
 }
 
@@ -714,27 +743,43 @@ restart_dnsmasq() {
 }
 
 strip_recovery_block() {
-    src="$1"
-    dst="$2"
-    awk -v begin="$BEGIN" -v end="$END" '
-        $0 == begin { skip = 1; next }
-        $0 == end { skip = 0; next }
+    # $1 = source file, $2 = dest file
+    awk -v b="$BEGIN" -v e="$END" '
+        $0 == b { skip = 1; next }
+        $0 == e { skip = 0; next }
         skip != 1 { print }
-    ' "$src" > "$dst"
+    ' "$1" > "$2"
 }
 
-apply_recovery_block() {
-    [ -f "$DNSMASQ_CONF" ] || {
-        log "missing $DNSMASQ_CONF; cannot install recovery block"
-        return 1
-    }
-
-    if grep -q "^$CUSTOM_BEGIN$" "$DNSMASQ_CONF" 2>/dev/null; then
-        log "custom DNS block present; leaving it authoritative"
-        restart_dnsmasq
-        return 0
+commit_conf() {
+    # Validate $TMP_CONF, back up, replace $DNSMASQ_CONF, fix perms, restart.
+    if command -v dnsmasq >/dev/null 2>&1; then
+        dnsmasq --test --conf-file="$TMP_CONF" >/dev/null 2>&1 || {
+            log "dnsmasq validation failed; leaving config unchanged"
+            rm -f "$TMP_CONF"; return 1
+        }
     fi
+    cp "$DNSMASQ_CONF" "$DNSMASQ_CONF.bak-qmanager-dns-$(date +%Y%m%d%H%M%S)" 2>/dev/null || true
+    cat "$TMP_CONF" > "$DNSMASQ_CONF" || { rm -f "$TMP_CONF"; return 1; }
+    rm -f "$TMP_CONF"
+    chown radio:radio "$DNSMASQ_CONF" 2>/dev/null || true
+    chmod 0644 "$DNSMASQ_CONF" 2>/dev/null || true
+    restart_dnsmasq
+}
 
+# Ensure the recovery block is ABSENT (carrier or custom is authoritative).
+ensure_no_recovery_block() {
+    recovery_block_present || return 0
+    [ -f "$DNSMASQ_CONF" ] || return 0
+    strip_recovery_block "$DNSMASQ_CONF" "$TMP_CONF" || return 1
+    commit_conf || return 1
+    log "removed DNS recovery block (carrier/custom authoritative)"
+}
+
+# Ensure the public-DNS fallback block is PRESENT (no carrier resolver answers).
+ensure_recovery_block() {
+    [ -f "$DNSMASQ_CONF" ] || { log "missing $DNSMASQ_CONF"; return 1; }
+    recovery_block_present && return 0
     strip_recovery_block "$DNSMASQ_CONF" "$TMP_CONF" || return 1
     {
         printf '%s\n' "$BEGIN"
@@ -744,40 +789,49 @@ apply_recovery_block() {
         printf '%s\n' "server=8.8.4.4"
         printf '%s\n' "$END"
     } >> "$TMP_CONF"
-
-    if command -v dnsmasq >/dev/null 2>&1; then
-        if ! dnsmasq --test --conf-file="$TMP_CONF" >/tmp/qmanager-ippt-dns-repair-test.log 2>&1; then
-            log "dnsmasq validation failed; leaving existing config unchanged"
-            rm -f "$TMP_CONF"
-            return 1
-        fi
-    fi
-
-    cp "$DNSMASQ_CONF" "$DNSMASQ_CONF.bak-qmanager-ippt-dns-$(date +%Y%m%d%H%M%S)" 2>/dev/null || true
-    cat "$TMP_CONF" > "$DNSMASQ_CONF" || {
-        rm -f "$TMP_CONF"
-        return 1
-    }
-    rm -f "$TMP_CONF"
-    chown radio:radio "$DNSMASQ_CONF" 2>/dev/null || true
-    chmod 0644 "$DNSMASQ_CONF" 2>/dev/null || true
-    restart_dnsmasq
-    log "installed IPPT DNS recovery block"
+    commit_conf || return 1
+    log "installed public DNS fallback block (carrier unreachable)"
 }
 
-case "${1:---if-poisoned}" in
-    --if-poisoned) ;;
-    *) echo "usage: qmanager_ippt_dns_repair [--if-poisoned]" >&2; exit 2 ;;
+write_state() {
+    # $1 = dns_source, $2 = carrier_reachable (true/false), $3 = ippt_on (true/false)
+    ts="$(date +%s 2>/dev/null || echo 0)"
+    tmp="$STATE_FILE.$$"
+    printf '{"ippt_on":%s,"dns_source":"%s","carrier_reachable":%s,"scope":"router_lan","checked_at":%s}\n' \
+        "$3" "$1" "$2" "$ts" > "$tmp" 2>/dev/null || { rm -f "$tmp"; return 0; }
+    mv "$tmp" "$STATE_FILE" 2>/dev/null || rm -f "$tmp"
+}
+
+main() {
+    ippt=false; ippt_enabled && ippt=true
+    reach=false; carrier_reachable && reach=true
+
+    if custom_dns_active; then
+        source="custom"
+        ensure_no_recovery_block || true
+    elif [ "$reach" = "true" ]; then
+        source="carrier"
+        ensure_no_recovery_block || true
+    else
+        source="public_fallback"
+        ensure_recovery_block || true
+    fi
+
+    write_state "$source" "$reach" "$ippt"
+    rm -f "$TMP_CONF" 2>/dev/null || true
+}
+
+# --once is the normal mode. --if-poisoned is accepted for backward-compat with
+# older callers; behavior is an unconditional reconcile in every case.
+case "${1:-}" in
+    ""|--once|--if-poisoned) ;;
+    *) echo "usage: qmanager_dns_reconcile [--once]" >&2; exit 2 ;;
 esac
 
-if ippt_enabled && dns_poisoned; then
-    apply_recovery_block
-else
-    rm -f "$TMP_CONF" 2>/dev/null || true
-fi
+main
 EOF
-chmod 755 "$SRC_SCRIPTS/usr/bin/qmanager_ippt_dns_repair" 2>/dev/null || true
-info "Casa IPPT DNS recovery helper staged"
+chmod 755 "$SRC_SCRIPTS/usr/bin/qmanager_dns_reconcile" 2>/dev/null || true
+info "Casa LAN DNS reconciler staged"
 
 # Casa keeps the upstream SIM Profile UI/manual apply path enabled. Profiles
 # can save/delete JSON state and, when manually applied by the user, can set APN,
@@ -823,9 +877,9 @@ if [ -d "$SRC_SCRIPTS/usr/bin" ]; then
     info "$(ls "$SRC_SCRIPTS/usr/bin" | wc -l) daemons installed to $BIN_DIR"
 fi
 
-if [ -x "$BIN_DIR/qmanager_ippt_dns_repair" ]; then
-    "$BIN_DIR/qmanager_ippt_dns_repair" --if-poisoned >/dev/null 2>&1 || \
-        warn "IPPT DNS recovery check did not complete"
+if [ -x "$BIN_DIR/qmanager_dns_reconcile" ]; then
+    "$BIN_DIR/qmanager_dns_reconcile" --once >/dev/null 2>&1 || \
+        warn "LAN DNS reconcile did not complete"
 fi
 
 # Preserve the upstream Rust qmanager_ping as the primary implementation, but
@@ -1460,6 +1514,43 @@ for f in "$SRC_SCRIPTS/etc/systemd/system"/qmanager*.service; do
     sed -i 's/\r$//' "$SYSTEMD_DIR/$(basename "$f")"
 done
 info "qmanager service units installed"
+
+# --- Casa LAN DNS reconciler timer (AI-64) ----------------------------------
+# Runs the reconciler every 30s so the LAN DNS source stays correct after the
+# asynchronous IPPT bearer change settles. The toggle-time nudge alone races the
+# carrier handover (resolv.conf is poisoned a few seconds after the RDB flag),
+# so the timer is what guarantees steady state. The reconciler only writes to
+# flash when the dnsmasq recovery-block presence must actually change.
+cat > "$SYSTEMD_DIR/qmanager-dns-reconcile.service" << 'EOF'
+[Unit]
+Description=QManager Casa LAN DNS reconciler (one-shot)
+After=dnsmasq_service@0.service
+
+[Service]
+Type=oneshot
+ExecStart=/usrdata/bin/qmanager_dns_reconcile --once
+RemainAfterExit=no
+EOF
+cat > "$SYSTEMD_DIR/qmanager-dns-reconcile.timer" << 'EOF'
+[Unit]
+Description=QManager Casa LAN DNS reconciler schedule
+
+[Timer]
+OnBootSec=45
+OnUnitActiveSec=30
+AccuracySec=5
+Unit=qmanager-dns-reconcile.service
+
+[Install]
+WantedBy=timers.target
+EOF
+sed -i 's/\r$//' "$SYSTEMD_DIR/qmanager-dns-reconcile.service" "$SYSTEMD_DIR/qmanager-dns-reconcile.timer" 2>/dev/null || true
+mkdir -p "$SYSTEMD_DIR/timers.target.wants"
+ln -sf "$SYSTEMD_DIR/qmanager-dns-reconcile.timer" \
+    "$SYSTEMD_DIR/timers.target.wants/qmanager-dns-reconcile.timer" 2>/dev/null || true
+systemctl daemon-reload 2>/dev/null || true
+systemctl start qmanager-dns-reconcile.timer 2>/dev/null || true
+info "Casa LAN DNS reconciler timer installed (30s)"
 
 # Casa CFW-3212 note: keep the poller independent from qmanager-ping. The
 # installer starts both explicitly, and this prevents a future ping regression
