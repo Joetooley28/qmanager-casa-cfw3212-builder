@@ -17,6 +17,10 @@
 - Software Update → Version Management can now install a different version (including rollbacks). After the download verifies, the Install button switches to "Install Now" so the staged package actually gets applied instead of being left on disk.
 - A handful of upstream modem-management actions stay blocked or limited on Casa because they'd let you push the modem into a state we don't want it in.
 
+## v0.1.12-cfw3212.21
+
+- After a Software Update install, if the browser session drops while QManager's web server restarts, the page now reloads the **Software Update** page instead of jumping to the dashboard/home page, so you land back on the install status (and any "reboot required" prompt) where you started.
+
 ## v0.1.12-cfw3212.20
 
 This is the first public release since `.19`. It rolls up all of the stock-UI coexistence, IP Passthrough DNS, dashboard, and security/flash-health work that was previously only sideloaded for testing.

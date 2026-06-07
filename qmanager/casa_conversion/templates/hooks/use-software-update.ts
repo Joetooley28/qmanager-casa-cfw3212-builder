@@ -261,18 +261,19 @@ export function useSoftwareUpdate(): UseSoftwareUpdateReturn {
       } catch {
         // Casa restarts QManager/lighttpd during install. A failed poll here is
         // expected while services restart, so keep polling until the worker
-        // reports reboot_required or a real error. Navigate once to the UI
-        // root as a fallback for users left on a stale nested route.
+        // reports reboot_required or a real error. Reload the current Software
+        // Update page as a fallback for users left on a dropped session, so they
+        // land back on the update status instead of the home page.
         if (!sessionStorage.getItem("qm_update_reload_scheduled")) {
           sessionStorage.setItem("qm_update_reload_scheduled", "1");
           window.setTimeout(() => {
-            window.location.assign("/");
+            window.location.reload();
           }, 30000);
         }
         setError(null);
         setUpdateStatus({
           status: "installing",
-          message: "QManager services are restarting; reconnecting. This page will return to the main QManager screen in about 30 seconds if the status does not recover.",
+          message: "QManager services are restarting; reconnecting. This page will reload the Software Update page in about 30 seconds if the status does not recover.",
         });
       }
     }, POLL_INTERVAL);
