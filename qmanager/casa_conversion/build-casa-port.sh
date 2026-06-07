@@ -4476,6 +4476,19 @@ ns = ns.replace(
     "              })()}\n              {/* Casa CFW-3212 (AI-64): IPPT + LAN DNS source badges */}\n              <DnsSourceBadges dnsStatus={dnsStatus} />\n            </div>\n          )}\n        </div>",
     1,
 )
+# AI-64: let the header badge row wrap so the added IPPT/DNS badges plus
+# transient badges (e.g. "Data Delayed") do not overflow the card.
+ns = ns.replace(
+    '<div className="flex md:flex-row flex-col xl:items-center justify-center xl:justify-between gap-2">',
+    '<div className="flex flex-wrap md:flex-row flex-col xl:items-center justify-center xl:justify-between gap-2">',
+    1,
+)
+ns = ns.replace(
+    '<div className="flex items-center gap-x-1.5">\n              {/* Stale indicator */}',
+    '<div className="flex flex-wrap items-center gap-1.5">\n              {/* Stale indicator */}',
+    1,
+)
+assert "flex flex-wrap items-center gap-1.5" in ns, "badge-row wrap not applied"
 ns_p.write_text(ns)
 
 # --- home-component.tsx (thread to all usages, preserve indent) ---
