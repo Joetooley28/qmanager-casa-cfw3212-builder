@@ -2977,17 +2977,16 @@ new_get_dns_mode = '''get_dns_mode() {
 }'''
 
 new_get_passthrough_bypass = '''get_passthrough_bypass() {
-    # Casa CFW-3212: IP passthrough state lives in RDB, not mobileap_cfg.xml.
-    # Mirrors the keys QManager ip_passthrough.sh authoritatively writes.
-    local enable mode svc
-    enable=$(rdb get link.profile.1.ip_handover.enable 2>/dev/null)
-    mode=$(rdb get link.profile.1.ip_handover.mode 2>/dev/null)
-    svc=$(rdb get service.ip_handover.enable 2>/dev/null)
-    if [ "$enable" = "1" ] && [ "$svc" = "1" ] && [ "$mode" = "eth" ]; then
-        printf "true"
-    else
-        printf "false"
-    fi
+    # Casa CFW-3212: IP passthrough here is a ROUTED handover, NOT a DNS bypass.
+    # State lives in RDB (link.profile.1.ip_handover.enable etc.), but unlike a
+    # classic passthrough the handover device does NOT get carrier DNS directly:
+    # bridge0 DHCP forces option 6 = 192.168.20.1 (dhcp-option-force=6) for every
+    # client including the handover device, so it still routes DNS through the
+    # modem's dnsmasq. Verified live (IPPT on): enabling Custom DNS changed the
+    # upstream for the passthrough router's clients. So nothing bypasses dnsmasq
+    # -> always false, which suppresses the upstream "IP Passthrough is bypassing
+    # dnsmasq" warning that would otherwise wrongly imply Custom DNS is ignored.
+    printf "false"
 }'''
 
 dns_pattern = re.compile(
