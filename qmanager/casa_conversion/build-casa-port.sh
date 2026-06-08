@@ -2784,8 +2784,11 @@ if 'PROFILE_WRITEFLAG_RDB' in text:
     inject = (
         target
         + '\n'
-        + '    # Casa CFW-3212 ippt service-clear: when disabling, also clear the\n'
-        + '    # service-level handover flag and cached last WAN IP so the data\n'
+        + '    # Casa CFW-3212 ippt service-clear: keep the service-level handover\n'
+        + '    # flag in sync with the toggle. The stock QCMAP handover engine reads\n'
+        + '    # service.ip_handover.enable (factory default 1), NOT the per-profile\n'
+        + '    # flag, so ENABLING must set it to 1 for handover to actually engage;\n'
+        + '    # DISABLING sets 0 and clears the cached last WAN IP so the data\n'
         + '    # session stops binding to the Casa handover placeholder across\n'
         + '    # reboots. Keys are persistent (`p` flag) so we set them, not unset.\n'
         + '    if [ "$ENABLED" = "0" ]; then\n'
@@ -2793,6 +2796,9 @@ if 'PROFILE_WRITEFLAG_RDB' in text:
         + '        rdb setflags "$SERVICE_ENABLE_RDB" p 2>/dev/null || true\n'
         + '        rdb set "$SERVICE_LAST_IP_RDB" "" 2>/dev/null || true\n'
         + '        rdb setflags "$SERVICE_LAST_IP_RDB" p 2>/dev/null || true\n'
+        + '    else\n'
+        + '        rdb set "$SERVICE_ENABLE_RDB" 1 2>/dev/null || true\n'
+        + '        rdb setflags "$SERVICE_ENABLE_RDB" p 2>/dev/null || true\n'
         + '    fi\n'
     )
 else:
