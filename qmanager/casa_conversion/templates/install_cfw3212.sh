@@ -641,14 +641,20 @@ if [ "$REQUEST_METHOD" = "POST" ]; then
         exit 0
     fi
 
-    # Casa CFW-3212 ippt service-clear: when disabling, also clear the
-    # service-level handover flag and cached last WAN IP so the data session
-    # stops binding to the Casa handover placeholder across reboots.
+    # Casa CFW-3212 ippt service-clear: keep the service-level handover flag in
+    # sync with the toggle. The stock QCMAP engine reads service.ip_handover.enable
+    # (factory default 1), NOT the per-profile flag, so ENABLING must set it to 1
+    # for handover to actually engage; DISABLING sets 0 and clears the cached last
+    # WAN IP so the data session stops binding to the Casa handover placeholder
+    # across reboots. Keys are persistent (`p` flag) so we set them, not unset.
     if [ "$ENABLED" = "0" ]; then
         rdb set "$SERVICE_ENABLE_RDB" 0 2>/dev/null || true
         rdb setflags "$SERVICE_ENABLE_RDB" p 2>/dev/null || true
         rdb set "$SERVICE_LAST_IP_RDB" "" 2>/dev/null || true
         rdb setflags "$SERVICE_LAST_IP_RDB" p 2>/dev/null || true
+    else
+        rdb set "$SERVICE_ENABLE_RDB" 1 2>/dev/null || true
+        rdb setflags "$SERVICE_ENABLE_RDB" p 2>/dev/null || true
     fi
 
     rdb set "$PROFILE_WRITEFLAG_RDB" "1" 2>/dev/null || true
