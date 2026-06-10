@@ -17,6 +17,18 @@
 - Software Update → Version Management can now install a different version (including rollbacks). After the download verifies, the Install button switches to "Install Now" so the staged package actually gets applied instead of being left on disk.
 - A handful of upstream modem-management actions stay blocked or limited on Casa because they'd let you push the modem into a state we don't want it in.
 
+## v0.1.12-cfw3212.22
+
+Uninstall cleanup release — closes the remaining "restore to stock" gaps so a `--purge` uninstall leaves the router the way it shipped:
+
+- The uninstaller now tears down QManager's firewall rules immediately and synchronously, instead of asking the firewall service to stop in the background and then deleting its helper script. Previously the firewall rules (the QManager web-UI port protections) could stay active until the next reboot.
+- The IP Passthrough DNS reconciler's scheduled timer is now fully removed on uninstall. Before, only its service file was cleaned up, so a stale timer entry was left behind.
+- `--purge` now also removes the dnsmasq backup snapshots QManager's DNS helpers had saved next to the router's persistent dnsmasq config, and the purge step itself no longer writes a new backup file there (its safety copy goes to RAM instead, sparing flash).
+- `--purge` now removes the Entware startup unit (`rc.unslung.service`) along with the Entware tree it pointed at, instead of leaving a broken service entry behind.
+- Uninstall now clears all of the Software Update check's temporary cache files in `/tmp`, not just two of them.
+
+No install or runtime behavior changes — this release only changes what uninstall/`--purge` cleans up.
+
 ## v0.1.12-cfw3212.21
 
 - After a Software Update install, if the browser session drops while QManager's web server restarts, the page now reloads the **Software Update** page instead of jumping to the dashboard/home page, so you land back on the install status (and any "reboot required" prompt) where you started.
