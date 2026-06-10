@@ -19,22 +19,18 @@
 
 ## v0.1.12-cfw3212.22
 
-Uninstall cleanup release — closes the remaining "restore to stock" gaps so a `--purge` uninstall leaves the router the way it shipped:
+- After a Software Update install, if the browser session drops while QManager's web server restarts, the page now reloads the **Software Update** page instead of jumping to the dashboard/home page, so you land back on the install status (and any "reboot required" prompt) where you started.
+- Fixes the Custom DNS page wrongly warning that "IP Passthrough is bypassing dnsmasq." On Casa, IP Passthrough is a routed handover — the downstream device still gets the modem as its DNS server and routes lookups through the modem's dnsmasq — so Custom DNS *does* apply to passthrough clients. The page no longer shows the misleading bypass notice.
+- Fixes IP Passthrough not actually engaging after it had been turned off and on again. The toggle now keeps Casa's service-level handover flag (`service.ip_handover.enable`, which the stock QCMAP engine reads) in sync — enabling sets it on so the carrier IP is handed to your downstream device, instead of only flipping the per-profile flag and leaving passthrough silently inactive (dashboard showing "IPPT On" while the device still got a normal LAN IP).
+- The `--purge` uninstall now also removes QManager's DNS changes from the router's persistent dnsmasq config (`/etc/data/dnsmasq.conf`) — both the Custom DNS upstreams and the automatic public-DNS fallback block (`1.1.1.1` / `8.8.8.8`) the IP Passthrough reconciler adds when carrier DNS is down — and restarts dnsmasq so the router/LAN resolver reverts to stock/carrier DNS. A plain uninstall still leaves these in place (alongside other preserved config) for reinstall.
+
+Uninstall/`--purge` cleanup, on top of the above — closes the remaining "restore to stock" gaps so a `--purge` uninstall leaves the router the way it shipped:
 
 - The uninstaller now tears down QManager's firewall rules immediately and synchronously, instead of asking the firewall service to stop in the background and then deleting its helper script. Previously the firewall rules (the QManager web-UI port protections) could stay active until the next reboot.
 - The IP Passthrough DNS reconciler's scheduled timer is now fully removed on uninstall. Before, only its service file was cleaned up, so a stale timer entry was left behind.
 - `--purge` now also removes the dnsmasq backup snapshots QManager's DNS helpers had saved next to the router's persistent dnsmasq config, and the purge step itself no longer writes a new backup file there (its safety copy goes to RAM instead, sparing flash).
 - `--purge` now removes the Entware startup unit (`rc.unslung.service`) along with the Entware tree it pointed at, instead of leaving a broken service entry behind.
 - Uninstall now clears all of the Software Update check's temporary cache files in `/tmp`, not just two of them.
-
-No install or runtime behavior changes — this release only changes what uninstall/`--purge` cleans up.
-
-## v0.1.12-cfw3212.21
-
-- After a Software Update install, if the browser session drops while QManager's web server restarts, the page now reloads the **Software Update** page instead of jumping to the dashboard/home page, so you land back on the install status (and any "reboot required" prompt) where you started.
-- Fixes the Custom DNS page wrongly warning that "IP Passthrough is bypassing dnsmasq." On Casa, IP Passthrough is a routed handover — the downstream device still gets the modem as its DNS server and routes lookups through the modem's dnsmasq — so Custom DNS *does* apply to passthrough clients. The page no longer shows the misleading bypass notice.
-- Fixes IP Passthrough not actually engaging after it had been turned off and on again. The toggle now keeps Casa's service-level handover flag (`service.ip_handover.enable`, which the stock QCMAP engine reads) in sync — enabling sets it on so the carrier IP is handed to your downstream device, instead of only flipping the per-profile flag and leaving passthrough silently inactive (dashboard showing "IPPT On" while the device still got a normal LAN IP).
-- The `--purge` uninstall now also removes QManager's DNS changes from the router's persistent dnsmasq config (`/etc/data/dnsmasq.conf`) — both the Custom DNS upstreams and the automatic public-DNS fallback block (`1.1.1.1` / `8.8.8.8`) the IP Passthrough reconciler adds when carrier DNS is down — and restarts dnsmasq so the router/LAN resolver reverts to stock/carrier DNS. A plain uninstall still leaves these in place (alongside other preserved config) for reinstall.
 
 ## v0.1.12-cfw3212.20
 
