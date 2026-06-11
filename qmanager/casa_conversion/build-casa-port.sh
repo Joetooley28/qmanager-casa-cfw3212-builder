@@ -4517,6 +4517,122 @@ PYBADGE
     log "Casa IPPT + DNS-source dashboard badges applied (AI-64)"
 }
 
+patch_onboarding_normalize_defaults_cfw3212() {
+    # First-run onboarding's "default" choices for Network Mode (RAT) and Band
+    # Locking were implemented upstream as no-ops: selecting the pre-checked
+    # "Automatic" / "All bands" simply advanced the wizard without sending any
+    # AT command. That assumes the modem is already in that default state.
+    # RAT (mode_pref/nr5g_disable_mode) and band-lock settings live in the
+    # *modem's* NVM, not qmanager config, so they survive a qmanager reinstall.
+    # On a previously-configured modem (e.g. one used for field testing) the
+    # wizard's "Automatic" silently left a stale RAT/band lock in place. These
+    # patches make the default choices actively normalize the modem.
+    local nm="$TARGET/components/onboarding/steps/step-network-mode.tsx"
+    local bl="$TARGET/components/onboarding/steps/step-band-locking.tsx"
+    [ -f "$nm" ] || fail "Onboarding normalize: missing $nm"
+    [ -f "$bl" ] || fail "Onboarding normalize: missing $bl"
+
+    if grep -q "onboarding RAT normalize" "$nm" && \
+       grep -q "onboarding band normalize" "$bl"; then
+        log "Onboarding default-normalize patches already applied"
+        return 0
+    fi
+
+    # --- Step 3: Network Mode — always apply, even AUTO/0 ---
+    python3 - "$nm" <<'PY'
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+text = path.read_text()
+
+needle = (
+    '    if (selectedMode === "AUTO" && nr5gMode === 0) {\n'
+    '      onSuccess();\n'
+    '      return;\n'
+    '    }\n'
+    '\n'
+    '    onLoadingChange(true);\n'
+)
+replacement = (
+    '    // Casa CFW-3212 (onboarding RAT normalize): always apply the selected\n'
+    '    // network mode, even the "Automatic" default (mode_pref=AUTO /\n'
+    '    // nr5g_disable_mode=0). The upstream skip-when-default optimization\n'
+    '    // assumed the modem was already in AUTO, but RAT/NR preferences live in\n'
+    '    // modem NVM and survive qmanager reinstalls. On a previously-configured\n'
+    '    // modem, skipping left a stale RAT lock in place, so onboarding\'s\n'
+    '    // "Automatic" silently did nothing.\n'
+    '    onLoadingChange(true);\n'
+)
+if needle not in text:
+    raise SystemExit("network-mode: AUTO skip block not found (upstream may have changed)")
+text = text.replace(needle, replacement, 1)
+path.write_text(text)
+PY
+    grep -q "onboarding RAT normalize" "$nm" \
+        || fail "Onboarding normalize: network-mode patch did not apply"
+
+    # --- Step 5: Band Locking — "All bands" unlocks to full supported list ---
+    python3 - "$bl" <<'PY'
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+text = path.read_text()
+
+needle = (
+    '    const lteBands = getBandString(ltePreset, ltePresets, lteCustom);\n'
+    '    const nr5gBands = getBandString(nr5gPreset, nr5gPresets, nr5gCustom);\n'
+)
+replacement = (
+    '    // Casa CFW-3212 (onboarding band normalize): "All bands (default)" now\n'
+    '    // performs an explicit unlock — lock to the full modem-supported list —\n'
+    '    // instead of a no-op. Band locks live in modem NVM and survive qmanager\n'
+    '    // reinstalls, so the upstream skip left any stale band lock from prior\n'
+    '    // use in place. Only unlock when the supported-band list is known; if\n'
+    '    // poller data has not loaded we fall back to skip so we never POST an\n'
+    '    // empty (invalid) band list.\n'
+    '    const lteSupportedStr = supportedLte.length\n'
+    '      ? [...supportedLte].sort((a, b) => a - b).join(":")\n'
+    '      : null;\n'
+    '    const nr5gSupportedStr = supportedNr5g.length\n'
+    '      ? [...supportedNr5g].sort((a, b) => a - b).join(":")\n'
+    '      : null;\n'
+    '    const lteBands =\n'
+    '      ltePreset === "all"\n'
+    '        ? lteSupportedStr\n'
+    '        : getBandString(ltePreset, ltePresets, lteCustom);\n'
+    '    const nr5gBands =\n'
+    '      nr5gPreset === "all"\n'
+    '        ? nr5gSupportedStr\n'
+    '        : getBandString(nr5gPreset, nr5gPresets, nr5gCustom);\n'
+)
+if needle not in text:
+    raise SystemExit("band-locking: getBandString call block not found (upstream may have changed)")
+text = text.replace(needle, replacement, 1)
+
+dep_needle = (
+    '  }, [ltePreset, nr5gPreset, lteCustom, nr5gCustom, ltePresets, '
+    'nr5gPresets, onLoadingChange, onSuccess]);\n'
+)
+dep_replacement = (
+    '  }, [ltePreset, nr5gPreset, lteCustom, nr5gCustom, ltePresets, '
+    'nr5gPresets, supportedLte, supportedNr5g, onLoadingChange, onSuccess]);\n'
+)
+if dep_needle not in text:
+    raise SystemExit("band-locking: submit() dependency array not found (upstream may have changed)")
+text = text.replace(dep_needle, dep_replacement, 1)
+
+path.write_text(text)
+PY
+    grep -q "onboarding band normalize" "$bl" \
+        || fail "Onboarding normalize: band-locking patch did not apply"
+    grep -q "supportedLte, supportedNr5g, onLoadingChange" "$bl" \
+        || fail "Onboarding normalize: band-locking dependency array not updated"
+
+    log "Onboarding default-normalize patches applied (RAT + band lock)"
+}
+
 apply_casa_overlays() {
     log "Applying Casa CFW-3212 overlays from $REF_DIR"
 
@@ -4573,6 +4689,7 @@ apply_casa_overlays() {
     patch_casa_custom_dns_cfw3212
     patch_casa_dns_status_merge_cfw3212
     patch_casa_dns_badges_cfw3212
+    patch_onboarding_normalize_defaults_cfw3212
     patch_ai62_sudoers_narrowing_cfw3212
     patch_qmanager_display_version
     patch_casa_display_name
