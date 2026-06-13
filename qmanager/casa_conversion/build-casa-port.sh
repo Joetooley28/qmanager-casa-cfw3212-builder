@@ -4591,6 +4591,51 @@ PYBADGE
     log "Casa IPPT + DNS-source dashboard badges applied (AI-64)"
 }
 
+patch_active_bands_multi_expand_cfw3212() {
+    local active_bands="$TARGET/components/cellular/active-bands.tsx"
+    [ -f "$active_bands" ] || fail "Active bands multi-expand: missing $active_bands"
+
+    if grep -q 'type="multiple"' "$active_bands" && \
+       grep -q 'defaultValue={\["item-0"\]}' "$active_bands"; then
+        log "Active bands multi-expand patch already applied"
+        return 0
+    fi
+
+    python3 - "$active_bands" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+
+old = '''        <Accordion
+          type="single"
+          collapsible
+          className="w-full"
+          defaultValue="item-0"
+        >'''
+new = '''        <Accordion
+          type="multiple"
+          className="w-full"
+          defaultValue={["item-0"]}
+        >'''
+
+if old not in text:
+    raise SystemExit("active-bands: single-open accordion block not found (upstream may have changed)")
+
+path.write_text(text.replace(old, new, 1))
+PY
+
+    grep -q 'type="multiple"' "$active_bands" \
+        || fail "Active bands multi-expand: Accordion type was not updated"
+    grep -q 'defaultValue={\["item-0"\]}' "$active_bands" \
+        || fail "Active bands multi-expand: defaultValue was not updated"
+    ! grep -q 'type="single"' "$active_bands" \
+        || fail "Active bands multi-expand: single-open accordion still present"
+
+    log "Active bands multi-expand patch applied"
+}
+
 patch_onboarding_normalize_defaults_cfw3212() {
     # First-run onboarding's "default" choices for Network Mode (RAT) and Band
     # Locking were implemented upstream as no-ops: selecting the pre-checked
@@ -4763,6 +4808,7 @@ apply_casa_overlays() {
     patch_casa_custom_dns_cfw3212
     patch_casa_dns_status_merge_cfw3212
     patch_casa_dns_badges_cfw3212
+    patch_active_bands_multi_expand_cfw3212
     patch_onboarding_normalize_defaults_cfw3212
     patch_ai62_sudoers_narrowing_cfw3212
     patch_qmanager_display_version
