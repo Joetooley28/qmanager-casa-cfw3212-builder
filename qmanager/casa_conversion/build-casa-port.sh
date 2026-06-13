@@ -2823,25 +2823,31 @@ PY
 }
 
 patch_casa_band_locking_persist_cfw3212() {
-    # Make QManager band locks (and "select all" / save) persist across reboot
-    # on Casa. The band-lock CGI keeps writing AT+QNWPREFCFG exactly as upstream
-    # -- that already works in-session; the only problem is persistence. On Casa
-    # wmmd re-applies its own band view (modem base minus wmmd.config.hidden_bands
-    # = the carrier "factory" band set) at every modem reset/boot, via the cdcs
-    # `revert_modem_band` template, clamping back whatever QNWPREFCFG lock the
-    # user just saved -- so "bands change after every reboot, only on Casa". That
-    # template is gated by wwan.0.currentband.revert_selband.mode: with mode set
-    # to "no_change" (and marked persistent) it becomes a no-op, so the saved
-    # band selection is no longer overridden on the next boot. We set it right
-    # after a successful lock, so it only affects boxes where the user actually
-    # uses band locking. No RAT change and no Casa currentband rewrite -- the AT
-    # path is left exactly as upstream.
+    # Make a QManager band save (including "Select all") persist across reboot on
+    # Casa. The band-lock CGI keeps writing AT+QNWPREFCFG exactly as upstream --
+    # that already applies the bands fine in-session; the only problem is that the
+    # selection doesn't survive a reboot. Reported symptom: after "Select all" +
+    # save + reboot, every band OUTSIDE Casa's hidden_bands list is still checked,
+    # but the bands INSIDE it come back unchecked.
     #
-    # Tradeoff: this neutralizes wmmd's factory band auto-revert (its "if the
-    # active bands lose service, fall back to factory" safety). QManager Band
-    # Failover remains the connectivity safety net. See private-notes
+    # Two wmmd mechanisms undo the save at boot, and the patch neutralizes both
+    # (right after a successful lock, so it only affects boxes where a user
+    # actually uses band locking -- this is NOT a blanket installer unhide):
+    #   1. wmmd.config.hidden_bands FILTERS the usable set (modem base minus
+    #      hidden) -- the actual cause of the reported bug. Cleared to "" so
+    #      QManager owns the band set. The modem hardware base is still the hard
+    #      limit, so only base-supported bands are ever exposed.
+    #   2. the cdcs revert_modem_band template re-applies the carrier factory band
+    #      set unless revert_selband.mode == no_change -- pinned to no_change.
+    # Both keys are marked persistent (p). No RAT change, no Casa currentband
+    # rewrite -- the AT QNWPREFCFG path is left exactly as upstream.
+    #
+    # Tradeoff: clearing hidden_bands exposes bands the carrier MBN normally hides
+    # (e.g. CBRS B42/43, LAA B46) where the modem base supports them, and pinning
+    # no_change disables wmmd's factory auto-revert safety. QManager Band Failover
+    # remains the connectivity safety net. See private-notes
     # COMPOSER_WMMD_DEEPDIVE_2026-04-13 sec.3.3 and band root-cause note
-    # 2026-04-19 sec.8 (Box 2 spike, mechanism C).
+    # 2026-04-19 sec.8 (Box 2 spike).
     local lock="$TARGET/scripts/www/cgi-bin/quecmanager/bands/lock.sh"
     [ -f "$lock" ] || fail "Target missing bands/lock.sh"
     python3 - "$lock" <<'PY'
@@ -2861,12 +2867,21 @@ if anchor not in text:
 
 inject = anchor + "\n\n" + (
     "# --- Casa CFW-3212 band-persist ------------------------------------------\n"
-    "# On Casa, wmmd re-applies its own band view (modem base minus\n"
-    "# wmmd.config.hidden_bands) at every modem reset/boot via the cdcs\n"
-    "# revert_modem_band template, clamping back the QNWPREFCFG lock just written\n"
-    "# -- which is why band locks 'don't stick after reboot'. The template is\n"
-    "# gated by wwan.0.currentband.revert_selband.mode; setting it to no_change\n"
-    "# (persistent) makes it a no-op so the saved selection survives reboot.\n"
+    "# Make the saved band selection survive reboot on Casa. Two wmmd mechanisms\n"
+    "# otherwise undo a QManager band save at the next boot:\n"
+    "#  1. wmmd.config.hidden_bands FILTERS the usable band set (modem base minus\n"
+    "#     hidden). Any saved band that sits in the hidden list is dropped on\n"
+    "#     reboot -- e.g. 'select all' saves fine over AT, but comes back with the\n"
+    "#     hidden bands UNCHECKED. This is the actual reported bug.\n"
+    "#  2. the cdcs revert_modem_band template re-applies the carrier factory band\n"
+    "#     set when revert_selband.mode != no_change.\n"
+    "# QManager now owns the band set: clear hidden_bands (nothing hidden -- the\n"
+    "# modem hardware base is still the hard limit, so only base-supported bands\n"
+    "# are ever exposed) and pin revert mode=no_change. Both keys are marked\n"
+    "# persistent (p) so the change survives reboot. This is user-driven (only\n"
+    "# runs when a user saves a band selection), NOT a blanket installer unhide.\n"
+    'rdb_set wmmd.config.hidden_bands "" 2>/dev/null || true\n'
+    'rdb_setflags wmmd.config.hidden_bands p 2>/dev/null || true\n'
     'rdb_set wwan.0.currentband.revert_selband.mode no_change 2>/dev/null || true\n'
     'rdb_setflags wwan.0.currentband.revert_selband.mode p 2>/dev/null || true'
 )
