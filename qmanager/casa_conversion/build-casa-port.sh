@@ -4856,6 +4856,54 @@ PY
     log "Active bands multi-expand patch applied"
 }
 
+patch_terminal_sidebar_children_cfw3212() {
+    local sidebar="$TARGET/components/app-sidebar.tsx"
+    [ -f "$sidebar" ] || fail "Terminal sidebar patch: missing $sidebar"
+
+    if grep -q '{ title: "AT Terminal", url: "/system-settings/at-terminal" }' "$sidebar" && \
+       grep -q '{ title: "Web Console", url: "/system-settings/web-console" }' "$sidebar"; then
+        log "Terminal sidebar children patch already applied"
+        return 0
+    fi
+
+    python3 - "$sidebar" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+
+old = '''    {
+      title: "Terminals",
+      url: "/system-settings/at-terminal",
+      icon: TerminalIcon,
+      items: [
+        { title: "Web Console", url: "/system-settings/web-console" },
+      ],
+    },'''
+
+new = '''    {
+      title: "Terminals",
+      url: "/system-settings/at-terminal",
+      icon: TerminalIcon,
+      items: [
+        { title: "AT Terminal", url: "/system-settings/at-terminal" },
+        { title: "Web Console", url: "/system-settings/web-console" },
+      ],
+    },'''
+
+if old not in text:
+    raise SystemExit("app-sidebar: Terminals block not found (upstream may have changed)")
+path.write_text(text.replace(old, new, 1))
+PY
+
+    grep -q '{ title: "AT Terminal", url: "/system-settings/at-terminal" }' "$sidebar" \
+        || fail "Terminal sidebar patch did not add AT Terminal child"
+    grep -q '{ title: "Web Console", url: "/system-settings/web-console" }' "$sidebar" \
+        || fail "Terminal sidebar patch lost Web Console child"
+    log "Terminal sidebar now shows AT Terminal and Web Console children"
+}
+
 patch_onboarding_normalize_defaults_cfw3212() {
     # First-run onboarding's "default" choices for Network Mode (RAT) and Band
     # Locking were implemented upstream as no-ops: selecting the pre-checked
@@ -5029,6 +5077,7 @@ apply_casa_overlays() {
     patch_casa_dns_status_merge_cfw3212
     patch_casa_dns_badges_cfw3212
     patch_active_bands_multi_expand_cfw3212
+    patch_terminal_sidebar_children_cfw3212
     patch_onboarding_normalize_defaults_cfw3212
     patch_ai62_qmanager_iptables_helper_cfw3212
     patch_ai62_qmanager_tailscale_cli_helper_cfw3212
@@ -5325,6 +5374,10 @@ safety_checks() {
         "Tailscale CGI must not sudo-run raw Tailscale binary (AI-62 phase 2)"
     [ -x "$TARGET/scripts/usr/bin/qmanager_tailscale_cli" ] \
         || fail "Packaged qmanager_tailscale_cli helper must be executable"
+    require_rg_present 'title: "AT Terminal"' "$TARGET/components/app-sidebar.tsx" \
+        "Terminals sidebar dropdown must show AT Terminal"
+    require_rg_present 'title: "Web Console"' "$TARGET/components/app-sidebar.tsx" \
+        "Terminals sidebar dropdown must show Web Console"
 
     require_rg_present "Joetooley28/qmanager-casa-cfw3212-package" "$TARGET/scripts/www/cgi-bin/quecmanager/system/update.sh" \
         "system/update.sh must check the Casa package repo"
