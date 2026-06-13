@@ -17,6 +17,10 @@
 - Software Update → Version Management can now install a different version (including rollbacks). After the download verifies, the Install button switches to "Install Now" so the staged package actually gets applied instead of being left on disk.
 - A handful of upstream modem-management actions stay blocked or limited on Casa because they'd let you push the modem into a state we don't want it in.
 
+## v0.1.12-cfw3212.23
+
+- Band Locking now sticks across a reboot. On this hardware, saving a band selection (including "Select all") applied right away, but after a reboot any bands the carrier profile keeps hidden came back unselected — so your saved choice didn't fully survive the reboot. Saving bands in QManager (or completing the first-run setup's band step) now makes your selection the one the modem keeps after rebooting, instead of the carrier's hidden-band policy re-applying on the next boot. QManager owns the band set on this device once you save; the modem's hardware still decides which bands are actually available, and Band Failover still protects you if a locked band loses service.
+
 ## v0.1.12-cfw3212.22
 
 - After a Software Update install, if the browser session drops while QManager's web server restarts, the page now reloads the **Software Update** page instead of jumping to the dashboard/home page, so you land back on the install status (and any "reboot required" prompt) where you started.
