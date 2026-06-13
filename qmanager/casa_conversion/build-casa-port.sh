@@ -2845,6 +2845,124 @@ PY
         || fail "Could not apply Casa RDB reconnect patch"
 }
 
+patch_casa_scheduled_reboot_cfw3212() {
+    local settings_sh="$TARGET/scripts/www/cgi-bin/quecmanager/system/settings.sh"
+    local setup="$TARGET/scripts/usr/bin/qmanager_setup"
+    [ -f "$settings_sh" ] || fail "Target missing system/settings.sh"
+    [ -f "$setup" ] || fail "Target missing qmanager_setup"
+
+    python3 - "$settings_sh" "$setup" <<'PY'
+from pathlib import Path
+import sys
+
+settings_path = Path(sys.argv[1])
+setup_path = Path(sys.argv[2])
+
+settings = settings_path.read_text()
+setup = setup_path.read_text()
+
+settings = settings.replace(
+    'SCHEDULE_SCRIPT="/usr/bin/qmanager_scheduled_reboot"',
+    'SCHEDULE_SCRIPT="/usrdata/bin/qmanager_scheduled_reboot"',
+)
+settings = settings.replace(
+    'CRON_FILE="/var/spool/cron/crontabs/root"',
+    'CRON_FILE="/etc/qmanager/crontabs/root"',
+)
+
+spool_marker = '        current_cron=$(cat "$CRON_FILE" 2>/dev/null || true)\n'
+spool_block = '''        mkdir -p /etc/qmanager/crontabs 2>/dev/null || {
+            cgi_error "cron_spool_unavailable" "Could not create scheduled reboot cron directory"
+            exit 0
+        }
+        chown www-data:www-data /etc/qmanager/crontabs 2>/dev/null || true
+        chmod 750 /etc/qmanager/crontabs 2>/dev/null || true
+
+        current_cron=$(cat "$CRON_FILE" 2>/dev/null || true)
+'''
+if 'cron_spool_unavailable' not in settings:
+    if spool_marker not in settings:
+        raise SystemExit("scheduled reboot spool marker not found")
+    settings = settings.replace(spool_marker, spool_block, 1)
+
+old_enable_write = '''            printf '%s\\n' "$new_cron" > "$CRON_FILE"
+            qlog_info "Scheduled reboot cron installed: ${SCHED_TIME} days=${DAYS_RAW}"
+'''
+new_enable_write = '''            if ! printf '%s\\n' "$new_cron" > "$CRON_FILE"; then
+                cgi_error "cron_write_failed" "Could not write scheduled reboot cron entry"
+                exit 0
+            fi
+            qlog_info "Scheduled reboot cron installed: ${SCHED_TIME} days=${DAYS_RAW}"
+'''
+if 'cron_write_failed' not in settings:
+    if old_enable_write not in settings:
+        raise SystemExit("scheduled reboot enable write block not found")
+    settings = settings.replace(old_enable_write, new_enable_write, 1)
+
+old_disable_write = '''            if [ -n "$cleaned_cron" ]; then
+                printf '%s\\n' "$cleaned_cron" > "$CRON_FILE"
+            else
+'''
+new_disable_write = '''            if [ -n "$cleaned_cron" ]; then
+                if ! printf '%s\\n' "$cleaned_cron" > "$CRON_FILE"; then
+                    cgi_error "cron_write_failed" "Could not write scheduled reboot cron entry"
+                    exit 0
+                fi
+            else
+'''
+if old_disable_write not in settings:
+    raise SystemExit("scheduled reboot disable write block not found")
+settings = settings.replace(old_disable_write, new_disable_write, 1)
+
+old_setup_dirs = '''mkdir -p /var/lock /etc/qmanager /usrdata/qmanager/lib /tmp/quecmanager /var/spool/cron/crontabs
+# Keep the cron spool root-owned and non-world-writable while preserving
+# current CGI schedule writers that update root's crontab directly.
+chown root:www-data /var/spool/cron /var/spool/cron/crontabs 2>/dev/null || true
+chmod 775 /var/spool/cron /var/spool/cron/crontabs
+'''
+new_setup_dirs = '''mkdir -p /var/lock /etc/qmanager /etc/qmanager/crontabs /usrdata/qmanager/lib /tmp/quecmanager
+# Keep scheduled-task state on persistent writable storage instead of Casa's
+# read-only /var/spool rootfs path.
+chown www-data:www-data /etc/qmanager/crontabs 2>/dev/null || true
+chmod 750 /etc/qmanager/crontabs 2>/dev/null || true
+'''
+if '/etc/qmanager/crontabs' not in setup:
+    if old_setup_dirs not in setup:
+        raise SystemExit("qmanager_setup cron directory block not found")
+    setup = setup.replace(old_setup_dirs, new_setup_dirs, 1)
+
+setup_marker = '# Secure auth config\n'
+setup_block = '''# Casa does not reliably ship a managed cron service, so ensure BusyBox crond
+# is available to execute Scheduled Reboot entries after boot/install.
+if command -v crond >/dev/null 2>&1 && ! pidof crond >/dev/null 2>&1; then
+    crond -c /etc/qmanager/crontabs >/dev/null 2>&1 || true
+fi
+
+# Secure auth config
+'''
+if 'crond -c /etc/qmanager/crontabs' not in setup:
+    if setup_marker not in setup:
+        raise SystemExit("qmanager_setup secure auth marker not found")
+    setup = setup.replace(setup_marker, setup_block, 1)
+
+settings_path.write_text(settings)
+setup_path.write_text(setup)
+PY
+
+    grep -q '/usrdata/bin/qmanager_scheduled_reboot' "$settings_sh" \
+        || fail "Could not align Scheduled Reboot helper path to Casa /usrdata/bin"
+    grep -q '/etc/qmanager/crontabs/root' "$settings_sh" \
+        || fail "Could not move Scheduled Reboot cron file to persistent Casa storage"
+    grep -q 'cron_spool_unavailable' "$settings_sh" \
+        || fail "Could not add Scheduled Reboot cron directory creation guard"
+    grep -q 'cron_write_failed' "$settings_sh" \
+        || fail "Could not make Scheduled Reboot cron writes fail loudly"
+    grep -q '/etc/qmanager/crontabs' "$setup" \
+        || fail "Could not move Scheduled Reboot cron storage into /etc/qmanager"
+    grep -q 'crond -c /etc/qmanager/crontabs' "$setup" \
+        || fail "Could not add qmanager_setup crond startup"
+}
+
 patch_casa_watchcat_tiers() {
     # Reroute the qmanager_watchcat recovery daemon so its automatic Tier 1
     # (reconnect) and Tier 4 (reboot) actions use the Casa RDB connection-
@@ -5085,6 +5203,7 @@ apply_casa_overlays() {
     patch_qmanager_display_version
     patch_casa_display_name
     patch_casa_reboot
+    patch_casa_scheduled_reboot_cfw3212
     patch_casa_watchcat_tiers
     copy_template_or_fallback "components/nav-user.tsx" "$TEMPLATE_DIR/components/nav-user.tsx"
     copy_template_or_fallback "components/monitoring/software-update/update-preferences-card.tsx" "$TEMPLATE_DIR/components/monitoring/software-update/update-preferences-card.tsx"
@@ -5325,12 +5444,22 @@ safety_checks() {
         "CGI auth library fallback must fail closed"
     require_rg_present "QM_MAX_POST_SIZE:=65536" "$TARGET/scripts/usr/lib/qmanager/cgi_base.sh" \
         "CGI POST body reader must enforce default size limit"
-    require_rg_present "chmod 775 /var/spool/cron /var/spool/cron/crontabs" "$TARGET/scripts/usr/bin/qmanager_setup" \
-        "qmanager_setup must not leave cron spool world-writable"
+    require_rg_present "/etc/qmanager/crontabs" "$TARGET/scripts/usr/bin/qmanager_setup" \
+        "qmanager_setup must store Scheduled Reboot cron data in writable persistent QManager storage"
+    require_rg_present "crond -c /etc/qmanager/crontabs" "$TARGET/scripts/usr/bin/qmanager_setup" \
+        "qmanager_setup must ensure BusyBox crond is running for Scheduled Reboot"
     require_rg_present "find /etc/qmanager -type d -exec chmod 750" "$TARGET/scripts/usr/bin/qmanager_setup" \
         "qmanager_setup must restrict /etc/qmanager directory permissions"
     require_rg_present "find /etc/qmanager -type f -exec chmod 640" "$TARGET/scripts/usr/bin/qmanager_setup" \
         "qmanager_setup must restrict /etc/qmanager file permissions"
+    require_rg_present '/usrdata/bin/qmanager_scheduled_reboot' "$TARGET/scripts/www/cgi-bin/quecmanager/system/settings.sh" \
+        "Scheduled Reboot must target the Casa-installed helper path"
+    require_rg_present '/etc/qmanager/crontabs/root' "$TARGET/scripts/www/cgi-bin/quecmanager/system/settings.sh" \
+        "Scheduled Reboot must write cron entries to persistent writable Casa storage"
+    require_rg_present 'cron_spool_unavailable' "$TARGET/scripts/www/cgi-bin/quecmanager/system/settings.sh" \
+        "Scheduled Reboot must fail if the cron spool cannot be prepared"
+    require_rg_present 'cron_write_failed' "$TARGET/scripts/www/cgi-bin/quecmanager/system/settings.sh" \
+        "Scheduled Reboot must fail if writing the cron file fails"
     require_rg_present "HttpOnly; Secure; SameSite=Strict" "$TARGET/scripts/usr/lib/qmanager/cgi_auth.sh" \
         "QManager session cookie must include Secure"
     require_rg_present "COOKIE_INDICATOR.*Secure; SameSite=Strict" "$TARGET/scripts/usr/lib/qmanager/cgi_auth.sh" \

@@ -24,6 +24,7 @@
 - Tightens the sudo rules for the web UI: instead of allowing any `iptables` / `ip6tables` command, the UI may only run two small helper programs (`qmanager_iptables` and `qmanager_ip6tables`) that apply or read TTL/HL mangle rules on the cellular interface. The port firewall (`qmanager-firewall`) still runs as root via systemd and is unchanged. This closes a broad privilege hole without affecting normal TTL settings or the web UI firewall.
 - Tightens Tailscale sudo access from the web UI. The UI no longer gets blanket permission to run the Tailscale binary as root; it now goes through a small helper that only allows the Tailscale actions QManager uses, such as status, connect, disconnect, logout, and the Tailscale SSH toggle.
 - The Terminals sidebar dropdown now explicitly shows both **AT Terminal** and **Web Console**. Previously AT Terminal was hidden behind the parent "Terminals" row, which made it look like the AT Terminal page had disappeared.
+- Fixes **System Settings → Scheduled Reboot** on Casa. Saving the reboot schedule now makes sure the cron spool exists before writing the root cron entry, fails with a real error instead of silently pretending success if the cron file cannot be written, and ensures BusyBox `crond` is running so the scheduled reboot job can actually fire.
 
 ## v0.1.12-cfw3212.21
 
