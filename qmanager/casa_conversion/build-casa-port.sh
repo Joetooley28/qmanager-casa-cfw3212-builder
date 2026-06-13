@@ -732,7 +732,7 @@ new = '''# Group A: Identity reads — compound AT (6 -> 1 call)
         # Identity (CVERSION/CGMM/CGSN) is SIM-independent and ends in OK even
         # with no SIM inserted; accept once OK and the bare 15-digit IMEI show.
         result=$(qcmd 'AT+CVERSION;+CGMM;+CGSN' 2>/dev/null)
-        if printf '%s\n' "$result" | tr -d '\r' | grep -q '^OK$' && printf '%s\n' "$result" | tr -d '\r' | grep -q -E '^[0-9]{15}$'; then
+        if printf '%s\\n' "$result" | tr -d '\\r' | grep -q '^OK$' && printf '%s\\n' "$result" | tr -d '\\r' | grep -q -E '^[0-9]{15}$'; then
             break
         fi
         result=""
@@ -747,7 +747,7 @@ new = '''# Group A: Identity reads — compound AT (6 -> 1 call)
     if [ -n "$result" ]; then
         local sim_result
         sim_result=$(qcmd 'AT+CIMI;+QCCID;+CNUM' 2>/dev/null)
-        if printf '%s\n' "$sim_result" | tr -d '\r' | grep -q '^OK$'; then
+        if printf '%s\\n' "$sim_result" | tr -d '\\r' | grep -q '^OK$'; then
             result="$result
 $sim_result"
         fi
@@ -756,8 +756,8 @@ $sim_result"
         # bare "Quectel" line does not collide with the bare CGMM model line.
         local mfr_result
         mfr_result=$(qcmd 'AT+CGMI' 2>/dev/null)
-        if printf '%s\n' "$mfr_result" | tr -d '\r' | grep -q '^OK$'; then
-            boot_manufacturer=$(printf '%s\n' "$mfr_result" | tr -d '\r' | grep -v '^AT' | grep -v '^OK$' | grep -v '^$' | grep -v '^+' | head -1)
+        if printf '%s\\n' "$mfr_result" | tr -d '\\r' | grep -q '^OK$'; then
+            boot_manufacturer=$(printf '%s\\n' "$mfr_result" | tr -d '\\r' | grep -v '^AT' | grep -v '^OK$' | grep -v '^$' | grep -v '^+' | head -1)
         fi
     fi'''
 text = text.replace(old, new)
@@ -2717,8 +2717,9 @@ new = "tr -d '\\r'"
 
 count = text.count(old)
 if count == 0:
-    # Already patched in a previous run, or upstream changed shape.
-    if "Casa CFW-3212 boot-identity tr fix" in text:
+    # Already patched in a previous run, or the generator now emits the clean
+    # literal backslash form directly.
+    if "Casa CFW-3212 boot-identity tr fix" in text or "tr -d '\\r'" in text:
         sys.exit(0)
     sys.exit("expected tr -d '\\n' literal not found in qmanager_poller")
 # patch_qmanager_poller's Group A identity block emits its `tr -d '\\r'`
@@ -2744,8 +2745,10 @@ path.write_text("".join(lines))
 print(f"patched {count} occurrence(s)")
 PY
 
-    grep -q "Casa CFW-3212 boot-identity tr fix" "$poller" \
-        || fail "Could not apply Casa boot-identity tr fix to qmanager_poller"
+    if ! grep -q "Casa CFW-3212 boot-identity tr fix" "$poller"; then
+        grep -Fq "tr -d '\\r'" "$poller" \
+            || fail "Could not apply Casa boot-identity tr fix to qmanager_poller"
+    fi
 }
 
 patch_casa_ippt_disable_clears_service_cfw3212() {
