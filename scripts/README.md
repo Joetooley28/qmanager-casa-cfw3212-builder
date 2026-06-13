@@ -29,6 +29,11 @@ Public releases stay on `main` + manual approval of `official-package-release`.
    - GitHub → **Actions** → **Build Casa CFW-3212 package** → **Run workflow**
    - Branch: **`dev`**
    - Leave defaults (`dry_run=true`, `create_release=false`, `casa_build=next`).
+   - Versioning rule: `dev` builds are iterations toward the **next public**
+     release. If the highest published package is `v0.1.12-cfw3212.20`, then
+     default `dev` builds are `v0.1.12-cfw3212.21.1.dev`,
+     `v0.1.12-cfw3212.21.2.dev`, and so on. When approved and merged to
+     `main`, the public package is `v0.1.12-cfw3212.21`.
 4. **Wait** for the **Build converted Casa package** job (artifact upload only).
    - **Do not** approve `official-package-release` for `dev` builds — nothing
      should publish to the package repo from `dev`.
@@ -49,7 +54,8 @@ Public releases stay on `main` + manual approval of `official-package-release`.
    ```
 
 6. **Verify** on the router UI (Software Update, changed screens, `/etc/qmanager/VERSION`).
-   Dev builds use a `.dev` tag (e.g. `v0.1.12-cfw3212.18.dev`) baked into VERSION.
+   Dev builds use a `.N.dev` iteration tag (e.g. `v0.1.12-cfw3212.21.2.dev`)
+   baked into VERSION.
 7. **Repeat** from step 1 until good; then **merge `dev` → `main`** and run an
    **official** build only when the user wants a public package release.
 
@@ -60,8 +66,12 @@ Public releases stay on `main` + manual approval of `official-package-release`.
 | **`dev`** | **Never** (forced dry run) | Yes — `casa-cfw3212-publish-<tag>` on the workflow run |
 | **`main`** | Only if `create_release=true`, `dry_run=false`, **and** you approve `official-package-release` | Yes when dry run; publish when approved |
 
-- **`dev`** tags include a **`.dev` suffix** (e.g. `v0.1.12-cfw3212.18.dev`) so
-  About / Software Update show a dev build after sideload.
+- **`dev`** tags include a **public-build plus iteration suffix**:
+  `vX.Y.Z-cfw3212.N.M.dev`, where `N` is the next public release and `M` is
+  the dev iteration. About / Software Update show the dev build after sideload.
+- `CFW3212_JTOOLEY_CHANGELOG.md` is public-release only. Do not add one
+  changelog section per dev build; write/update the next public section
+  (`## vX.Y.Z-cfw3212.N`) and let all `N.M.dev` artifacts use those notes.
 - **Public repo:** anyone can **download artifacts** from your completed Actions
   runs (read-only). They **cannot** dispatch workflows or publish packages
   without write access + your approval.
@@ -139,10 +149,13 @@ from git templates — the converter rewrites paths, poller patches, etc.
 When a `dev` sideload tests good:
 
 1. Merge **`dev` → `main`** (user approval).
-2. Dispatch builder on **`main`** with `casa_build=next` (or explicit `N`),
+2. Confirm `CFW3212_JTOOLEY_CHANGELOG.md` has the exact public tag being
+   released. For example, if dev testing used `.21.1.dev` through `.21.4.dev`,
+   the public section must be `## v0.1.12-cfw3212.21`; do not add the dev
+   iteration tags to the public changelog.
+3. Dispatch builder on **`main`** with `casa_build=next` (or explicit `N`),
    `dry_run=false`, `create_release=true`, `force=true` if replacing assets.
-3. Approve **`official-package-release`** (publishes to package repo).
-4. Update `CFW3212_JTOOLEY_CHANGELOG.md` with the **exact** Casa tag before build.
+4. Approve **`official-package-release`** (publishes to package repo).
 
 Router **Software Update** installs from the **package repo**, not dev artifacts.
 

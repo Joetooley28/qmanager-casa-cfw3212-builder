@@ -8,7 +8,7 @@ on:
         required: true
         default: latest
       casa_build:
-        description: "Casa build: a number N (e.g. 20) for an official release, a dev sub-build N.M (e.g. 20.1, dev branch only) that publishes as N, or next to auto-pick highest published + 1"
+        description: "Casa build: next, an official public build N, or a dev sub-build N.M on dev. On dev, next becomes (highest published N + 1).(next dev iteration)."
         required: true
         default: next
       dry_run:
@@ -31,6 +31,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: casa-cfw3212-build-${{ github.ref }}
@@ -105,6 +106,7 @@ jobs:
 
           requested="${INPUT_UPSTREAM_VERSION:-latest}"
           casa_build_input="${INPUT_CASA_BUILD:-next}"
+          dev_channel="${{ steps.inputs.outputs.dev_channel }}"
 
           gh api "repos/${UPSTREAM_REPO_SLUG}/releases?per_page=100" > "$RUNNER_TEMP/upstream-releases.json"
 
@@ -149,7 +151,7 @@ jobs:
           case "${casa_build_input,,}" in
             next|auto|'')
               gh api "repos/${PACKAGE_REPO}/releases?per_page=100" > "$RUNNER_TEMP/package-releases.json"
-              casa_build="$(
+              public_casa_build="$(
                 python3 - "$RUNNER_TEMP/package-releases.json" "$upstream_tag" <<'PY'
           import json
           import re
@@ -161,13 +163,42 @@ jobs:
           max_build = 0
           for rel in releases:
               tag = rel.get("tag_name") or ""
-              match = re.fullmatch(r"(v\d+\.\d+\.\d+)-cfw3212\.(\d+)(?:\.dev)?", tag)
+              match = re.fullmatch(r"(v\d+\.\d+\.\d+)-cfw3212\.(\d+)", tag)
               if match and match.group(1) == upstream:
                   max_build = max(max_build, int(match.group(2)))
           print(max_build + 1)
           PY
               )"
-              echo "casa_build input '${casa_build_input}' resolved to ${casa_build} (next after highest ${upstream_tag}-cfw3212.* in ${PACKAGE_REPO})"
+              if [ "$dev_channel" = "true" ]; then
+                gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?per_page=100" > "$RUNNER_TEMP/builder-artifacts.json"
+                dev_iteration="$(
+                  python3 - "$RUNNER_TEMP/builder-artifacts.json" "$upstream_tag" "$public_casa_build" <<'PY'
+          import json
+          import re
+          import sys
+          from pathlib import Path
+
+          artifacts = json.loads(Path(sys.argv[1]).read_text()).get("artifacts", [])
+          upstream = sys.argv[2]
+          public_build = sys.argv[3]
+          prefix = re.escape(f"{upstream}-cfw3212.{public_build}.")
+          pattern = re.compile(rf"^casa-cfw3212(?:-publish)?-{prefix}(\d+)\.dev$")
+          max_iter = 0
+          for artifact in artifacts:
+              if artifact.get("expired"):
+                  continue
+              match = pattern.fullmatch(artifact.get("name") or "")
+              if match:
+                  max_iter = max(max_iter, int(match.group(1)))
+          print(max_iter + 1)
+          PY
+                )"
+                casa_build="${public_casa_build}.${dev_iteration}"
+                echo "casa_build input '${casa_build_input}' resolved to ${casa_build} (dev iteration ${dev_iteration} toward public ${upstream_tag}-cfw3212.${public_casa_build})"
+              else
+                casa_build="$public_casa_build"
+                echo "casa_build input '${casa_build_input}' resolved to ${casa_build} (next after highest published ${upstream_tag}-cfw3212.N in ${PACKAGE_REPO})"
+              fi
               ;;
             *)
               casa_build="$casa_build_input"
@@ -305,9 +336,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          dry_run="${INPUT_DRY_RUN:-true}"
-          create_release="${INPUT_CREATE_RELEASE:-false}"
-          force="${INPUT_FORCE:-false}"
+          dry_run="${{ steps.inputs.outputs.dry_run }}"
+          create_release="${{ steps.inputs.outputs.create_release }}"
+          force="${{ steps.inputs.outputs.force }}"
           casa_tag="${{ steps.resolve.outputs.casa_tag }}"
 
           release_exists=false
@@ -711,16 +742,31 @@ jobs:
           changelog_src="qmanager/casa_conversion/CFW3212_JTOOLEY_CHANGELOG.md"
           changelog_asset="$RUNNER_TEMP/casa-release-assets/${{ steps.resolve.outputs.changelog_name }}"
           upstream_json="$RUNNER_TEMP/upstream-release-${{ steps.resolve.outputs.upstream_tag }}.json"
+          casa_tag="${{ steps.resolve.outputs.casa_tag }}"
+          changelog_tag="$casa_tag"
+          if [ "${{ steps.inputs.outputs.dev_channel }}" = "true" ]; then
+            changelog_tag="$(
+              python3 - "$casa_tag" <<'PY'
+          import re
+          import sys
+
+          tag = sys.argv[1]
+          match = re.fullmatch(r"(.+-cfw3212\.\d+)(?:\.\d+)?\.dev", tag)
+          print(match.group(1) if match else tag)
+          PY
+            )"
+            echo "Dev build ${casa_tag} will use public changelog section ${changelog_tag}."
+          fi
 
           if [ ! -f "$changelog_src" ]; then
             echo "Missing curated Casa changelog source: $changelog_src" >&2
             exit 1
           fi
-          if ! grep -Fq "${{ steps.resolve.outputs.casa_tag }}" "$changelog_src"; then
-            echo "::warning::Joetooley changelog not updated for ${{ steps.resolve.outputs.casa_tag }} — add a ## ${{ steps.resolve.outputs.casa_tag }} section to $changelog_src before router-verifying"
+          if ! grep -Fq "$changelog_tag" "$changelog_src"; then
+            echo "::warning::Joetooley changelog not updated for ${changelog_tag} — add a ## ${changelog_tag} section to $changelog_src before router-verifying"
             _tmp_cl="$(mktemp)"
             printf '## %s\n\n[CHANGELOG PENDING] Joetooley notes for this release have not yet been written. Changelog will be updated after router verification.\n\n' \
-              "${{ steps.resolve.outputs.casa_tag }}" > "$_tmp_cl"
+              "$changelog_tag" > "$_tmp_cl"
             cat "$changelog_src" >> "$_tmp_cl"
             changelog_src="$_tmp_cl"
           fi

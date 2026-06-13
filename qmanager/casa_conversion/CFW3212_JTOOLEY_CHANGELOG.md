@@ -17,12 +17,9 @@
 - Software Update → Version Management can now install a different version (including rollbacks). After the download verifies, the Install button switches to "Install Now" so the staged package actually gets applied instead of being left on disk.
 - A handful of upstream modem-management actions stay blocked or limited on Casa because they'd let you push the modem into a state we don't want it in.
 
-## v0.1.12-cfw3212.23
+## v0.1.12-cfw3212.21
 
 - Band Locking now sticks across a reboot. On this hardware, saving a band selection (including "Select all") applied right away, but after a reboot any bands the carrier profile keeps hidden came back unselected — so your saved choice didn't fully survive the reboot. Saving bands in QManager (or completing the first-run setup's band step) now makes your selection the one the modem keeps after rebooting, instead of the carrier's hidden-band policy re-applying on the next boot. QManager owns the band set on this device once you save; the modem's hardware still decides which bands are actually available, and Band Failover still protects you if a locked band loses service.
-
-## v0.1.12-cfw3212.22
-
 - After a Software Update install, if the browser session drops while QManager's web server restarts, the page now reloads the **Software Update** page instead of jumping to the dashboard/home page, so you land back on the install status (and any "reboot required" prompt) where you started.
 - Fixes the Custom DNS page wrongly warning that "IP Passthrough is bypassing dnsmasq." On Casa, IP Passthrough is a routed handover — the downstream device still gets the modem as its DNS server and routes lookups through the modem's dnsmasq — so Custom DNS *does* apply to passthrough clients. The page no longer shows the misleading bypass notice.
 - Fixes IP Passthrough not actually engaging after it had been turned off and on again. The toggle now keeps Casa's service-level handover flag (`service.ip_handover.enable`, which the stock QCMAP engine reads) in sync — enabling sets it on so the carrier IP is handed to your downstream device, instead of only flipping the per-profile flag and leaving passthrough silently inactive (dashboard showing "IPPT On" while the device still got a normal LAN IP).
@@ -70,18 +67,10 @@ This is the first public release since `.19`. It rolls up all of the stock-UI co
 - Narrows QManager sudo helpers to known `qmanager-*`, `tailscaled`, and `dnsmasq_service@0.service` units instead of allowing any `systemctl` target, aligns the Custom DNS sudo rules with the Casa `/tmp` staging file and `systemctl` dnsmasq reload path, and drops the unused broad `crontab` sudo rule.
 - The installer now protects already-Casa `/usrdata/opt/...` paths during its install-time path normalization, preventing repeated `/usrdata` prefixes in installed helper scripts.
 
-## v0.1.12-cfw3212.20.1.dev
-
-**Dev sideload only** — same release as `v0.1.12-cfw3212.20`. Dev sideload builds toward a public release are now numbered `.<release>.<iteration>.dev` (for example `.20.1.dev`, `.20.2.dev`); use the official `.20` package release from the package repo once it is published.
-
 ## v0.1.12-cfw3212.19
 
 - The dashboard/status IP Passthrough fields now follow Casa's real IP handover state instead of always showing disabled. This matches the Local Network → IP Passthrough settings page, which was already reading Casa's RDB state correctly.
 - The upstream Quectel MPDN/QMAP/USB-mode IP Passthrough probes remain blocked on Casa; this change only reads Casa's safe RDB status keys for display.
-
-## v0.1.12-cfw3212.19.dev
-
-**Dev sideload only** — same IP Passthrough status fix as `v0.1.12-cfw3212.19`; use the official `.19` package release for router installs from the package repo once it is published.
 
 ## v0.1.12-cfw3212.18
 
@@ -89,10 +78,6 @@ This is the first public release since `.19`. It rolls up all of the stock-UI co
 - Software Update caches GitHub release and changelog responses on the router so repeat visits are much faster than a cold check.
 - Software Update → Version Management no longer shows a duplicate **Install Now** in the staged-ready banner; install or reinstall from the version dropdown row.
 - Dev sideload builds (`.dev` tag) show release notes by falling back to this build’s changelog when the dev tag is not published on the package repo.
-
-## v0.1.12-cfw3212.18.dev
-
-**Dev sideload only** — same Software Update behavior as `v0.1.12-cfw3212.18`; use the official `.18` package release for router installs from the package repo.
 
 ## v0.1.12-cfw3212.17
 
