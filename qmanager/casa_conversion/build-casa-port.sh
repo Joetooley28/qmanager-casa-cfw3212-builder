@@ -2434,6 +2434,95 @@ PY
     log "Installed qmanager_iptables/ip6tables helpers and patched platform.sh"
 }
 
+patch_ai62_qmanager_tailscale_cli_helper_cfw3212() {
+    local cgi="$TARGET/scripts/www/cgi-bin/quecmanager/vpn/tailscale.sh"
+    local helper="$TARGET/scripts/usr/bin/qmanager_tailscale_cli"
+
+    [ -f "$cgi" ] || fail "Target missing tailscale.sh for Tailscale CLI helper patch"
+
+    cat > "$helper" <<'EOF'
+#!/bin/sh
+# qmanager_tailscale_cli — AI-62 phase 2: narrow www-data Tailscale CLI access.
+TAILSCALE="/usrdata/tailscale/tailscale"
+
+_deny() {
+    echo "qmanager_tailscale_cli: denied Tailscale command" >&2
+    exit 1
+}
+
+[ -x "$TAILSCALE" ] || {
+    echo "qmanager_tailscale_cli: Tailscale is not installed" >&2
+    exit 1
+}
+
+case "${1:-}" in
+    version)
+        [ "$#" -eq 1 ] || _deny
+        exec "$TAILSCALE" version
+        ;;
+    status)
+        [ "$#" -eq 2 ] && [ "$2" = "--json" ] || _deny
+        exec "$TAILSCALE" status --json
+        ;;
+    up)
+        if [ "$#" -eq 3 ] && [ "$2" = "--reset" ] && [ "$3" = "--accept-dns=false" ]; then
+            exec "$TAILSCALE" up --reset --accept-dns=false
+        fi
+        if [ "$#" -eq 4 ] && [ "$2" = "--reset" ] && [ "$3" = "--accept-dns=false" ] && [ "$4" = "--ssh" ]; then
+            exec "$TAILSCALE" up --reset --accept-dns=false --ssh
+        fi
+        _deny
+        ;;
+    down)
+        [ "$#" -eq 1 ] || _deny
+        exec "$TAILSCALE" down
+        ;;
+    logout)
+        [ "$#" -eq 1 ] || _deny
+        exec "$TAILSCALE" logout
+        ;;
+    set)
+        [ "$#" -eq 2 ] || _deny
+        case "$2" in
+            --ssh=true|--ssh=false)
+                exec "$TAILSCALE" set "$2"
+                ;;
+            *)
+                _deny
+                ;;
+        esac
+        ;;
+    *)
+        _deny
+        ;;
+esac
+EOF
+    chmod 755 "$helper"
+
+    python3 - "$cgi" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+old = 'ts_cmd() {\n    $_SUDO "$TAILSCALE_BIN" "$@"\n}'
+new = 'ts_cmd() {\n    $_SUDO /usr/bin/qmanager_tailscale_cli "$@"\n}'
+if '/usr/bin/qmanager_tailscale_cli' in text:
+    if old in text:
+        raise SystemExit('tailscale.sh partially patched for qmanager_tailscale_cli?')
+    raise SystemExit(0)
+if old not in text:
+    raise SystemExit('tailscale.sh ts_cmd block not found for Tailscale CLI helper patch')
+path.write_text(text.replace(old, new))
+PY
+
+    grep -q '/usr/bin/qmanager_tailscale_cli' "$cgi" \
+        || fail "tailscale.sh missing qmanager_tailscale_cli wrapper"
+    grep -q '\$_SUDO /usr/bin/qmanager_tailscale_cli "\$@"' "$cgi" \
+        || fail "tailscale.sh ts_cmd does not call qmanager_tailscale_cli"
+    log "Installed qmanager_tailscale_cli helper and patched tailscale.sh"
+}
+
 patch_ai62_sudoers_narrowing_cfw3212() {
     local sudoers="$TARGET/scripts/etc/sudoers.d/qmanager"
 
@@ -2471,9 +2560,7 @@ www-data ALL=(root) NOPASSWD: /sbin/reboot
 www-data ALL=(root) NOPASSWD: /usr/bin/qmanager_set_ssh_password
 
 # Tailscale VPN management
-www-data ALL=(root) NOPASSWD: /usr/bin/qmanager_tailscale_mgr
-www-data ALL=(root) NOPASSWD: /usrdata/tailscale/tailscale
-www-data ALL=(root) NOPASSWD: /usrdata/tailscale/tailscaled --version
+www-data ALL=(root) NOPASSWD: /usr/bin/qmanager_tailscale_mgr, /usr/bin/qmanager_tailscale_cli
 
 # Tailscale boot persistence (symlink-based)
 www-data ALL=(root) NOPASSWD: /bin/ln -sf /lib/systemd/system/tailscaled.service /lib/systemd/system/multi-user.target.wants/tailscaled.service
@@ -2521,8 +2608,16 @@ PY
     if grep -q '/usr/sbin/iptables' "$sudoers"; then
         fail "sudoers still allows broad raw iptables after AI-62 phase 2"
     fi
+    if grep -q '/usrdata/tailscale/tailscale' "$sudoers"; then
+        fail "sudoers still allows broad raw tailscale after AI-62 phase 2"
+    fi
+    if grep -q '/usrdata/tailscale/tailscaled' "$sudoers"; then
+        fail "sudoers still allows direct tailscaled after AI-62 phase 2"
+    fi
     grep -q '/usr/bin/qmanager_iptables' "$sudoers" \
         || fail "sudoers missing qmanager_iptables helper allowance"
+    grep -q '/usr/bin/qmanager_tailscale_cli' "$sudoers" \
+        || fail "sudoers missing qmanager_tailscale_cli helper allowance"
 }
 
 replace_with_stub() {
@@ -4928,6 +5023,7 @@ apply_casa_overlays() {
     patch_active_bands_multi_expand_cfw3212
     patch_onboarding_normalize_defaults_cfw3212
     patch_ai62_qmanager_iptables_helper_cfw3212
+    patch_ai62_qmanager_tailscale_cli_helper_cfw3212
     patch_ai62_sudoers_narrowing_cfw3212
     patch_qmanager_display_version
     patch_casa_display_name
@@ -5203,12 +5299,22 @@ safety_checks() {
         "sudoers must allow qmanager_iptables helper only (AI-62 phase 2)"
     require_rg_clean "/usr/sbin/iptables" "$TARGET/scripts/etc/sudoers.d/qmanager" \
         "sudoers must not allow broad raw iptables (AI-62 phase 2)"
+    require_rg_present "/usr/bin/qmanager_tailscale_cli" "$TARGET/scripts/etc/sudoers.d/qmanager" \
+        "sudoers must allow qmanager_tailscale_cli helper only (AI-62 phase 2)"
+    require_rg_clean "/usrdata/tailscale/tailscale" "$TARGET/scripts/etc/sudoers.d/qmanager" \
+        "sudoers must not allow broad raw Tailscale CLI (AI-62 phase 2)"
+    require_rg_clean "/usrdata/tailscale/tailscaled" "$TARGET/scripts/etc/sudoers.d/qmanager" \
+        "sudoers must not allow direct tailscaled commands (AI-62 phase 2)"
     require_rg_present "qmanager_iptables" "$TARGET/scripts/usr/lib/qmanager/platform.sh" \
         "platform.sh must call qmanager_iptables helper (AI-62 phase 2)"
     [ -x "$TARGET/scripts/usr/bin/qmanager_iptables" ] \
         || fail "Packaged qmanager_iptables helper must be executable"
     [ -x "$TARGET/scripts/usr/bin/qmanager_ip6tables" ] \
         || fail "Packaged qmanager_ip6tables helper must be executable"
+    require_rg_present "qmanager_tailscale_cli" "$TARGET/scripts/www/cgi-bin/quecmanager/vpn/tailscale.sh" \
+        "Tailscale CGI must call qmanager_tailscale_cli helper (AI-62 phase 2)"
+    [ -x "$TARGET/scripts/usr/bin/qmanager_tailscale_cli" ] \
+        || fail "Packaged qmanager_tailscale_cli helper must be executable"
 
     require_rg_present "Joetooley28/qmanager-casa-cfw3212-package" "$TARGET/scripts/www/cgi-bin/quecmanager/system/update.sh" \
         "system/update.sh must check the Casa package repo"
