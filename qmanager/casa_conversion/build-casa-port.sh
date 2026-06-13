@@ -2505,21 +2505,29 @@ import sys
 
 path = Path(sys.argv[1])
 text = path.read_text()
-old = 'ts_cmd() {\n    $_SUDO "$TAILSCALE_BIN" "$@"\n}'
-new = 'ts_cmd() {\n    $_SUDO /usr/bin/qmanager_tailscale_cli "$@"\n}'
-if '/usr/bin/qmanager_tailscale_cli' in text:
-    if old in text:
+old_ts_cmd = 'ts_cmd() {\n    $_SUDO "$TAILSCALE_BIN" "$@"\n}'
+new_ts_cmd = 'ts_cmd() {\n    $_SUDO /usrdata/bin/qmanager_tailscale_cli "$@"\n}'
+old_version = 'get_ts_version() {\n    $_SUDO "$TAILSCALE_BIN" version 2>/dev/null | head -1 | awk \'{print $1}\'\n}'
+new_version = 'get_ts_version() {\n    ts_cmd version 2>/dev/null | head -1 | awk \'{print $1}\'\n}'
+
+if '/usrdata/bin/qmanager_tailscale_cli' in text:
+    if old_ts_cmd in text or old_version in text:
         raise SystemExit('tailscale.sh partially patched for qmanager_tailscale_cli?')
     raise SystemExit(0)
-if old not in text:
+if old_ts_cmd not in text:
     raise SystemExit('tailscale.sh ts_cmd block not found for Tailscale CLI helper patch')
-path.write_text(text.replace(old, new))
+if old_version not in text:
+    raise SystemExit('tailscale.sh get_ts_version block not found for Tailscale CLI helper patch')
+path.write_text(text.replace(old_version, new_version).replace(old_ts_cmd, new_ts_cmd))
 PY
 
-    grep -q '/usr/bin/qmanager_tailscale_cli' "$cgi" \
+    grep -q '/usrdata/bin/qmanager_tailscale_cli' "$cgi" \
         || fail "tailscale.sh missing qmanager_tailscale_cli wrapper"
-    grep -q '\$_SUDO /usr/bin/qmanager_tailscale_cli "\$@"' "$cgi" \
+    grep -q '\$_SUDO /usrdata/bin/qmanager_tailscale_cli "\$@"' "$cgi" \
         || fail "tailscale.sh ts_cmd does not call qmanager_tailscale_cli"
+    if grep -q '\$_SUDO "\$TAILSCALE_BIN"' "$cgi"; then
+        fail "tailscale.sh still sudo-runs raw Tailscale binary after helper patch"
+    fi
     log "Installed qmanager_tailscale_cli helper and patched tailscale.sh"
 }
 
@@ -2551,7 +2559,7 @@ www-data ALL=(root) NOPASSWD: /bin/ln -sf /lib/systemd/system/qmanager*.service 
 www-data ALL=(root) NOPASSWD: /bin/rm -f /lib/systemd/system/multi-user.target.wants/qmanager*.service
 
 # TTL/HL iptables — narrowed helpers only (AI-62 phase 2; qmanager_firewall runs as root via systemd)
-www-data ALL=(root) NOPASSWD: /usr/bin/qmanager_iptables, /usr/bin/qmanager_ip6tables
+www-data ALL=(root) NOPASSWD: /usrdata/bin/qmanager_iptables, /usrdata/bin/qmanager_ip6tables
 
 # System reboot (used by system/reboot.sh, update installer)
 www-data ALL=(root) NOPASSWD: /sbin/reboot
@@ -2560,7 +2568,7 @@ www-data ALL=(root) NOPASSWD: /sbin/reboot
 www-data ALL=(root) NOPASSWD: /usr/bin/qmanager_set_ssh_password
 
 # Tailscale VPN management
-www-data ALL=(root) NOPASSWD: /usr/bin/qmanager_tailscale_mgr, /usr/bin/qmanager_tailscale_cli
+www-data ALL=(root) NOPASSWD: /usrdata/bin/qmanager_tailscale_mgr, /usrdata/bin/qmanager_tailscale_cli
 
 # Tailscale boot persistence (symlink-based)
 www-data ALL=(root) NOPASSWD: /bin/ln -sf /lib/systemd/system/tailscaled.service /lib/systemd/system/multi-user.target.wants/tailscaled.service
@@ -2614,9 +2622,9 @@ PY
     if grep -q '/usrdata/tailscale/tailscaled' "$sudoers"; then
         fail "sudoers still allows direct tailscaled after AI-62 phase 2"
     fi
-    grep -q '/usr/bin/qmanager_iptables' "$sudoers" \
+    grep -q '/usrdata/bin/qmanager_iptables' "$sudoers" \
         || fail "sudoers missing qmanager_iptables helper allowance"
-    grep -q '/usr/bin/qmanager_tailscale_cli' "$sudoers" \
+    grep -q '/usrdata/bin/qmanager_tailscale_cli' "$sudoers" \
         || fail "sudoers missing qmanager_tailscale_cli helper allowance"
 }
 
@@ -5295,11 +5303,11 @@ safety_checks() {
         "sudoers must not allow crontab on Casa (AI-62)"
     require_rg_clean "killall -HUP dnsmasq" "$TARGET/scripts/etc/sudoers.d/qmanager" \
         "sudoers must not use obsolete dnsmasq killall reload (AI-62)"
-    require_rg_present "/usr/bin/qmanager_iptables" "$TARGET/scripts/etc/sudoers.d/qmanager" \
+    require_rg_present "/usrdata/bin/qmanager_iptables" "$TARGET/scripts/etc/sudoers.d/qmanager" \
         "sudoers must allow qmanager_iptables helper only (AI-62 phase 2)"
     require_rg_clean "/usr/sbin/iptables" "$TARGET/scripts/etc/sudoers.d/qmanager" \
         "sudoers must not allow broad raw iptables (AI-62 phase 2)"
-    require_rg_present "/usr/bin/qmanager_tailscale_cli" "$TARGET/scripts/etc/sudoers.d/qmanager" \
+    require_rg_present "/usrdata/bin/qmanager_tailscale_cli" "$TARGET/scripts/etc/sudoers.d/qmanager" \
         "sudoers must allow qmanager_tailscale_cli helper only (AI-62 phase 2)"
     require_rg_clean "/usrdata/tailscale/tailscale" "$TARGET/scripts/etc/sudoers.d/qmanager" \
         "sudoers must not allow broad raw Tailscale CLI (AI-62 phase 2)"
@@ -5313,6 +5321,8 @@ safety_checks() {
         || fail "Packaged qmanager_ip6tables helper must be executable"
     require_rg_present "qmanager_tailscale_cli" "$TARGET/scripts/www/cgi-bin/quecmanager/vpn/tailscale.sh" \
         "Tailscale CGI must call qmanager_tailscale_cli helper (AI-62 phase 2)"
+    require_rg_clean '\\$_SUDO "\\$TAILSCALE_BIN"' "$TARGET/scripts/www/cgi-bin/quecmanager/vpn/tailscale.sh" \
+        "Tailscale CGI must not sudo-run raw Tailscale binary (AI-62 phase 2)"
     [ -x "$TARGET/scripts/usr/bin/qmanager_tailscale_cli" ] \
         || fail "Packaged qmanager_tailscale_cli helper must be executable"
 
