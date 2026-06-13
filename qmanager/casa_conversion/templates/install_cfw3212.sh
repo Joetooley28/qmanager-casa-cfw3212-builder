@@ -11,7 +11,7 @@
 #   - /opt does NOT exist in squashfs — Entware goes to /usrdata/opt directly
 #   - Daemons       → /usrdata/bin
 #   - Libraries     → /usrdata/qmanager/lib
-#   - Entware       → /usrdata/opt  (/opt -> /usrdata/opt symlink for ELF paths)
+#   - Entware       → /usrdata/opt
 #   - Systemd units → /etc/systemd/system  (writable via overlay)
 #   - Wants symlinks→ /etc/systemd/system/multi-user.target.wants
 #   - qmanager-lighttpd on port 9000 (HTTPS) — port 80 is Casa's turbontc
@@ -33,7 +33,7 @@ CERT_DIR="/usrdata/qmanager/certs"
 LIGHTTPD_CONF="/usrdata/qmanager/lighttpd.conf"
 SESSION_DIR="/tmp/qmanager_sessions"
 
-# Entware lives under /usrdata/opt; installer ensures /opt -> /usrdata/opt for sudo ELF paths
+# Entware lives under /usrdata/opt; QManager does not create or depend on /opt.
 OPT_DIR="/usrdata/opt"
 LIGHTTPD_MODULE_DIR="$OPT_DIR/lib/lighttpd"
 LIGHTTPD_LAUNCHER="$OPT_DIR/lib/ld-linux.so.3 --library-path $OPT_DIR/lib $OPT_DIR/sbin/lighttpd -m $LIGHTTPD_MODULE_DIR"
@@ -358,37 +358,6 @@ info "/dev/smd11 present"
 available_kb=$(df /usrdata | awk 'NR==2{print $4}')
 [ "$available_kb" -gt 30000 ] || die "/usrdata < 30MB free"
 info "/usrdata has $((available_kb/1024))MB free"
-
-# Optional /opt -> /usrdata/opt symlink.
-#
-# As of AI-56 this symlink is NOT required. The bundled Entware sudo ships
-# pre-patched (ELF interpreter + RPATH repointed to /usrdata/opt at build time,
-# with setuid preserved), and jq/lighttpd are launched through an explicit
-# /usrdata/opt loader — so nothing on the device depends on a root-level /opt.
-# On a clean stock box `/` is a read-only squashfs and /opt cannot be created;
-# that is now harmless. We still create the symlink opportunistically on boxes
-# that already have a writable root, since it costs nothing and keeps any stray
-# /opt-relative tooling happy.
-# Does not create or modify /usrdata/opt — only the root-level symlink.
-if [ ! -e /opt ]; then
-    opt_root_remounted_rw=0
-    if mount -o remount,rw / 2>/dev/null; then
-        opt_root_remounted_rw=1
-    fi
-    ln -sf /usrdata/opt /opt 2>/dev/null || true
-    if [ "$opt_root_remounted_rw" = 1 ]; then
-        mount -o remount,ro / 2>/dev/null || true
-    fi
-    if [ -L /opt ]; then
-        info "/opt -> /usrdata/opt symlink created"
-    else
-        info "/opt not created (read-only root) — not required; sudo is pre-patched"
-    fi
-elif [ -L /opt ] && [ "$(readlink /opt 2>/dev/null || true)" = "/usrdata/opt" ]; then
-    info "/opt -> /usrdata/opt symlink already present"
-else
-    info "/opt exists and is not our symlink — leaving unchanged (not required)"
-fi
 
 # --- Extract -----------------------------------------------------------------
 
@@ -1275,8 +1244,7 @@ exec "$@"
 SUDO_EOF
 chmod 755 "$BIN_DIR/sudo"
 info "sudo shim installed at $BIN_DIR/sudo (Casa CGIs run as root)"
-# Keep the bundled Entware sudo as a setuid fallback for boxes that do have a
-# writable /opt (e.g. a pivoted box); harmless and unused on a stock box.
+# Keep the bundled Entware sudo as a setuid fallback for non-root callers.
 if [ -x "$OPT_DIR/bin/sudo" ]; then
     chown 0:0 "$OPT_DIR/bin/sudo" 2>/dev/null || true
     chmod 4755 "$OPT_DIR/bin/sudo" 2>/dev/null || true
