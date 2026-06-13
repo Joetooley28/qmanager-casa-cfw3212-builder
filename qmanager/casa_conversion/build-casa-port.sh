@@ -2822,6 +2822,62 @@ PY
         || fail "Could not apply Casa IPPT disable service-clear patch"
 }
 
+patch_casa_band_locking_persist_cfw3212() {
+    # Make QManager band locks (and "select all" / save) persist across reboot
+    # on Casa. The band-lock CGI keeps writing AT+QNWPREFCFG exactly as upstream
+    # -- that already works in-session; the only problem is persistence. On Casa
+    # wmmd re-applies its own band view (modem base minus wmmd.config.hidden_bands
+    # = the carrier "factory" band set) at every modem reset/boot, via the cdcs
+    # `revert_modem_band` template, clamping back whatever QNWPREFCFG lock the
+    # user just saved -- so "bands change after every reboot, only on Casa". That
+    # template is gated by wwan.0.currentband.revert_selband.mode: with mode set
+    # to "no_change" (and marked persistent) it becomes a no-op, so the saved
+    # band selection is no longer overridden on the next boot. We set it right
+    # after a successful lock, so it only affects boxes where the user actually
+    # uses band locking. No RAT change and no Casa currentband rewrite -- the AT
+    # path is left exactly as upstream.
+    #
+    # Tradeoff: this neutralizes wmmd's factory band auto-revert (its "if the
+    # active bands lose service, fall back to factory" safety). QManager Band
+    # Failover remains the connectivity safety net. See private-notes
+    # COMPOSER_WMMD_DEEPDIVE_2026-04-13 sec.3.3 and band root-cause note
+    # 2026-04-19 sec.8 (Box 2 spike, mechanism C).
+    local lock="$TARGET/scripts/www/cgi-bin/quecmanager/bands/lock.sh"
+    [ -f "$lock" ] || fail "Target missing bands/lock.sh"
+    python3 - "$lock" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+
+MARKER = "Casa CFW-3212 band-persist"
+if MARKER in text:
+    sys.exit(0)
+
+anchor = 'qlog_info "Band lock applied: $AT_PARAM=$BANDS"'
+if anchor not in text:
+    sys.exit("bands/lock.sh success anchor not found (upstream changed?)")
+
+inject = anchor + "\n\n" + (
+    "# --- Casa CFW-3212 band-persist ------------------------------------------\n"
+    "# On Casa, wmmd re-applies its own band view (modem base minus\n"
+    "# wmmd.config.hidden_bands) at every modem reset/boot via the cdcs\n"
+    "# revert_modem_band template, clamping back the QNWPREFCFG lock just written\n"
+    "# -- which is why band locks 'don't stick after reboot'. The template is\n"
+    "# gated by wwan.0.currentband.revert_selband.mode; setting it to no_change\n"
+    "# (persistent) makes it a no-op so the saved selection survives reboot.\n"
+    'rdb_set wwan.0.currentband.revert_selband.mode no_change 2>/dev/null || true\n'
+    'rdb_setflags wwan.0.currentband.revert_selband.mode p 2>/dev/null || true'
+)
+text = text.replace(anchor, inject, 1)
+path.write_text(text)
+PY
+
+    grep -q "Casa CFW-3212 band-persist" "$lock" \
+        || fail "Could not apply Casa band-locking persist patch"
+}
+
 patch_casa_tailscale_tiny_cfw3212() {
     # Switch the on-demand Tailscale installer (driven by the UI's Tailscale
     # section, via cgi .../vpn/tailscale.sh -> qmanager_tailscale_mgr) from
@@ -4704,6 +4760,7 @@ apply_casa_overlays() {
     patch_casa_tailscale_install_label_cfw3212
     patch_casa_poller_boot_identity_cfw3212
     patch_casa_ippt_disable_clears_service_cfw3212
+    patch_casa_band_locking_persist_cfw3212
     patch_email_alerts_casa_msmtp
     patch_ping_profile_service_toggle_cfw3212
     patch_speedtest_latency_iqm_guard_cfw3212
