@@ -21,6 +21,7 @@
 ## v0.1.12-cfw3212.22
 
 - QManager's web server (`qmanager-lighttpd`) now writes errors to a RAM-only log at `/tmp/qmanager-lighttpd-error.log` instead of leaving logging unset. HTTP access logging stays off on Casa so routine UI traffic does not churn flash. The `qmanager-lighttpd` service also sends stdout/stderr to the system journal for same-session diagnostics. These logs are cleared on reboot — they are for troubleshooting while the router is running, not for post-reboot forensics.
+- Tightens the sudo rules for the web UI: instead of allowing any `iptables` / `ip6tables` command, the UI may only run two small helper programs (`qmanager_iptables` and `qmanager_ip6tables`) that apply or read TTL/HL mangle rules on the cellular interface. The port firewall (`qmanager-firewall`) still runs as root via systemd and is unchanged. This closes a broad privilege hole without affecting normal TTL settings or the web UI firewall.
 
 ## v0.1.12-cfw3212.21
 

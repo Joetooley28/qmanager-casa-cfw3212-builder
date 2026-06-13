@@ -2322,6 +2322,118 @@ PY
         || fail "Could not tighten /etc/qmanager file modes"
 }
 
+patch_ai62_qmanager_iptables_helper_cfw3212() {
+    local platform="$TARGET/scripts/usr/lib/qmanager/platform.sh"
+    local v4="$TARGET/scripts/usr/bin/qmanager_iptables"
+    local v6="$TARGET/scripts/usr/bin/qmanager_ip6tables"
+
+    [ -f "$platform" ] || fail "Target missing platform.sh for iptables helper patch"
+
+    cat > "$v4" <<'EOF'
+#!/bin/sh
+# qmanager_iptables — AI-62 phase 2: narrow www-data iptables to TTL mangle rules only.
+IPTABLES="/usr/sbin/iptables"
+
+_ttl_valid() {
+    case "$1" in
+        ''|*[!0-9]*) return 1 ;;
+    esac
+    [ "$1" -ge 0 ] && [ "$1" -le 255 ]
+}
+
+_allow_ttl_mangle() {
+    [ "$1" = "-w" ] && [ "$2" = "5" ] && [ "$3" = "-t" ] && [ "$4" = "mangle" ] || return 1
+    case "$5" in
+        -vnL)
+            [ "$6" = "POSTROUTING" ] && [ "$#" -eq 6 ]
+            ;;
+        -D|-I)
+            [ "$6" = "POSTROUTING" ] && [ "$7" = "-o" ] && [ "$8" = "rmnet+" ] \
+                && [ "$9" = "-j" ] && [ "${10}" = "TTL" ] && [ "${11}" = "--ttl-set" ] \
+                && _ttl_valid "${12}" && [ "$#" -eq 12 ]
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+if _allow_ttl_mangle "$@"; then
+    exec "$IPTABLES" "$@"
+fi
+
+echo "qmanager_iptables: denied (only TTL mangle POSTROUTING on rmnet+ allowed)" >&2
+exit 1
+EOF
+
+    cat > "$v6" <<'EOF'
+#!/bin/sh
+# qmanager_ip6tables — AI-62 phase 2: narrow www-data ip6tables to HL mangle rules only.
+IP6TABLES="/usr/sbin/ip6tables"
+
+_hl_valid() {
+    case "$1" in
+        ''|*[!0-9]*) return 1 ;;
+    esac
+    [ "$1" -ge 0 ] && [ "$1" -le 255 ]
+}
+
+_allow_hl_mangle() {
+    [ "$1" = "-w" ] && [ "$2" = "5" ] && [ "$3" = "-t" ] && [ "$4" = "mangle" ] || return 1
+    case "$5" in
+        -vnL)
+            [ "$6" = "POSTROUTING" ] && [ "$#" -eq 6 ]
+            ;;
+        -D|-I)
+            [ "$6" = "POSTROUTING" ] && [ "$7" = "-o" ] && [ "$8" = "rmnet+" ] \
+                && [ "$9" = "-j" ] && [ "${10}" = "HL" ] && [ "${11}" = "--hl-set" ] \
+                && _hl_valid "${12}" && [ "$#" -eq 12 ]
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+if _allow_hl_mangle "$@"; then
+    exec "$IP6TABLES" "$@"
+fi
+
+echo "qmanager_ip6tables: denied (only HL mangle POSTROUTING on rmnet+ allowed)" >&2
+exit 1
+EOF
+
+    chmod 755 "$v4" "$v6"
+
+    python3 - "$platform" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+old4 = 'run_iptables() {\n    $_SUDO /usr/sbin/iptables "$@"\n}'
+new4 = 'run_iptables() {\n    $_SUDO /usr/bin/qmanager_iptables "$@"\n}'
+old6 = 'run_ip6tables() {\n    $_SUDO /usr/sbin/ip6tables "$@"\n}'
+new6 = 'run_ip6tables() {\n    $_SUDO /usr/bin/qmanager_ip6tables "$@"\n}'
+if '/usr/bin/qmanager_iptables' in text:
+    if old4 in text or old6 in text:
+        raise SystemExit('platform.sh partially patched for qmanager_iptables?')
+    raise SystemExit(0)
+if old4 not in text or old6 not in text:
+    raise SystemExit('platform.sh run_iptables block not found for iptables helper patch')
+path.write_text(text.replace(old4, new4).replace(old6, new6))
+PY
+
+    grep -q '/usr/bin/qmanager_iptables' "$platform" \
+        || fail "platform.sh missing qmanager_iptables wrapper"
+    grep -q '/usr/bin/qmanager_ip6tables' "$platform" \
+        || fail "platform.sh missing qmanager_ip6tables wrapper"
+    if grep -q '/usr/sbin/iptables' "$platform"; then
+        fail "platform.sh still calls raw /usr/sbin/iptables after helper patch"
+    fi
+    log "Installed qmanager_iptables/ip6tables helpers and patched platform.sh"
+}
+
 patch_ai62_sudoers_narrowing_cfw3212() {
     local sudoers="$TARGET/scripts/etc/sudoers.d/qmanager"
 
@@ -2349,8 +2461,8 @@ www-data ALL=(root) NOPASSWD: /bin/systemctl start dnsmasq_service@0.service, /b
 www-data ALL=(root) NOPASSWD: /bin/ln -sf /lib/systemd/system/qmanager*.service /lib/systemd/system/multi-user.target.wants/qmanager*.service
 www-data ALL=(root) NOPASSWD: /bin/rm -f /lib/systemd/system/multi-user.target.wants/qmanager*.service
 
-# Firewall rules (used by TTL via run_iptables — phase 2 may wrap in helper)
-www-data ALL=(root) NOPASSWD: /usr/sbin/iptables, /usr/sbin/iptables-restore, /usr/sbin/ip6tables, /usr/sbin/ip6tables-restore
+# TTL/HL iptables — narrowed helpers only (AI-62 phase 2; qmanager_firewall runs as root via systemd)
+www-data ALL=(root) NOPASSWD: /usr/bin/qmanager_iptables, /usr/bin/qmanager_ip6tables
 
 # System reboot (used by system/reboot.sh, update installer)
 www-data ALL=(root) NOPASSWD: /sbin/reboot
@@ -2406,6 +2518,11 @@ PY
     if grep -q '/bin/systemctl start \*' "$sudoers"; then
         fail "sudoers still allows broad systemctl start *"
     fi
+    if grep -q '/usr/sbin/iptables' "$sudoers"; then
+        fail "sudoers still allows broad raw iptables after AI-62 phase 2"
+    fi
+    grep -q '/usr/bin/qmanager_iptables' "$sudoers" \
+        || fail "sudoers missing qmanager_iptables helper allowance"
 }
 
 replace_with_stub() {
@@ -4810,6 +4927,7 @@ apply_casa_overlays() {
     patch_casa_dns_badges_cfw3212
     patch_active_bands_multi_expand_cfw3212
     patch_onboarding_normalize_defaults_cfw3212
+    patch_ai62_qmanager_iptables_helper_cfw3212
     patch_ai62_sudoers_narrowing_cfw3212
     patch_qmanager_display_version
     patch_casa_display_name
@@ -5081,6 +5199,16 @@ safety_checks() {
         "sudoers must not allow crontab on Casa (AI-62)"
     require_rg_clean "killall -HUP dnsmasq" "$TARGET/scripts/etc/sudoers.d/qmanager" \
         "sudoers must not use obsolete dnsmasq killall reload (AI-62)"
+    require_rg_present "/usr/bin/qmanager_iptables" "$TARGET/scripts/etc/sudoers.d/qmanager" \
+        "sudoers must allow qmanager_iptables helper only (AI-62 phase 2)"
+    require_rg_clean "/usr/sbin/iptables" "$TARGET/scripts/etc/sudoers.d/qmanager" \
+        "sudoers must not allow broad raw iptables (AI-62 phase 2)"
+    require_rg_present "qmanager_iptables" "$TARGET/scripts/usr/lib/qmanager/platform.sh" \
+        "platform.sh must call qmanager_iptables helper (AI-62 phase 2)"
+    [ -x "$TARGET/scripts/usr/bin/qmanager_iptables" ] \
+        || fail "Packaged qmanager_iptables helper must be executable"
+    [ -x "$TARGET/scripts/usr/bin/qmanager_ip6tables" ] \
+        || fail "Packaged qmanager_ip6tables helper must be executable"
 
     require_rg_present "Joetooley28/qmanager-casa-cfw3212-package" "$TARGET/scripts/www/cgi-bin/quecmanager/system/update.sh" \
         "system/update.sh must check the Casa package repo"
