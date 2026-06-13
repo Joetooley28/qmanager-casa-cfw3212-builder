@@ -18,6 +18,10 @@
 - Software Update → Version Management can now install a different version (including rollbacks). After the download verifies, the Install button switches to "Install Now" so the staged package actually gets applied instead of being left on disk.
 - A handful of upstream modem-management actions stay blocked or limited on Casa because they'd let you push the modem into a state we don't want it in.
 
+## v0.1.12-cfw3212.22
+
+- QManager's web server (`qmanager-lighttpd`) now writes errors to a RAM-only log at `/tmp/qmanager-lighttpd-error.log` instead of leaving logging unset. HTTP access logging stays off on Casa so routine UI traffic does not churn flash. The `qmanager-lighttpd` service also sends stdout/stderr to the system journal for same-session diagnostics. These logs are cleared on reboot — they are for troubleshooting while the router is running, not for post-reboot forensics.
+
 ## v0.1.12-cfw3212.21
 
 - Band Locking now sticks across a reboot. On this hardware, saving a band selection (including "Select all") applied right away, but after a reboot any bands the carrier profile keeps hidden came back unselected — so your saved choice didn't fully survive the reboot. Saving bands in QManager (or completing the first-run setup's band step) now makes your selection the one the modem keeps after rebooting, instead of the carrier's hidden-band policy re-applying on the next boot. QManager owns the band set on this device once you save; the modem's hardware still decides which bands are actually available, and Band Failover still protects you if a locked band loses service.

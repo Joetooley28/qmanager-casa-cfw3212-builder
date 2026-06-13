@@ -472,6 +472,10 @@ server.modules = (
 
 server.port      = 9080
 
+# Casa flash policy: web-server errors in RAM only; no HTTP access log (UI polls
+# would write thousands of lines/day to flash if accesslog were enabled).
+server.errorlog  = "/tmp/qmanager-lighttpd-error.log"
+
 server.document-root = "/usrdata/qmanager/www"
 index-file.names     = ( "index.html" )
 
@@ -1587,6 +1591,8 @@ ExecStartPre=$LIGHTTPD_LAUNCHER -tt -f $LIGHTTPD_CONF
 ExecStart=$LIGHTTPD_LAUNCHER -D -f $LIGHTTPD_CONF
 ExecReload=/bin/kill -USR1 \$MAINPID
 Restart=on-failure
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
