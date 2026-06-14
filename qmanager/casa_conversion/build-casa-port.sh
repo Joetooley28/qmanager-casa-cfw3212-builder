@@ -887,21 +887,27 @@ if disable_profile_auto_apply:
     if [ -n "$boot_iccid" ]; then
         auto_apply_profile "$boot_iccid" "boot"
     fi'''
-    new = '''# Casa CFW-3212 safety: profile auto-apply disabled
+    new = '''# Casa CFW-3212: ICCID profile auto-apply is user controlled
     # =========================================================================
-    # Manual SIM profile apply is enabled, including APN, TTL/HL, IMEI, and
-    # AT+CFUN=1,1. Blind ICCID-matched boot auto-apply stays off by default.
+    # Manual SIM profile apply is always enabled. ICCID-matched boot auto-apply
+    # stays off until enabled from the SIM Profiles UI.
     # =========================================================================
-    qlog_info "Casa profile auto-apply disabled"'''
+    if [ -n "$boot_iccid" ] && profile_auto_apply_enabled; then
+        auto_apply_profile "$boot_iccid" "boot"
+    else
+        qlog_info "Casa profile auto-apply disabled"
+    fi'''
     text = text.replace(old, new)
 
     if "Casa profile auto-apply disabled" not in text:
         text = re.sub(
             r'''    # --- Auto-apply profile matching current SIM \(boot\) ---\n    if \[ -n "\$boot_iccid" \]; then\n        \( \. /usr/lib/qmanager/profile_mgr\.sh && auto_apply_profile "\$boot_iccid" "boot" \)\n    fi''',
-            '''    # --- Casa CFW-3212 safety: profile auto-apply disabled ---
-    # Manual SIM profile apply is enabled, including APN, TTL/HL, IMEI, and
-    # AT+CFUN=1,1. Blind ICCID-matched boot auto-apply stays off by default.
-    qlog_info "Casa profile auto-apply disabled"''',
+            '''    # --- Casa CFW-3212: ICCID profile auto-apply is user controlled ---
+    if [ -n "$boot_iccid" ] && profile_auto_apply_enabled; then
+        auto_apply_profile "$boot_iccid" "boot"
+    else
+        qlog_info "Casa profile auto-apply disabled"
+    fi''',
             text,
             count=1,
         )
@@ -1548,16 +1554,117 @@ patch_disable_profile_auto_apply() {
 
     local settings_sh="$TARGET/scripts/www/cgi-bin/quecmanager/cellular/settings.sh"
     local watchcat="$TARGET/scripts/usr/bin/qmanager_watchcat"
+    local poller="$TARGET/scripts/usr/bin/qmanager_poller"
+    local profile_mgr="$TARGET/scripts/usr/lib/qmanager/profile_mgr.sh"
+    local auto_apply_cgi="$TARGET/scripts/www/cgi-bin/quecmanager/profiles/auto_apply.sh"
+    local sim_types="$TARGET/types/sim-profile.ts"
+    local sim_hook="$TARGET/hooks/use-sim-profiles.ts"
+    local profile_page="$TARGET/components/cellular/custom-profiles/custom-profile.tsx"
 
     [ -f "$settings_sh" ] || fail "Target missing cellular/settings.sh"
     [ -f "$watchcat" ] || fail "Target missing qmanager_watchcat"
+    [ -f "$poller" ] || fail "Target missing qmanager_poller"
+    [ -f "$profile_mgr" ] || fail "Target missing profile_mgr.sh"
+    [ -f "$sim_types" ] || fail "Target missing sim-profile.ts"
+    [ -f "$sim_hook" ] || fail "Target missing use-sim-profiles.ts"
+    [ -f "$profile_page" ] || fail "Target missing custom-profile.tsx"
 
-    python3 - "$settings_sh" "$watchcat" <<'PY'
+    python3 - "$settings_sh" "$watchcat" "$poller" "$profile_mgr" "$sim_types" "$sim_hook" "$profile_page" <<'PY'
 from pathlib import Path
 import sys
 
-settings = Path(sys.argv[1])
-watchcat = Path(sys.argv[2])
+settings, watchcat, poller, profile_mgr, sim_types, sim_hook, profile_page = map(Path, sys.argv[1:8])
+
+text = profile_mgr.read_text()
+if 'PROFILE_AUTO_APPLY_CONFIG=' not in text:
+    text = text.replace(
+        'ACTIVE_PROFILE_FILE="/etc/qmanager/active_profile"\n',
+        'ACTIVE_PROFILE_FILE="/etc/qmanager/active_profile"\nPROFILE_AUTO_APPLY_CONFIG="/etc/qmanager/profile_auto_apply.json"\n',
+        1,
+    )
+if 'profile_auto_apply_enabled()' not in text:
+    marker = '# =============================================================================\n# Profile CRUD Operations\n# =============================================================================\n'
+    helper = '''# --- profile_auto_apply_enabled ------------------------------------------------
+# Returns 0 when ICCID-matched profile auto-apply is enabled.
+profile_auto_apply_enabled() {
+    [ -f "$PROFILE_AUTO_APPLY_CONFIG" ] || return 1
+    local enabled
+    enabled=$(jq -r '.enabled // false' "$PROFILE_AUTO_APPLY_CONFIG" 2>/dev/null || echo false)
+    [ "$enabled" = "true" ] || [ "$enabled" = "1" ]
+}
+
+# --- profile_set_auto_apply ----------------------------------------------------
+# Stores ICCID auto-apply preference.
+profile_set_auto_apply() {
+    local enabled="$1"
+    local tmp="${PROFILE_AUTO_APPLY_CONFIG}.tmp"
+    mkdir -p "$(dirname "$PROFILE_AUTO_APPLY_CONFIG")" 2>/dev/null
+    case "$enabled" in
+        true|1|yes|on) enabled=true ;;
+        *) enabled=false ;;
+    esac
+    jq -n --argjson enabled "$enabled" '{enabled: $enabled}' > "$tmp" 2>/dev/null || return 1
+    mv "$tmp" "$PROFILE_AUTO_APPLY_CONFIG" || return 1
+    chmod 640 "$PROFILE_AUTO_APPLY_CONFIG" 2>/dev/null || true
+}
+
+'''
+    if marker not in text:
+        raise SystemExit("profile_mgr CRUD marker not found")
+    text = text.replace(marker, helper + marker, 1)
+if 'auto_apply_enabled: $auto_apply' not in text:
+    text = text.replace(
+        '''    # Build final response
+    if [ -n "$active_id" ]; then
+        jq -n --argjson profiles "$profiles_json" --arg active "$active_id" \\
+            '{profiles: $profiles, active_profile_id: $active}'
+    else
+        jq -n --argjson profiles "$profiles_json" \\
+            '{profiles: $profiles, active_profile_id: null}'
+    fi
+''',
+        '''    # Build final response
+    local auto_apply_enabled=false
+    profile_auto_apply_enabled && auto_apply_enabled=true
+    if [ -n "$active_id" ]; then
+        jq -n --argjson profiles "$profiles_json" --arg active "$active_id" --argjson auto_apply "$auto_apply_enabled" \\
+            '{profiles: $profiles, active_profile_id: $active, auto_apply_enabled: $auto_apply}'
+    else
+        jq -n --argjson profiles "$profiles_json" --argjson auto_apply "$auto_apply_enabled" \\
+            '{profiles: $profiles, active_profile_id: null, auto_apply_enabled: $auto_apply}'
+    fi
+''',
+        1,
+    )
+profile_mgr.write_text(text)
+
+text = poller.read_text()
+if 'profile_auto_apply_enabled() { return 1; }' not in text:
+    text = text.replace(
+        '''. /usrdata/qmanager/lib/profile_mgr.sh 2>/dev/null || {
+    auto_apply_profile() { :; }
+}
+''',
+        '''. /usrdata/qmanager/lib/profile_mgr.sh 2>/dev/null || {
+    auto_apply_profile() { :; }
+    profile_auto_apply_enabled() { return 1; }
+}
+''',
+        1,
+    )
+    text = text.replace(
+        '''. /usr/lib/qmanager/profile_mgr.sh 2>/dev/null || {
+    auto_apply_profile() { :; }
+}
+''',
+        '''. /usr/lib/qmanager/profile_mgr.sh 2>/dev/null || {
+    auto_apply_profile() { :; }
+    profile_auto_apply_enabled() { return 1; }
+}
+''',
+        1,
+    )
+poller.write_text(text)
 
 text = settings.read_text()
 old = '''                    # Auto-apply matching profile for the new SIM
@@ -1568,8 +1675,17 @@ old = '''                    # Auto-apply matching profile for the new SIM
                         auto_apply_profile "$_new_iccid" "sim_switch"
                     fi
 '''
-new = '''                    # Casa CFW-3212 safety: do not auto-apply SIM profiles.
-                    qlog_info "Casa profile auto-apply disabled after SIM switch"
+new = '''                    # Casa CFW-3212: ICCID profile auto-apply is user controlled.
+                    sleep 1  # let SIM initialize after CFUN=1
+                    _new_iccid=$(qcmd 'AT+QCCID' 2>/dev/null | grep '+QCCID:' | sed 's/+QCCID: //g' | tr -d '\\r ')
+                    if [ -n "$_new_iccid" ]; then
+                        . /usrdata/qmanager/lib/profile_mgr.sh 2>/dev/null || . /usr/lib/qmanager/profile_mgr.sh 2>/dev/null
+                        if profile_auto_apply_enabled; then
+                            auto_apply_profile "$_new_iccid" "sim_switch"
+                        else
+                            qlog_info "Casa profile auto-apply disabled after SIM switch"
+                        fi
+                    fi
 '''
 if old in text:
     text = text.replace(old, new, 1)
@@ -1582,8 +1698,14 @@ text = text.replace(
     _revert_iccid=$(qcmd 'AT+QCCID' 2>/dev/null | grep '+QCCID:' | sed 's/+QCCID: //g' | tr -d '\\r ')
     [ -n "$_revert_iccid" ] && auto_apply_profile "$_revert_iccid" "watchdog_revert"
 ''',
-    '''    # Casa CFW-3212 safety: do not auto-apply SIM profiles.
-    qlog_info "Casa profile auto-apply disabled after watchdog SIM revert"
+    '''    # Casa CFW-3212: ICCID profile auto-apply is user controlled.
+    local _revert_iccid
+    _revert_iccid=$(qcmd 'AT+QCCID' 2>/dev/null | grep '+QCCID:' | sed 's/+QCCID: //g' | tr -d '\\r ')
+    if [ -n "$_revert_iccid" ] && profile_auto_apply_enabled; then
+        auto_apply_profile "$_revert_iccid" "watchdog_revert"
+    else
+        qlog_info "Casa profile auto-apply disabled after watchdog SIM revert"
+    fi
 ''',
 )
 text = text.replace(
@@ -1592,19 +1714,259 @@ text = text.replace(
                 auto_apply_profile "$curr_iccid" "watchdog"
             fi
 ''',
-    '''            # Casa CFW-3212 safety: do not auto-apply SIM profiles.
-            qlog_info "Casa profile auto-apply disabled after watchdog SIM failover"
+    '''            # Casa CFW-3212: ICCID profile auto-apply is user controlled.
+            if [ -n "$curr_iccid" ] && profile_auto_apply_enabled; then
+                auto_apply_profile "$curr_iccid" "watchdog"
+            else
+                qlog_info "Casa profile auto-apply disabled after watchdog SIM failover"
+            fi
 ''',
 )
 watchcat.write_text(text)
+
+text = sim_types.read_text()
+if 'auto_apply_enabled' not in text:
+    text = text.replace(
+        '  active_profile_id: string | null;\n',
+        '  active_profile_id: string | null;\n  /** Whether ICCID-matched profiles auto-apply on boot/SIM switch/watchdog SIM recovery */\n  auto_apply_enabled?: boolean;\n',
+        1,
+    )
+sim_types.write_text(text)
+
+text = sim_hook.read_text()
+if 'autoApplyEnabled' not in text:
+    text = text.replace(
+        '  activeProfileId: string | null;\n',
+        '  activeProfileId: string | null;\n  /** Whether ICCID-matched profiles auto-apply automatically */\n  autoApplyEnabled: boolean;\n  /** True while saving the auto-apply setting */\n  isSavingAutoApply: boolean;\n',
+        1,
+    )
+    text = text.replace(
+        '  deactivateProfile: () => Promise<boolean>;\n',
+        '  deactivateProfile: () => Promise<boolean>;\n  /** Enable/disable ICCID-matched profile auto-apply */\n  setAutoApplyEnabled: (enabled: boolean) => Promise<boolean>;\n',
+        1,
+    )
+    text = text.replace(
+        '  const [isLoading, setIsLoading] = useState(true);\n  const [error, setError] = useState<string | null>(null);\n',
+        '  const [isLoading, setIsLoading] = useState(true);\n  const [error, setError] = useState<string | null>(null);\n  const [autoApplyEnabled, setAutoApplyEnabledState] = useState(false);\n  const [isSavingAutoApply, setIsSavingAutoApply] = useState(false);\n',
+        1,
+    )
+    text = text.replace(
+        '      setProfiles(data.profiles || []);\n      setActiveProfileId(data.active_profile_id || null);\n',
+        '      setProfiles(data.profiles || []);\n      setActiveProfileId(data.active_profile_id || null);\n      setAutoApplyEnabledState(Boolean(data.auto_apply_enabled));\n',
+        1,
+    )
+    marker = '  // ---------------------------------------------------------------------------\n  // Fetch a single profile\n  // ---------------------------------------------------------------------------\n'
+    if marker not in text:
+        marker = '  // ---------------------------------------------------------------------------\n  // Get single profile (for edit form)\n  // ---------------------------------------------------------------------------\n'
+    addition = '''  // ---------------------------------------------------------------------------
+  // Toggle ICCID auto-apply
+  // ---------------------------------------------------------------------------
+  const setAutoApplyEnabled = useCallback(
+    async (enabled: boolean): Promise<boolean> => {
+      setError(null);
+      setIsSavingAutoApply(true);
+      try {
+        const resp = await authFetch(`${CGI_BASE}/auto_apply.sh`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ enabled }),
+        });
+
+        if (!resp.ok) {
+          throw new Error(`HTTP ${resp.status}: ${resp.statusText}`);
+        }
+
+        const result: ProfileApiResponse & { enabled?: boolean } =
+          await resp.json();
+
+        if (!result.success) {
+          setError(
+            result.detail || result.error || "Failed to update auto-apply"
+          );
+          return false;
+        }
+
+        setAutoApplyEnabledState(Boolean(result.enabled));
+        return true;
+      } catch (err) {
+        const msg =
+          err instanceof Error ? err.message : "Failed to update auto-apply";
+        setError(msg);
+        return false;
+      } finally {
+        setIsSavingAutoApply(false);
+      }
+    },
+    []
+  );
+
+'''
+    if marker not in text:
+        raise SystemExit("use-sim-profiles single-profile marker not found")
+    text = text.replace(marker, addition + marker, 1)
+    text = text.replace(
+        '    profiles,\n    activeProfileId,\n',
+        '    profiles,\n    activeProfileId,\n    autoApplyEnabled,\n    isSavingAutoApply,\n',
+        1,
+    )
+    text = text.replace(
+        '    deactivateProfile,\n    getProfile,\n',
+        '    deactivateProfile,\n    setAutoApplyEnabled,\n    getProfile,\n',
+        1,
+    )
+sim_hook.write_text(text)
+
+text = profile_page.read_text()
+if 'autoApplyEnabled' not in text:
+    text = text.replace(
+        'import React, { useState, useCallback } from "react";\n',
+        'import React, { useState, useCallback } from "react";\nimport { toast } from "sonner";\n',
+        1,
+    )
+    text = text.replace(
+        'import type { SimProfile } from "@/types/sim-profile";\n',
+        'import type { SimProfile } from "@/types/sim-profile";\nimport { Switch } from "@/components/ui/switch";\n',
+        1,
+    )
+    text = text.replace(
+        '''    deleteProfile,
+    deactivateProfile,
+    getProfile,
+    refresh,
+  } = useSimProfiles();
+''',
+        '''    deleteProfile,
+    deactivateProfile,
+    setAutoApplyEnabled,
+    getProfile,
+    refresh,
+    autoApplyEnabled,
+    isSavingAutoApply,
+  } = useSimProfiles();
+''',
+        1,
+    )
+    text = text.replace(
+        '''  // ---------------------------------------------------------------------------
+  // Handle Edit: fetch full profile, switch form to edit mode
+  // ---------------------------------------------------------------------------
+''',
+        '''  const handleAutoApplyToggle = useCallback(
+    async (enabled: boolean) => {
+      const success = await setAutoApplyEnabled(enabled);
+      if (success) {
+        toast.success(
+          enabled ? "ICCID auto-apply enabled." : "ICCID auto-apply disabled."
+        );
+      } else {
+        toast.error("Failed to update ICCID auto-apply.");
+      }
+    },
+    [setAutoApplyEnabled]
+  );
+
+  // ---------------------------------------------------------------------------
+  // Handle Edit: fetch full profile, switch form to edit mode
+  // ---------------------------------------------------------------------------
+''',
+        1,
+    )
+    old_header = '''      <div className="mb-6">
+        <h1 className="text-3xl font-bold mb-2">Custom SIM Profile</h1>
+        <p className="text-muted-foreground">
+          Bundle APN, IMEI, and TTL/HL settings into one-click profiles.
+        </p>
+      </div>
+'''
+    if old_header not in text:
+        old_header = '''      <div className="mb-6">
+        <h1 className="text-3xl font-bold mb-2">Custom SIM Profiles</h1>
+        <p className="text-muted-foreground">
+          Bundle APN, IMEI, and TTL/HL settings into one-click profiles.
+        </p>
+      </div>
+'''
+    new_header = '''      <div className="mb-6 flex flex-col gap-4 @2xl/main:flex-row @2xl/main:items-start @2xl/main:justify-between">
+        <div>
+          <h1 className="text-3xl font-bold mb-2">Custom SIM Profiles</h1>
+          <p className="text-muted-foreground">
+            Bundle APN, IMEI, and TTL/HL settings into one-click profiles.
+          </p>
+        </div>
+        <div className="flex min-w-64 items-center justify-between gap-4 rounded-md border bg-card px-4 py-3">
+          <div className="space-y-1">
+            <div className="text-sm font-medium">ICCID auto-apply</div>
+            <div className="text-xs text-muted-foreground">
+              Apply matching profiles on boot, SIM switch, and Watchdog SIM recovery.
+            </div>
+          </div>
+          <Switch
+            checked={autoApplyEnabled}
+            disabled={isSavingAutoApply}
+            onCheckedChange={handleAutoApplyToggle}
+            aria-label="Toggle ICCID auto-apply"
+          />
+        </div>
+      </div>
+'''
+    if old_header not in text:
+        raise SystemExit("custom-profile header block not found")
+    text = text.replace(old_header, new_header, 1)
+profile_page.write_text(text)
 PY
 
-    grep -q "Casa profile auto-apply disabled after SIM switch" "$settings_sh" \
-        || fail "Could not disable SIM-switch profile auto-apply"
+    cat > "$auto_apply_cgi" <<'EOF'
+#!/bin/sh
+. /usrdata/qmanager/lib/cgi_base.sh 2>/dev/null || . /usr/lib/qmanager/cgi_base.sh
+qlog_init "cgi_profile_auto_apply"
+cgi_headers
+cgi_handle_options
+
+. /usrdata/qmanager/lib/profile_mgr.sh 2>/dev/null || . /usr/lib/qmanager/profile_mgr.sh || {
+    cgi_error "profile_mgr_unavailable" "Profile manager is unavailable"
+    exit 0
+}
+
+if [ "$REQUEST_METHOD" = "GET" ]; then
+    enabled=false
+    profile_auto_apply_enabled && enabled=true
+    jq -n --argjson success true --argjson enabled "$enabled" \
+        '{success: $success, enabled: $enabled}'
+    exit 0
+fi
+
+if [ "$REQUEST_METHOD" = "POST" ]; then
+    input=$(cgi_read_post)
+    enabled=$(printf '%s' "$input" | jq -r '.enabled // false' 2>/dev/null || echo false)
+    case "$enabled" in
+        true|1|yes|on) enabled=true ;;
+        *) enabled=false ;;
+    esac
+    if ! profile_set_auto_apply "$enabled"; then
+        cgi_error "write_failed" "Could not save ICCID auto-apply setting"
+        exit 0
+    fi
+    jq -n --argjson success true --argjson enabled "$enabled" \
+        '{success: $success, enabled: $enabled}'
+    exit 0
+fi
+
+cgi_error "method_not_allowed" "Unsupported request method"
+EOF
+    chmod 755 "$auto_apply_cgi"
+
+    grep -q "profile_auto_apply_enabled" "$profile_mgr" \
+        || fail "Could not add profile auto-apply runtime setting"
+    grep -q "profile_auto_apply_enabled" "$settings_sh" \
+        || fail "Could not add SIM-switch profile auto-apply toggle check"
     grep -q "Casa profile auto-apply disabled after watchdog SIM revert" "$watchcat" \
-        || fail "Could not disable watchdog revert profile auto-apply"
+        || fail "Could not add watchdog revert profile auto-apply toggle check"
     grep -q "Casa profile auto-apply disabled after watchdog SIM failover" "$watchcat" \
-        || fail "Could not disable watchdog failover profile auto-apply"
+        || fail "Could not add watchdog failover profile auto-apply toggle check"
+    grep -q "autoApplyEnabled" "$sim_hook" \
+        || fail "Could not add SIM profile auto-apply hook state"
+    grep -q "aria-label=\"Toggle ICCID auto-apply\"" "$profile_page" \
+        || fail "Could not add SIM profile auto-apply UI toggle"
 }
 
 patch_casa_iccid_and_staleness_cfw3212() {
