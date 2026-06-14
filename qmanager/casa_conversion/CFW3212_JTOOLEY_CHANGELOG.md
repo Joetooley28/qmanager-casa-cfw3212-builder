@@ -28,6 +28,7 @@
 - Scheduled Reboot times now follow the **System Settings timezone** (the same timezone selector on that page). BusyBox `crond` is started and reloaded with QManager's configured `TZ` after each schedule save, so a reboot set for `10:33` fires at 10:33 local time instead of being interpreted as UTC.
 - Scheduled Reboot now actually fires at the set time. Earlier builds wrote a correct schedule, but BusyBox `crond` quietly refused to run it because the cron file was owned by the web-server user instead of `root`. The schedule is now stored on persistent `/usrdata` storage and kept `root`-owned (migrated automatically from the old location on upgrade), so the scheduled reboot runs reliably and survives reboots.
 - A scheduled reboot now uses the same managed reboot path as the System menu **Reboot** button, so it is recorded with a proper reboot reason instead of showing up as a generic warm restart.
+- The Watchdog status is clearer when its ping monitor is unavailable. If the ping cache is missing, stale, or invalid, Watchdog now reports that degraded ping state instead of looking like normal monitoring, restarts the QManager ping service a limited number of times, and still avoids modem recovery actions unless real connectivity loss is confirmed. Disabling Watchdog now also leaves the status file showing disabled instead of the last old monitor state.
 - SSH password changes (onboarding and System Settings) now use **SHA512-crypt** (`openssl passwd -6`) instead of the older MD5-crypt hash.
 
 ## v0.1.12-cfw3212.21

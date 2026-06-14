@@ -2576,8 +2576,8 @@ www-data ALL=(root) NOPASSWD: /bin/systemctl start tailscaled, /bin/systemctl st
 www-data ALL=(root) NOPASSWD: /bin/systemctl start dnsmasq_service@0.service, /bin/systemctl stop dnsmasq_service@0.service, /bin/systemctl restart dnsmasq_service@0.service, /bin/systemctl is-active dnsmasq_service@0.service
 
 # Boot persistence (symlink-based — systemctl enable doesn't work on RM520N-GL / Casa)
-www-data ALL=(root) NOPASSWD: /bin/ln -sf /lib/systemd/system/qmanager*.service /lib/systemd/system/multi-user.target.wants/qmanager*.service
-www-data ALL=(root) NOPASSWD: /bin/rm -f /lib/systemd/system/multi-user.target.wants/qmanager*.service
+www-data ALL=(root) NOPASSWD: /bin/ln -sf /etc/systemd/system/qmanager*.service /etc/systemd/system/multi-user.target.wants/qmanager*.service
+www-data ALL=(root) NOPASSWD: /bin/rm -f /etc/systemd/system/multi-user.target.wants/qmanager*.service
 
 # TTL/HL iptables — narrowed helpers only (AI-62 phase 2; qmanager_firewall runs as root via systemd)
 www-data ALL=(root) NOPASSWD: /usrdata/bin/qmanager_iptables, /usrdata/bin/qmanager_ip6tables
@@ -2592,8 +2592,8 @@ www-data ALL=(root) NOPASSWD: /usr/bin/qmanager_set_ssh_password
 www-data ALL=(root) NOPASSWD: /usrdata/bin/qmanager_tailscale_mgr, /usrdata/bin/qmanager_tailscale_cli
 
 # Tailscale boot persistence (symlink-based)
-www-data ALL=(root) NOPASSWD: /bin/ln -sf /lib/systemd/system/tailscaled.service /lib/systemd/system/multi-user.target.wants/tailscaled.service
-www-data ALL=(root) NOPASSWD: /bin/rm -f /lib/systemd/system/multi-user.target.wants/tailscaled.service
+www-data ALL=(root) NOPASSWD: /bin/ln -sf /etc/systemd/system/tailscaled.service /etc/systemd/system/multi-user.target.wants/tailscaled.service
+www-data ALL=(root) NOPASSWD: /bin/rm -f /etc/systemd/system/multi-user.target.wants/tailscaled.service
 
 # Web console management
 www-data ALL=(root) NOPASSWD: /usr/bin/qmanager_console_mgr
@@ -3282,6 +3282,263 @@ PY
         || fail "Could not apply Casa watchcat tier1 reconnect patch"
     grep -q 'QManager watchcat tier4 recovery' "$watchcat" \
         || fail "Could not apply Casa watchcat tier4 reboot patch"
+}
+
+patch_casa_watchcat_ping_health_cfw3212() {
+    # Keep the watchdog honest when the ping daemon is missing/stale. Recovery
+    # tiers act on modem connectivity, so a dead ping daemon should not trigger
+    # CFUN/SIM/reboot recovery. Instead, expose a degraded state and make a
+    # bounded attempt to restart qmanager-ping.
+    local watchcat="$TARGET/scripts/usr/bin/qmanager_watchcat"
+    [ -f "$watchcat" ] || return 0
+
+    python3 - "$watchcat" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+
+if (
+    "PING_STALE_RESTART_CYCLES" in text
+    and "write_disabled_state()" in text
+    and "restart_ping_service_if_needed()" in text
+    and 'state="ping_${ping_status}"' in text
+):
+    path.write_text(text)
+    sys.exit(0)
+
+text = text.replace(
+'''PING_STALE_THRESHOLD=15
+MODEM_WAIT_TIMEOUT=60
+''',
+'''PING_STALE_THRESHOLD=15
+PING_STALE_RESTART_CYCLES=6
+PING_STALE_RESTART_MAX=3
+MODEM_WAIT_TIMEOUT=60
+''')
+
+text = text.replace(
+'''reboots_this_hour=0
+''',
+'''reboots_this_hour=0
+ping_status="unknown"
+ping_age="null"
+stale_ping_cycles=0
+ping_service_restarts=0
+''')
+
+text = text.replace(
+'''write_state() {
+    local ts
+    ts=$(date +%s)
+''',
+'''write_state() {
+    if [ "$CFG_ENABLED" != "1" ]; then
+        state="disabled"
+        failure_counter=0
+        current_tier=0
+        cooldown_remaining=0
+        ping_status="disabled"
+        ping_age="null"
+        stale_ping_cycles=0
+    fi
+
+    local ts
+    ts=$(date +%s)
+''')
+
+text = text.replace(
+'''        --argjson reboots "$reboots_this_hour" \\
+        '{
+''',
+'''        --argjson reboots "$reboots_this_hour" \\
+        --arg ping_status "$ping_status" \\
+        --argjson ping_age "${ping_age:-null}" \\
+        --argjson stale_cycles "$stale_ping_cycles" \\
+        --argjson ping_restarts "$ping_service_restarts" \\
+        '{
+''')
+
+text = text.replace(
+'''            current_sim_slot: $sf_curr,
+            reboots_this_hour: $reboots
+        }' > "$STATE_TMP"
+''',
+'''            current_sim_slot: $sf_curr,
+            reboots_this_hour: $reboots,
+            ping_status: $ping_status,
+            ping_age: $ping_age,
+            stale_ping_cycles: $stale_cycles,
+            ping_service_restarts: $ping_restarts
+        }' > "$STATE_TMP"
+''')
+
+text = text.replace(
+'''# Check if tower lock is active (Tier 2 must be skipped)
+''',
+'''write_disabled_state() {
+    read_config 2>/dev/null || true
+    CFG_ENABLED=0
+    state="disabled"
+    failure_counter=0
+    current_tier=0
+    cooldown_remaining=0
+    ping_status="disabled"
+    ping_age="null"
+    stale_ping_cycles=0
+    rm -f "$RECOVERY_FLAG"
+    write_state
+}
+
+restart_ping_service_if_needed() {
+    [ "$stale_ping_cycles" -lt "$PING_STALE_RESTART_CYCLES" ] && return 0
+    [ "$ping_service_restarts" -ge "$PING_STALE_RESTART_MAX" ] && return 0
+    if [ $((stale_ping_cycles % PING_STALE_RESTART_CYCLES)) -ne 0 ]; then
+        return 0
+    fi
+
+    ping_service_restarts=$((ping_service_restarts + 1))
+    qlog_warn "Ping cache ${ping_status} for ${stale_ping_cycles} watchdog cycles; restarting qmanager-ping (${ping_service_restarts}/${PING_STALE_RESTART_MAX})"
+    append_event "watchcat_degraded" "Watchcat: ping daemon cache ${ping_status}; restarting qmanager-ping" "warning"
+    if command -v svc_restart >/dev/null 2>&1; then
+        svc_restart qmanager_ping 2>/dev/null || true
+    else
+        systemctl restart qmanager-ping 2>/dev/null || true
+    fi
+}
+
+# Check if tower lock is active (Tier 2 must be skipped)
+''')
+
+text = text.replace(
+'''read_ping() {
+    if [ ! -f "$PING_CACHE" ]; then
+        qlog_warn "Ping cache missing"
+        return 1
+    fi
+''',
+'''read_ping() {
+    ping_status="ok"
+    ping_age="null"
+    if [ ! -f "$PING_CACHE" ]; then
+        ping_status="missing"
+        qlog_warn "Ping cache missing"
+        return 1
+    fi
+''')
+
+text = text.replace(
+'''    [ -z "$_pdata" ] && return 1
+''',
+'''    if [ -z "$_pdata" ]; then
+        ping_status="invalid"
+        return 1
+    fi
+''')
+
+text = text.replace(
+'''    age=$((now - ping_ts))
+    if [ "$age" -gt "$PING_STALE_THRESHOLD" ]; then
+        qlog_warn "Ping data stale (age=${age}s), skipping cycle"
+        return 1
+    fi
+
+    return 0
+}
+''',
+'''    age=$((now - ping_ts))
+    ping_age="$age"
+    if [ "$age" -gt "$PING_STALE_THRESHOLD" ]; then
+        ping_status="stale"
+        qlog_warn "Ping data stale (age=${age}s), skipping cycle"
+        return 1
+    fi
+
+    ping_status="ok"
+    return 0
+}
+''')
+
+text = text.replace(
+'''    # Cleanup on exit
+    trap 'rm -f "$PID_FILE" "$STATE_TMP" "$RECOVERY_FLAG"; write_state' EXIT INT TERM
+''',
+'''    # Cleanup on exit. Re-read config so a UI disable leaves a disabled state
+    # file instead of the daemon's previous in-memory enabled/monitor snapshot.
+    trap 'rm -f "$PID_FILE" "$STATE_TMP" "$RECOVERY_FLAG"; read_config 2>/dev/null || true; [ "$CFG_ENABLED" != "1" ] && state="disabled" && ping_status="disabled"; write_state' EXIT INT TERM
+''')
+
+text = text.replace(
+'''    if [ "$CFG_ENABLED" != "1" ]; then
+        qlog_info "Watchcat disabled in config, exiting"
+        exit 0
+    fi
+''',
+'''    if [ "$CFG_ENABLED" != "1" ]; then
+        qlog_info "Watchcat disabled in config, exiting"
+        write_disabled_state
+        exit 0
+    fi
+''')
+
+text = text.replace(
+'''                state="disabled"
+                write_state
+                exit 0
+''',
+'''                write_disabled_state
+                exit 0
+''')
+
+text = text.replace(
+'''        if ! read_ping; then
+            # Stale or missing data — don't make recovery decisions
+            write_state
+            sleep "$CFG_CHECK_INTERVAL"
+            continue
+        fi
+''',
+'''        if ! read_ping; then
+            # Stale or missing ping data means the watchdog is blind, not that
+            # the modem is down. Do not escalate modem recovery from this path.
+            stale_ping_cycles=$((stale_ping_cycles + 1))
+            state="ping_${ping_status}"
+            failure_counter=0
+            current_tier=0
+            rm -f "$RECOVERY_FLAG"
+            restart_ping_service_if_needed
+            write_state
+            sleep "$CFG_CHECK_INTERVAL"
+            continue
+        fi
+        if [ "$state" = "ping_missing" ] || [ "$state" = "ping_stale" ] || [ "$state" = "ping_invalid" ]; then
+            qlog_info "Ping data recovered after ${stale_ping_cycles} degraded cycles"
+            state="monitor"
+            failure_counter=0
+            current_tier=0
+        fi
+        stale_ping_cycles=0
+''')
+
+if "PING_STALE_RESTART_CYCLES" not in text:
+    raise SystemExit("watchcat ping stale restart constants missing")
+if "write_disabled_state()" not in text:
+    raise SystemExit("watchcat disabled-state helper missing")
+if "restart_ping_service_if_needed()" not in text:
+    raise SystemExit("watchcat ping restart helper missing")
+if "state=\"ping_${ping_status}\"" not in text:
+    raise SystemExit("watchcat ping degraded state path missing")
+
+path.write_text(text)
+PY
+
+    grep -q 'PING_STALE_RESTART_CYCLES' "$watchcat" \
+        || fail "Could not add watchcat stale ping restart threshold"
+    grep -q 'write_disabled_state' "$watchcat" \
+        || fail "Could not add watchcat disabled-state writer"
+    grep -q 'state="ping_${ping_status}"' "$watchcat" \
+        || fail "Could not add watchcat ping degraded state"
 }
 
 patch_casa_poller_boot_identity_cfw3212() {
@@ -5460,6 +5717,7 @@ apply_casa_overlays() {
     patch_casa_reboot
     patch_casa_scheduled_reboot_cfw3212
     patch_casa_watchcat_tiers
+    patch_casa_watchcat_ping_health_cfw3212
     copy_template_or_fallback "components/nav-user.tsx" "$TEMPLATE_DIR/components/nav-user.tsx"
     copy_template_or_fallback "components/monitoring/software-update/update-preferences-card.tsx" "$TEMPLATE_DIR/components/monitoring/software-update/update-preferences-card.tsx"
     copy_template_or_fallback "components/monitoring/software-update/software-update.tsx" "$TEMPLATE_DIR/components/monitoring/software-update/software-update.tsx"
@@ -5728,6 +5986,10 @@ safety_checks() {
         "Health Check net.dns must bypass IPPT poisoned 192.0.0.1 resolv.conf"
     require_rg_present "systemctl start qmanager-*" "$TARGET/scripts/etc/sudoers.d/qmanager" \
         "sudoers must narrow systemctl to qmanager-* units (AI-62)"
+    require_rg_present "/etc/systemd/system/qmanager\\*.service /etc/systemd/system/multi-user.target.wants/qmanager\\*.service" "$TARGET/scripts/etc/sudoers.d/qmanager" \
+        "sudoers qmanager boot persistence must match Casa /etc systemd path"
+    require_rg_clean "/lib/systemd/system/qmanager\\*.service" "$TARGET/scripts/etc/sudoers.d/qmanager" \
+        "sudoers must not use stale /lib systemd path for qmanager boot persistence"
     require_rg_present "/tmp/qmanager-dnsmasq.conf.new /etc/data/dnsmasq.conf" "$TARGET/scripts/etc/sudoers.d/qmanager" \
         "sudoers Custom DNS mv rule must match Casa /tmp staging path (AI-62)"
     require_rg_clean "/bin/systemctl start \\*" "$TARGET/scripts/etc/sudoers.d/qmanager" \
@@ -5746,6 +6008,12 @@ safety_checks() {
         "sudoers must not allow broad raw Tailscale CLI (AI-62 phase 2)"
     require_rg_clean "/usrdata/tailscale/tailscaled" "$TARGET/scripts/etc/sudoers.d/qmanager" \
         "sudoers must not allow direct tailscaled commands (AI-62 phase 2)"
+    require_rg_present "PING_STALE_RESTART_CYCLES" "$TARGET/scripts/usr/bin/qmanager_watchcat" \
+        "watchcat must expose stale ping cache and restart qmanager-ping"
+    require_rg_present "write_disabled_state" "$TARGET/scripts/usr/bin/qmanager_watchcat" \
+        "watchcat must write disabled state on UI/service disable"
+    require_rg_present "state=\"ping_\\$\\{ping_status\\}\"" "$TARGET/scripts/usr/bin/qmanager_watchcat" \
+        "watchcat must report ping_missing/stale/invalid degraded states"
     require_rg_present "qmanager_iptables" "$TARGET/scripts/usr/lib/qmanager/platform.sh" \
         "platform.sh must call qmanager_iptables helper (AI-62 phase 2)"
     [ -x "$TARGET/scripts/usr/bin/qmanager_iptables" ] \
