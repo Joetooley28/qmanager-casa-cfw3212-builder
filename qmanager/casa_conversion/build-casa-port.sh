@@ -700,6 +700,7 @@ patch_qmanager_poller() {
     "$py_bin" - "$poller" <<'PY'
 import os
 from pathlib import Path
+import re
 import sys
 import re
 
@@ -3781,8 +3782,9 @@ patch_casa_watchdog_ui_single_sim_cfw3212() {
     [ -f "$watchdog_card" ] || fail "Target missing watchdog-settings-card.tsx"
     [ -f "$profile_page" ] || fail "Target missing custom-profile.tsx"
 
-    python3 - "$watchdog_cgi" "$watchdog_card" "$profile_page" <<'PY'
+	    python3 - "$watchdog_cgi" "$watchdog_card" "$profile_page" <<'PY'
 from pathlib import Path
+import re
 import sys
 
 watchdog_cgi, watchdog_card, profile_page = map(Path, sys.argv[1:4])
@@ -3857,41 +3859,15 @@ text = text.replace(
 ''',
     1,
 )
-text = text.replace(
-    '''                <div aria-live="polite">
-                  {tier3Enabled && (
-                    <Field>
-                      <FieldLabel htmlFor="backup-sim-slot">
-                        Backup SIM Slot
-                      </FieldLabel>
-                      <Select
-                        value={backupSimSlot}
-                        onValueChange={setBackupSimSlot}
-                        disabled={!isEnabled}
-                      >
-                        <SelectTrigger
-                          id="backup-sim-slot"
-                          className="max-w-sm"
-                        >
-                          <SelectValue placeholder="Select backup slot" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="1">Slot 1</SelectItem>
-                          <SelectItem value="2">Slot 2</SelectItem>
-                        </SelectContent>
-                      </Select>
-                      <FieldDescription>
-                        The watchdog switches to this SIM if earlier recovery
-                        tiers fail.
-                      </FieldDescription>
-                    </Field>
-                  )}
-                </div>
-
-''',
-    '',
-    1,
+text, backup_count = re.subn(
+    r'\n                <div aria-live="polite">\n                  \{tier3Enabled && \(\n                    <Field>\n                      <FieldLabel htmlFor="backup-sim-slot">.*?\n                </div>\n',
+    '\n',
+    text,
+    count=1,
+    flags=re.S,
 )
+if backup_count != 1:
+    raise SystemExit("Watchdog backup SIM slot block not found")
 text = text.replace(
     '''                <Field orientation="horizontal" className="w-fit">
                   <FieldLabel htmlFor="tier3-enabled">
