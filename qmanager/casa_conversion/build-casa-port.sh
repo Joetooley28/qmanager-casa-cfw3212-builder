@@ -1698,14 +1698,8 @@ text = text.replace(
     _revert_iccid=$(qcmd 'AT+QCCID' 2>/dev/null | grep '+QCCID:' | sed 's/+QCCID: //g' | tr -d '\\r ')
     [ -n "$_revert_iccid" ] && auto_apply_profile "$_revert_iccid" "watchdog_revert"
 ''',
-    '''    # Casa CFW-3212: ICCID profile auto-apply is user controlled.
-    local _revert_iccid
-    _revert_iccid=$(qcmd 'AT+QCCID' 2>/dev/null | grep '+QCCID:' | sed 's/+QCCID: //g' | tr -d '\\r ')
-    if [ -n "$_revert_iccid" ] && profile_auto_apply_enabled; then
-        auto_apply_profile "$_revert_iccid" "watchdog_revert"
-    else
-        qlog_info "Casa profile auto-apply disabled after watchdog SIM revert"
-    fi
+    '''    # Casa CFW-3212 is single-SIM hardware; Watchdog SIM recovery is disabled.
+    qlog_info "Casa Watchdog SIM revert skipped on single-SIM hardware"
 ''',
 )
 text = text.replace(
@@ -1714,12 +1708,8 @@ text = text.replace(
                 auto_apply_profile "$curr_iccid" "watchdog"
             fi
 ''',
-    '''            # Casa CFW-3212: ICCID profile auto-apply is user controlled.
-            if [ -n "$curr_iccid" ] && profile_auto_apply_enabled; then
-                auto_apply_profile "$curr_iccid" "watchdog"
-            else
-                qlog_info "Casa profile auto-apply disabled after watchdog SIM failover"
-            fi
+    '''            # Casa CFW-3212 is single-SIM hardware; Watchdog SIM failover is disabled.
+            qlog_info "Casa Watchdog SIM failover profile apply skipped on single-SIM hardware"
 ''',
 )
 watchcat.write_text(text)
@@ -1728,7 +1718,7 @@ text = sim_types.read_text()
 if 'auto_apply_enabled' not in text:
     text = text.replace(
         '  active_profile_id: string | null;\n',
-        '  active_profile_id: string | null;\n  /** Whether ICCID-matched profiles auto-apply on boot/SIM switch/watchdog SIM recovery */\n  auto_apply_enabled?: boolean;\n',
+        '  active_profile_id: string | null;\n  /** Whether ICCID-matched profiles auto-apply on boot and user SIM-switch actions */\n  auto_apply_enabled?: boolean;\n',
         1,
     )
 sim_types.write_text(text)
@@ -1960,10 +1950,10 @@ EOF
         || fail "Could not add profile auto-apply runtime setting"
     grep -q "profile_auto_apply_enabled" "$settings_sh" \
         || fail "Could not add SIM-switch profile auto-apply toggle check"
-    grep -q "Casa profile auto-apply disabled after watchdog SIM revert" "$watchcat" \
-        || fail "Could not add watchdog revert profile auto-apply toggle check"
-    grep -q "Casa profile auto-apply disabled after watchdog SIM failover" "$watchcat" \
-        || fail "Could not add watchdog failover profile auto-apply toggle check"
+    grep -q "Casa Watchdog SIM revert skipped on single-SIM hardware" "$watchcat" \
+        || fail "Could not disable watchdog revert profile auto-apply"
+    grep -q "Casa Watchdog SIM failover profile apply skipped on single-SIM hardware" "$watchcat" \
+        || fail "Could not disable watchdog failover profile auto-apply"
     grep -q "autoApplyEnabled" "$sim_hook" \
         || fail "Could not add SIM profile auto-apply hook state"
     grep -q "aria-label=\"Toggle ICCID auto-apply\"" "$profile_page" \
@@ -3645,6 +3635,308 @@ PY
         || fail "Could not apply Casa watchcat tier1 reconnect patch"
     grep -q 'QManager watchcat tier4 recovery' "$watchcat" \
         || fail "Could not apply Casa watchcat tier4 reboot patch"
+}
+
+patch_casa_watchcat_single_sim_cfw3212() {
+    # CFW-3212 Casa hardware has one SIM slot. Keep the upstream Watchdog Tier 3
+    # symbols for config/state compatibility, but make the generated daemon
+    # ignore tier3_enabled and remove every SIM-switch command path.
+    local watchcat="$TARGET/scripts/usr/bin/qmanager_watchcat"
+    [ -f "$watchcat" ] || return 0
+
+    python3 - "$watchcat" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+
+old_config = '''    val=$(qm_config_get watchcat tier3_enabled "")
+    [ -n "$val" ] && CFG_TIER3_ENABLED="$val"
+'''
+new_config = '''    val=$(qm_config_get watchcat tier3_enabled "")
+    [ -n "$val" ] && CFG_TIER3_ENABLED="$val"
+    # Casa CFW-3212 is single-SIM hardware; never allow Watchdog SIM failover.
+    CFG_TIER3_ENABLED=0
+'''
+if "never allow Watchdog SIM failover" not in text:
+    if old_config not in text:
+        raise SystemExit("watchcat tier3 config block not found")
+    text = text.replace(old_config, new_config, 1)
+
+text = text.replace(
+    "#   Tier 3: SIM failover (AT+QUIMSLOT) — Golden Rule sequence\n",
+    "#   Tier 3: SIM failover — disabled on Casa CFW-3212 single-SIM hardware\n",
+)
+
+replacement = '''execute_tier3() {
+    qlog_info "TIER 3: SIM failover skipped on Casa CFW-3212 single-SIM hardware"
+    append_event "sim_failover" "Watchcat: SIM failover skipped on Casa single-SIM hardware" "info"
+    sim_failover_active="false"
+    original_sim_slot="null"
+    current_sim_slot="null"
+    rm -f "$SIM_FAILOVER_FILE" "$REVERT_FLAG"
+    return 1
+}
+
+# Fallback: Casa CFW-3212 has no alternate SIM slot to revert from.
+sim_failover_fallback() {
+    qlog_info "SIM failover fallback skipped on Casa CFW-3212 single-SIM hardware"
+    sim_failover_active="false"
+    original_sim_slot="null"
+    current_sim_slot="null"
+    rm -f "$SIM_FAILOVER_FILE" "$REVERT_FLAG"
+    return 1
+}
+
+'''
+pattern = r'execute_tier3\(\) \{.*?\n\}\n\n# Fallback: revert SIM to original slot\nsim_failover_fallback\(\) \{.*?\n\}\n\n'
+text, count = re.subn(pattern, replacement, text, count=1, flags=re.S)
+if count != 1:
+    raise SystemExit("watchcat tier3/fallback function block not found")
+
+old_finalize = '''        # If this was Tier 3 SIM failover, finalize the failover state
+        if [ "$current_tier" -eq 3 ] && [ "$current_sim_slot" != "$original_sim_slot" ] && [ "$original_sim_slot" != "null" ]; then
+            sim_failover_active="true"
+
+            # Read ICCIDs for the state file
+            local orig_iccid curr_iccid_raw curr_iccid
+            orig_iccid=""  # we don't have it cached
+            curr_iccid_raw=$(qcmd 'AT+QCCID' 2>/dev/null)
+            curr_iccid=$(printf '%s' "$curr_iccid_raw" | grep '+QCCID:' | sed 's/+QCCID: //g' | tr -d '\\r ')
+
+            local ts
+            ts=$(date +%s)
+            printf '{"active":true,"original_slot":%s,"current_slot":%s,"switched_at":%d,"reason":"connectivity_failure","original_iccid":"","current_iccid":"%s"}\\n' \\
+                "$original_sim_slot" "$current_sim_slot" "$ts" "$curr_iccid" \\
+                > "$SIM_FAILOVER_FILE"
+
+            qlog_info "SIM failover state saved: slot $original_sim_slot → $current_sim_slot"
+
+            # Casa CFW-3212 is single-SIM hardware; Watchdog SIM failover is disabled.
+            qlog_info "Casa Watchdog SIM failover profile apply skipped on single-SIM hardware"
+        fi
+'''
+new_finalize = '''        # Casa CFW-3212 is single-SIM hardware; never finalize Watchdog SIM failover state.
+        if [ "$current_tier" -eq 3 ]; then
+            sim_failover_active="false"
+            original_sim_slot="null"
+            current_sim_slot="null"
+            rm -f "$SIM_FAILOVER_FILE" "$REVERT_FLAG"
+        fi
+'''
+if old_finalize in text:
+    text = text.replace(old_finalize, new_finalize, 1)
+else:
+    raise SystemExit("watchcat tier3 cooldown finalization block not found")
+
+old_stale = '''    # Check for stale SIM failover state from before reboot
+    if [ -f "$SIM_FAILOVER_FILE" ]; then
+        local sf_active_val
+        sf_active_val=$(jq -r '(.active) | if . == null then "false" else tostring end' "$SIM_FAILOVER_FILE" 2>/dev/null)
+        if [ "$sf_active_val" = "true" ]; then
+            sim_failover_active="true"
+            original_sim_slot=$(jq -r '(.original_slot) | if . == null then "null" else tostring end' "$SIM_FAILOVER_FILE" 2>/dev/null)
+            current_sim_slot=$(jq -r '(.current_slot) | if . == null then "null" else tostring end' "$SIM_FAILOVER_FILE" 2>/dev/null)
+            qlog_info "Resuming SIM failover state: slot $original_sim_slot → $current_sim_slot"
+        fi
+    fi
+'''
+new_stale = '''    # Casa CFW-3212 is single-SIM hardware; discard stale upstream SIM failover state.
+    if [ -f "$SIM_FAILOVER_FILE" ]; then
+        qlog_info "Discarding stale SIM failover state on Casa single-SIM hardware"
+        rm -f "$SIM_FAILOVER_FILE" "$REVERT_FLAG"
+    fi
+'''
+if old_stale in text:
+    text = text.replace(old_stale, new_stale, 1)
+else:
+    raise SystemExit("watchcat stale sim failover state block not found")
+
+path.write_text(text)
+PY
+
+    grep -q 'never allow Watchdog SIM failover' "$watchcat" \
+        || fail "Could not force Casa watchcat tier3 disabled"
+    grep -q 'SIM failover skipped on Casa CFW-3212 single-SIM hardware' "$watchcat" \
+        || fail "Could not replace Casa watchcat tier3 with single-SIM no-op"
+    if grep -q 'AT+QUIMSLOT' "$watchcat"; then
+        fail "Casa watchcat still contains SIM slot switching commands"
+    fi
+    if grep -q 'auto_apply_profile .*watchdog' "$watchcat"; then
+        fail "Casa watchcat still contains Watchdog-origin SIM profile auto-apply"
+    fi
+}
+
+patch_casa_watchdog_ui_single_sim_cfw3212() {
+    # Match the Watchdog UI/API to Casa single-SIM behavior. The backend daemon
+    # already ignores Tier 3; this prevents a saved-looking control from
+    # implying that backup-SIM recovery exists on CFW-3212.
+    local watchdog_cgi="$TARGET/scripts/www/cgi-bin/quecmanager/monitoring/watchdog.sh"
+    local watchdog_card="$TARGET/components/monitoring/watchdog/watchdog-settings-card.tsx"
+    local profile_page="$TARGET/components/cellular/custom-profiles/custom-profile.tsx"
+
+    [ -f "$watchdog_cgi" ] || fail "Target missing monitoring/watchdog.sh"
+    [ -f "$watchdog_card" ] || fail "Target missing watchdog-settings-card.tsx"
+    [ -f "$profile_page" ] || fail "Target missing custom-profile.tsx"
+
+    python3 - "$watchdog_cgi" "$watchdog_card" "$profile_page" <<'PY'
+from pathlib import Path
+import sys
+
+watchdog_cgi, watchdog_card, profile_page = map(Path, sys.argv[1:4])
+
+text = watchdog_cgi.read_text()
+text = text.replace(
+    '''    tier3=$(qm_config_get watchcat tier3_enabled 0)
+    tier4=$(qm_config_get watchcat tier4_enabled 1)
+    backup_sim=$(qm_config_get watchcat backup_sim_slot "")
+''',
+    '''    tier3=0  # Casa CFW-3212 single-SIM hardware: Watchdog SIM failover unavailable.
+    tier4=$(qm_config_get watchcat tier4_enabled 1)
+    backup_sim=""
+''',
+    1,
+)
+text = text.replace(
+    '''    # Read SIM failover state
+    sim_failover_json='{"active":false}'
+    if [ -f "$SIM_FAILOVER_FILE" ]; then
+        sim_failover_json=$(cat "$SIM_FAILOVER_FILE" 2>/dev/null)
+    fi
+''',
+    '''    # Casa CFW-3212 single-SIM hardware: ignore stale upstream SIM failover state.
+    sim_failover_json='{"active":false}'
+    rm -f "$SIM_FAILOVER_FILE" "$REVERT_FLAG" 2>/dev/null || true
+''',
+    1,
+)
+text = text.replace(
+    '''        val=$(printf '%s' "$POST_DATA" | jq -r '.tier3_enabled | if . == null then empty else tostring end')
+        if [ -n "$val" ]; then
+            case "$val" in true) qm_config_set watchcat tier3_enabled 1 ;; false) qm_config_set watchcat tier3_enabled 0 ;; esac
+        fi
+''',
+    '''        # Casa CFW-3212 single-SIM hardware: never persist Watchdog SIM failover enabled.
+        qm_config_set watchcat tier3_enabled 0
+''',
+    1,
+)
+text = text.replace(
+    '''        val=$(printf '%s' "$POST_DATA" | jq -r '.backup_sim_slot // empty')
+        if [ -n "$val" ] && [ "$val" != "null" ]; then
+            qm_config_set watchcat backup_sim_slot "$val"
+        else
+            qm_config_set watchcat backup_sim_slot ""
+        fi
+''',
+    '''        # Casa CFW-3212 single-SIM hardware: no backup SIM slot exists.
+        qm_config_set watchcat backup_sim_slot ""
+''',
+    1,
+)
+watchdog_cgi.write_text(text)
+
+text = watchdog_card.read_text()
+text = text.replace(
+    '''  const [tier3Enabled, setTier3Enabled] = useState(
+    settings?.tier3_enabled ?? false,
+  );
+''',
+    '''  const tier3Enabled = false;
+''',
+    1,
+)
+text = text.replace(
+    '''  const [backupSimSlot, setBackupSimSlot] = useState<string>(
+    settings?.backup_sim_slot != null ? String(settings.backup_sim_slot) : "",
+  );
+''',
+    '''  const backupSimSlot = "";
+''',
+    1,
+)
+text = text.replace(
+    '''                <div aria-live="polite">
+                  {tier3Enabled && (
+                    <Field>
+                      <FieldLabel htmlFor="backup-sim-slot">
+                        Backup SIM Slot
+                      </FieldLabel>
+                      <Select
+                        value={backupSimSlot}
+                        onValueChange={setBackupSimSlot}
+                        disabled={!isEnabled}
+                      >
+                        <SelectTrigger
+                          id="backup-sim-slot"
+                          className="max-w-sm"
+                        >
+                          <SelectValue placeholder="Select backup slot" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="1">Slot 1</SelectItem>
+                          <SelectItem value="2">Slot 2</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <FieldDescription>
+                        The watchdog switches to this SIM if earlier recovery
+                        tiers fail.
+                      </FieldDescription>
+                    </Field>
+                  )}
+                </div>
+
+''',
+    '',
+    1,
+)
+text = text.replace(
+    '''                <Field orientation="horizontal" className="w-fit">
+                  <FieldLabel htmlFor="tier3-enabled">
+                    Switch to Backup SIM
+                  </FieldLabel>
+                  <Switch
+                    id="tier3-enabled"
+                    checked={tier3Enabled}
+                    onCheckedChange={setTier3Enabled}
+                    disabled={!isEnabled}
+                  />
+                </Field>
+
+''',
+    '''                <Field>
+                  <FieldLabel>Backup SIM Recovery</FieldLabel>
+                  <FieldDescription>
+                    Disabled on Casa CFW-3212 single-SIM hardware.
+                  </FieldDescription>
+                </Field>
+
+''',
+    1,
+)
+watchdog_card.write_text(text)
+
+text = profile_page.read_text()
+text = text.replace(
+    "Apply matching profiles on boot, SIM switch, and Watchdog SIM recovery.",
+    "Apply matching profiles on boot and user SIM-switch actions.",
+)
+profile_page.write_text(text)
+PY
+
+    grep -q 'tier3=0  # Casa CFW-3212 single-SIM hardware' "$watchdog_cgi" \
+        || fail "Could not force Watchdog CGI tier3 unavailable"
+    grep -q 'never persist Watchdog SIM failover enabled' "$watchdog_cgi" \
+        || fail "Could not force Watchdog CGI tier3 saves off"
+    grep -q 'Disabled on Casa CFW-3212 single-SIM hardware' "$watchdog_card" \
+        || fail "Could not replace Watchdog backup SIM UI"
+    if grep -q 'onCheckedChange={setTier3Enabled}' "$watchdog_card"; then
+        fail "Watchdog backup SIM toggle still present"
+    fi
+    grep -q 'Apply matching profiles on boot and user SIM-switch actions' "$profile_page" \
+        || fail "Could not update ICCID auto-apply UI copy"
 }
 
 patch_casa_watchcat_ping_health_cfw3212() {
@@ -6080,6 +6372,8 @@ apply_casa_overlays() {
     patch_casa_reboot
     patch_casa_scheduled_reboot_cfw3212
     patch_casa_watchcat_tiers
+    patch_casa_watchcat_single_sim_cfw3212
+    patch_casa_watchdog_ui_single_sim_cfw3212
     patch_casa_watchcat_ping_health_cfw3212
     copy_template_or_fallback "components/nav-user.tsx" "$TEMPLATE_DIR/components/nav-user.tsx"
     copy_template_or_fallback "components/monitoring/software-update/update-preferences-card.tsx" "$TEMPLATE_DIR/components/monitoring/software-update/update-preferences-card.tsx"
