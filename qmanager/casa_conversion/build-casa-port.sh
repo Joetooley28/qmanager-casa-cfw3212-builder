@@ -2886,6 +2886,35 @@ if 'cron_spool_unavailable' not in settings:
         raise SystemExit("scheduled reboot spool marker not found")
     settings = settings.replace(spool_marker, spool_block, 1)
 
+old_cleaned_cron = '''        cleaned_cron=$(printf '%s\\n' "$current_cron" | grep -v "$CRON_MARKER")
+'''
+new_cleaned_cron = '''        CRON_HEADER="# QManager Scheduled Reboot — DO NOT EDIT MANUALLY"
+        cleaned_cron=$(printf '%s\\n' "$current_cron" \
+            | grep -v "$CRON_MARKER" \
+            | grep -Fvx "$CRON_HEADER" \
+            | sed '/^[[:space:]]*$/d')
+'''
+if old_cleaned_cron not in settings:
+    raise SystemExit("scheduled reboot cleaned_cron block not found")
+settings = settings.replace(old_cleaned_cron, new_cleaned_cron, 1)
+
+old_new_cron = '''            new_cron="${cleaned_cron}
+# QManager Scheduled Reboot — DO NOT EDIT MANUALLY
+${sched_min} ${sched_hour} * * ${DAYS_RAW} ${SCHEDULE_SCRIPT}  # ${CRON_MARKER}"
+'''
+new_new_cron = '''            if [ -n "$cleaned_cron" ]; then
+                new_cron="${cleaned_cron}
+${CRON_HEADER}
+${sched_min} ${sched_hour} * * ${DAYS_RAW} ${SCHEDULE_SCRIPT}  # ${CRON_MARKER}"
+            else
+                new_cron="${CRON_HEADER}
+${sched_min} ${sched_hour} * * ${DAYS_RAW} ${SCHEDULE_SCRIPT}  # ${CRON_MARKER}"
+            fi
+'''
+if old_new_cron not in settings:
+    raise SystemExit("scheduled reboot new_cron block not found")
+settings = settings.replace(old_new_cron, new_new_cron, 1)
+
 old_enable_write = '''            printf '%s\\n' "$new_cron" > "$CRON_FILE"
             qlog_info "Scheduled reboot cron installed: ${SCHED_TIME} days=${DAYS_RAW}"
 '''
