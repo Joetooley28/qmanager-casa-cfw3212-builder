@@ -25,6 +25,8 @@
 - Tightens Tailscale sudo access from the web UI. The UI no longer gets blanket permission to run the Tailscale binary as root; it now goes through a small helper that only allows the Tailscale actions QManager uses, such as status, connect, disconnect, logout, and the Tailscale SSH toggle.
 - The Terminals sidebar dropdown now explicitly shows both **AT Terminal** and **Web Console**. Previously AT Terminal was hidden behind the parent "Terminals" row, which made it look like the AT Terminal page had disappeared.
 - Fixes **System Settings → Scheduled Reboot** on Casa. Saving the reboot schedule now makes sure the cron spool exists before writing the root cron entry, fails with a real error instead of silently pretending success if the cron file cannot be written, and ensures BusyBox `crond` is running so the scheduled reboot job can actually fire.
+- Scheduled Reboot times now follow the **System Settings timezone** (the same timezone selector on that page). BusyBox `crond` is started and reloaded with QManager's configured `TZ` after each schedule save, so a reboot set for `10:33` fires at 10:33 local time instead of being interpreted as UTC.
+- SSH password changes (onboarding and System Settings) now use **SHA512-crypt** (`openssl passwd -6`) instead of the older MD5-crypt hash.
 
 ## v0.1.12-cfw3212.21
 

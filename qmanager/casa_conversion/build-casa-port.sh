@@ -2531,6 +2531,27 @@ PY
     log "Installed qmanager_tailscale_cli helper and patched tailscale.sh"
 }
 
+patch_ai62_ssh_password_sha512_cfw3212() {
+    local helper="$TARGET/scripts/usr/bin/qmanager_set_ssh_password"
+    [ -f "$helper" ] || fail "Target missing qmanager_set_ssh_password"
+
+    if grep -q 'openssl passwd -6' "$helper"; then
+        log "qmanager_set_ssh_password already uses SHA512-crypt"
+        return 0
+    fi
+
+    grep -q 'openssl passwd -1' "$helper" \
+        || fail "qmanager_set_ssh_password missing expected MD5-crypt hash line"
+
+    sed -i 's/openssl passwd -1/openssl passwd -6/g' "$helper"
+    sed -i 's/MD5-crypt/SHA512-crypt/g' "$helper"
+    sed -i 's/\$1\$/\$6\$/g' "$helper"
+
+    grep -q 'openssl passwd -6' "$helper" \
+        || fail "Could not patch qmanager_set_ssh_password to SHA512-crypt"
+    log "Patched qmanager_set_ssh_password to SHA512-crypt (openssl passwd -6)"
+}
+
 patch_ai62_sudoers_narrowing_cfw3212() {
     local sudoers="$TARGET/scripts/etc/sudoers.d/qmanager"
 
@@ -2961,18 +2982,60 @@ if '/etc/qmanager/crontabs' not in setup:
         raise SystemExit("qmanager_setup cron directory block not found")
 
 setup_marker = '# Secure auth config\n'
-setup_block = '''# Casa does not reliably ship a managed cron service, so ensure BusyBox crond
+setup_crond_block = '''# Casa does not reliably ship a managed cron service, so ensure BusyBox crond
+# runs in QManager's configured timezone (Scheduled Reboot uses wall-clock times).
+. /usrdata/qmanager/lib/system_config.sh 2>/dev/null || true
+if command -v sys_get_timezone >/dev/null 2>&1; then
+    export TZ="$(sys_get_timezone)"
+fi
+if command -v crond >/dev/null 2>&1; then
+    if pidof crond >/dev/null 2>&1; then
+        killall crond 2>/dev/null || true
+    fi
+    crond -c /etc/qmanager/crontabs >/dev/null 2>&1 || true
+fi
+
+'''
+setup_block = setup_crond_block + '# Secure auth config\n'
+if 'crond -c /etc/qmanager/crontabs' not in setup:
+    if setup_marker not in setup:
+        raise SystemExit("qmanager_setup secure auth marker not found")
+    setup = setup.replace(setup_marker, setup_block, 1)
+else:
+    old_crond_start = '''# Casa does not reliably ship a managed cron service, so ensure BusyBox crond
 # is available to execute Scheduled Reboot entries after boot/install.
 if command -v crond >/dev/null 2>&1 && ! pidof crond >/dev/null 2>&1; then
     crond -c /etc/qmanager/crontabs >/dev/null 2>&1 || true
 fi
 
-# Secure auth config
 '''
-if 'crond -c /etc/qmanager/crontabs' not in setup:
-    if setup_marker not in setup:
-        raise SystemExit("qmanager_setup secure auth marker not found")
-    setup = setup.replace(setup_marker, setup_block, 1)
+    if 'sys_get_timezone' not in setup and old_crond_start in setup:
+        setup = setup.replace(old_crond_start, setup_crond_block, 1)
+
+old_sched_reload = '''            qlog_info "Scheduled reboot cron entries removed"
+        fi
+
+        # Build response
+        DAYS_RESP=$(printf '%s' "$DAYS_RAW" | jq -Rc 'split(",") | map(tonumber)' 2>/dev/null)
+'''
+new_sched_reload = '''            qlog_info "Scheduled reboot cron entries removed"
+        fi
+
+        # Reload crond with QManager timezone so schedule times match System Settings.
+        . /usrdata/qmanager/lib/system_config.sh 2>/dev/null || true
+        if command -v sys_get_timezone >/dev/null 2>&1; then
+            export TZ="$(sys_get_timezone)"
+        fi
+        if command -v crond >/dev/null 2>&1; then
+            killall crond 2>/dev/null || true
+            crond -c /etc/qmanager/crontabs >/dev/null 2>&1 || true
+        fi
+
+        # Build response
+        DAYS_RESP=$(printf '%s' "$DAYS_RAW" | jq -Rc 'split(",") | map(tonumber)' 2>/dev/null)
+'''
+if 'sys_get_timezone' not in settings and old_sched_reload in settings:
+    settings = settings.replace(old_sched_reload, new_sched_reload, 1)
 
 settings_path.write_text(settings)
 setup_path.write_text(setup)
@@ -2990,6 +3053,10 @@ PY
         || fail "Could not move Scheduled Reboot cron storage into /etc/qmanager"
     grep -q 'crond -c /etc/qmanager/crontabs' "$setup" \
         || fail "Could not add qmanager_setup crond startup"
+    grep -q 'sys_get_timezone' "$setup" \
+        || fail "Could not add timezone-aware crond startup to qmanager_setup"
+    grep -q 'sys_get_timezone' "$settings_sh" \
+        || fail "Could not add timezone-aware crond reload to settings.sh"
 }
 
 patch_casa_watchcat_tiers() {
@@ -5228,6 +5295,7 @@ apply_casa_overlays() {
     patch_onboarding_normalize_defaults_cfw3212
     patch_ai62_qmanager_iptables_helper_cfw3212
     patch_ai62_qmanager_tailscale_cli_helper_cfw3212
+    patch_ai62_ssh_password_sha512_cfw3212
     patch_ai62_sudoers_narrowing_cfw3212
     patch_qmanager_display_version
     patch_casa_display_name
