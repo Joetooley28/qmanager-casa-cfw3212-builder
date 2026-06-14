@@ -2943,6 +2943,10 @@ new_enable_write = '''            if ! printf '%s\\n' "$new_cron" > "$CRON_FILE"
                 cgi_error "cron_write_failed" "Could not write scheduled reboot cron entry"
                 exit 0
             fi
+            # BusyBox crond (1.31.1) silently ignores crontab files not owned by
+            # root. CGIs run as root here; a "> $CRON_FILE" truncate preserves an
+            # existing www-data owner from older builds, so force root ownership.
+            chown root:root "$CRON_FILE" 2>/dev/null || true
             qlog_info "Scheduled reboot cron installed: ${SCHED_TIME} days=${DAYS_RAW}"
 '''
 if 'cron_write_failed' not in settings:
@@ -2959,6 +2963,7 @@ new_disable_write = '''            if [ -n "$cleaned_cron" ]; then
                     cgi_error "cron_write_failed" "Could not write scheduled reboot cron entry"
                     exit 0
                 fi
+                chown root:root "$CRON_FILE" 2>/dev/null || true
             else
 '''
 if old_disable_write not in settings:
@@ -2970,6 +2975,10 @@ new_setup_dirs = '''mkdir -p /var/lock /etc/qmanager /etc/qmanager/crontabs /usr
 # read-only /var/spool rootfs path.
 chown www-data:www-data /etc/qmanager/crontabs 2>/dev/null || true
 chmod 750 /etc/qmanager/crontabs 2>/dev/null || true
+# BusyBox crond silently ignores crontab files not owned by root. Repair the
+# crontab file's owner on upgrade (older builds left it www-data, which made
+# Scheduled Reboot never fire) before crond is (re)started below.
+[ -f /etc/qmanager/crontabs/root ] && chown root:root /etc/qmanager/crontabs/root 2>/dev/null || true
 '''
 if '/etc/qmanager/crontabs' not in setup:
     setup, replacements = re.subn(
