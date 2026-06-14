@@ -2889,16 +2889,19 @@ settings = settings.replace(
 )
 settings = settings.replace(
     'CRON_FILE="/var/spool/cron/crontabs/root"',
-    'CRON_FILE="/etc/qmanager/crontabs/root"',
+    'CRON_FILE="/usrdata/qmanager/crontabs/root"',
 )
 
 spool_marker = '        current_cron=$(cat "$CRON_FILE" 2>/dev/null || true)\n'
-spool_block = '''        mkdir -p /etc/qmanager/crontabs 2>/dev/null || {
+spool_block = '''        mkdir -p /usrdata/qmanager/crontabs 2>/dev/null || {
             cgi_error "cron_spool_unavailable" "Could not create scheduled reboot cron directory"
             exit 0
         }
-        chown www-data:www-data /etc/qmanager/crontabs 2>/dev/null || true
-        chmod 750 /etc/qmanager/crontabs 2>/dev/null || true
+        # crond requires the crontab file root-owned; CGIs run as root on Casa
+        # and the cron dir now lives on persistent /usrdata (plain ubifs, not the
+        # /etc overlay), so keep both dir and file root-owned.
+        chown root:root /usrdata/qmanager/crontabs 2>/dev/null || true
+        chmod 755 /usrdata/qmanager/crontabs 2>/dev/null || true
 
         current_cron=$(cat "$CRON_FILE" 2>/dev/null || true)
 '''
@@ -2970,17 +2973,21 @@ if old_disable_write not in settings:
     raise SystemExit("scheduled reboot disable write block not found")
 settings = settings.replace(old_disable_write, new_disable_write, 1)
 
-new_setup_dirs = '''mkdir -p /var/lock /etc/qmanager /etc/qmanager/crontabs /usrdata/qmanager/lib /tmp/quecmanager
-# Keep scheduled-task state on persistent writable storage instead of Casa's
-# read-only /var/spool rootfs path.
-chown www-data:www-data /etc/qmanager/crontabs 2>/dev/null || true
-chmod 750 /etc/qmanager/crontabs 2>/dev/null || true
-# BusyBox crond silently ignores crontab files not owned by root. Repair the
-# crontab file's owner on upgrade (older builds left it www-data, which made
-# Scheduled Reboot never fire) before crond is (re)started below.
-[ -f /etc/qmanager/crontabs/root ] && chown root:root /etc/qmanager/crontabs/root 2>/dev/null || true
+new_setup_dirs = '''mkdir -p /var/lock /etc/qmanager /usrdata/qmanager/crontabs /usrdata/qmanager/lib /tmp/quecmanager
+# Scheduled-task state lives on persistent /usrdata (plain ubifs) instead of
+# Casa's read-only /var/spool rootfs or the /etc overlay, whose writable layer
+# is not reliably in place during early boot.
+# Migrate any schedule from the previous /etc/qmanager/crontabs location.
+if [ -f /etc/qmanager/crontabs/root ] && [ ! -f /usrdata/qmanager/crontabs/root ]; then
+    cp /etc/qmanager/crontabs/root /usrdata/qmanager/crontabs/root 2>/dev/null || true
+fi
+# BusyBox crond silently ignores crontab files not owned by root; CGIs run as
+# root on Casa, so keep both dir and file root-owned.
+chown root:root /usrdata/qmanager/crontabs 2>/dev/null || true
+chmod 755 /usrdata/qmanager/crontabs 2>/dev/null || true
+[ -f /usrdata/qmanager/crontabs/root ] && chown root:root /usrdata/qmanager/crontabs/root 2>/dev/null || true
 '''
-if '/etc/qmanager/crontabs' not in setup:
+if '/usrdata/qmanager/crontabs' not in setup:
     setup, replacements = re.subn(
         r'''mkdir -p /var/lock /etc/qmanager (?:/usr/lib/qmanager|/usrdata/qmanager/lib) /tmp/quecmanager /var/spool/cron/crontabs\n# Keep the cron spool root-owned and non-world-writable while preserving\n# current CGI schedule writers that update root's crontab directly\.\nchown root:www-data /var/spool/cron /var/spool/cron/crontabs 2>/dev/null \|\| true\nchmod 775 /var/spool/cron /var/spool/cron/crontabs\n''',
         new_setup_dirs,
@@ -3007,16 +3014,15 @@ _qm_crond_start() {
         fi
     fi
     [ -n "$_qm_tz" ] && export TZ="$_qm_tz"
-    # BusyBox crond silently ignores crontab files not owned by root. The /etc
-    # overlay's persistent layer may not be in place during the early setup dir
-    # block, so repair ownership here — right before crond reads the file — to
-    # keep recurring Scheduled Reboots working across reboots.
-    [ -f /etc/qmanager/crontabs/root ] && chown root:root /etc/qmanager/crontabs/root 2>/dev/null || true
+    # BusyBox crond silently ignores crontab files not owned by root. Repair
+    # ownership here — right before crond reads the file — as defensive insurance
+    # so recurring Scheduled Reboots keep working across reboots.
+    [ -f /usrdata/qmanager/crontabs/root ] && chown root:root /usrdata/qmanager/crontabs/root 2>/dev/null || true
     if command -v crond >/dev/null 2>&1; then
         if pidof crond >/dev/null 2>&1; then
             killall crond 2>/dev/null || true
         fi
-        crond -c /etc/qmanager/crontabs >/dev/null 2>&1 || true
+        crond -c /usrdata/qmanager/crontabs >/dev/null 2>&1 || true
     fi
 }
 
@@ -3046,14 +3052,14 @@ if command -v crond >/dev/null 2>&1; then
     if pidof crond >/dev/null 2>&1; then
         killall crond 2>/dev/null || true
     fi
-    crond -c /etc/qmanager/crontabs >/dev/null 2>&1 || true
+    crond -c /usrdata/qmanager/crontabs >/dev/null 2>&1 || true
 fi
 
 '''
 old_crond_start = '''# Casa does not reliably ship a managed cron service, so ensure BusyBox crond
 # is available to execute Scheduled Reboot entries after boot/install.
 if command -v crond >/dev/null 2>&1 && ! pidof crond >/dev/null 2>&1; then
-    crond -c /etc/qmanager/crontabs >/dev/null 2>&1 || true
+    crond -c /usrdata/qmanager/crontabs >/dev/null 2>&1 || true
 fi
 
 '''
@@ -3107,7 +3113,7 @@ new_sched_reload = '''            qlog_info "Scheduled reboot cron entries remov
         [ -n "$_qm_tz" ] && export TZ="$_qm_tz"
         if command -v crond >/dev/null 2>&1; then
             killall crond 2>/dev/null || true
-            crond -c /etc/qmanager/crontabs >/dev/null 2>&1 || true
+            crond -c /usrdata/qmanager/crontabs >/dev/null 2>&1 || true
         fi
 
         # Build response
@@ -3120,7 +3126,7 @@ old_sched_reload_mid_v1 = '''        # Reload crond with QManager timezone so sc
         fi
         if command -v crond >/dev/null 2>&1; then
             killall crond 2>/dev/null || true
-            crond -c /etc/qmanager/crontabs >/dev/null 2>&1 || true
+            crond -c /usrdata/qmanager/crontabs >/dev/null 2>&1 || true
         fi
 
 '''
@@ -3139,7 +3145,7 @@ new_sched_reload_mid = '''        # Reload crond with QManager timezone so sched
         [ -n "$_qm_tz" ] && export TZ="$_qm_tz"
         if command -v crond >/dev/null 2>&1; then
             killall crond 2>/dev/null || true
-            crond -c /etc/qmanager/crontabs >/dev/null 2>&1 || true
+            crond -c /usrdata/qmanager/crontabs >/dev/null 2>&1 || true
         fi
 
 '''
@@ -3154,17 +3160,56 @@ settings_path.write_text(settings)
 setup_path.write_text(setup)
 PY
 
+    # Route the scheduled reboot through Casa's RDB managed-reset path so the
+    # reboot is logged with a real reason (like the System menu Reboot button)
+    # instead of a generic Warm-restart. rdb_set/rdb_get live in /usr/bin (on
+    # cron's PATH); fall back to a bare reboot when RDB is unavailable.
+    local sched_helper="$TARGET/scripts/usr/bin/qmanager_scheduled_reboot"
+    if [ -f "$sched_helper" ]; then
+        python3 - "$sched_helper" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+
+old = '''qlog_info "Scheduled system reboot triggered"
+reboot
+'''
+new = '''qlog_info "Scheduled system reboot triggered"
+# Prefer Casa's RDB managed reset (records a real reboot reason), matching the
+# System menu reboot button; fall back to a bare reboot when RDB is absent.
+if command -v rdb_set >/dev/null 2>&1 && command -v rdb_get >/dev/null 2>&1 && rdb_get service.system.reset >/dev/null 2>&1; then
+    rdb_set service.system.reset_reason "QManager scheduled reboot"
+    rdb_set service.system.reset.delay 5
+    rdb_set service.system.reset 1
+else
+    _reboot_cmd="reboot"
+    command -v run_reboot >/dev/null 2>&1 && _reboot_cmd="run_reboot"
+    $_reboot_cmd
+fi
+'''
+if 'QManager scheduled reboot' not in text:
+    if old not in text:
+        raise SystemExit("scheduled_reboot helper bare reboot line not found")
+    text = text.replace(old, new, 1)
+    path.write_text(text)
+PY
+        grep -q 'QManager scheduled reboot' "$sched_helper" \
+            || fail "Could not apply Casa RDB reset path to scheduled reboot helper"
+    fi
+
     grep -q '/usrdata/bin/qmanager_scheduled_reboot' "$settings_sh" \
         || fail "Could not align Scheduled Reboot helper path to Casa /usrdata/bin"
-    grep -q '/etc/qmanager/crontabs/root' "$settings_sh" \
+    grep -q '/usrdata/qmanager/crontabs/root' "$settings_sh" \
         || fail "Could not move Scheduled Reboot cron file to persistent Casa storage"
     grep -q 'cron_spool_unavailable' "$settings_sh" \
         || fail "Could not add Scheduled Reboot cron directory creation guard"
     grep -q 'cron_write_failed' "$settings_sh" \
         || fail "Could not make Scheduled Reboot cron writes fail loudly"
-    grep -q '/etc/qmanager/crontabs' "$setup" \
-        || fail "Could not move Scheduled Reboot cron storage into /etc/qmanager"
-    grep -q 'crond -c /etc/qmanager/crontabs' "$setup" \
+    grep -q '/usrdata/qmanager/crontabs' "$setup" \
+        || fail "Could not move Scheduled Reboot cron storage into /usrdata/qmanager"
+    grep -q 'crond -c /usrdata/qmanager/crontabs' "$setup" \
         || fail "Could not add qmanager_setup crond startup"
     grep -q '_qm_crond_start' "$setup" \
         || fail "Could not add timezone-aware crond startup to qmanager_setup"
@@ -5654,9 +5699,9 @@ safety_checks() {
         "CGI auth library fallback must fail closed"
     require_rg_present "QM_MAX_POST_SIZE:=65536" "$TARGET/scripts/usr/lib/qmanager/cgi_base.sh" \
         "CGI POST body reader must enforce default size limit"
-    require_rg_present "/etc/qmanager/crontabs" "$TARGET/scripts/usr/bin/qmanager_setup" \
+    require_rg_present "/usrdata/qmanager/crontabs" "$TARGET/scripts/usr/bin/qmanager_setup" \
         "qmanager_setup must store Scheduled Reboot cron data in writable persistent QManager storage"
-    require_rg_present "crond -c /etc/qmanager/crontabs" "$TARGET/scripts/usr/bin/qmanager_setup" \
+    require_rg_present "crond -c /usrdata/qmanager/crontabs" "$TARGET/scripts/usr/bin/qmanager_setup" \
         "qmanager_setup must ensure BusyBox crond is running for Scheduled Reboot"
     require_rg_present "find /etc/qmanager -type d -exec chmod 750" "$TARGET/scripts/usr/bin/qmanager_setup" \
         "qmanager_setup must restrict /etc/qmanager directory permissions"
@@ -5664,7 +5709,7 @@ safety_checks() {
         "qmanager_setup must restrict /etc/qmanager file permissions"
     require_rg_present '/usrdata/bin/qmanager_scheduled_reboot' "$TARGET/scripts/www/cgi-bin/quecmanager/system/settings.sh" \
         "Scheduled Reboot must target the Casa-installed helper path"
-    require_rg_present '/etc/qmanager/crontabs/root' "$TARGET/scripts/www/cgi-bin/quecmanager/system/settings.sh" \
+    require_rg_present '/usrdata/qmanager/crontabs/root' "$TARGET/scripts/www/cgi-bin/quecmanager/system/settings.sh" \
         "Scheduled Reboot must write cron entries to persistent writable Casa storage"
     require_rg_present 'cron_spool_unavailable' "$TARGET/scripts/www/cgi-bin/quecmanager/system/settings.sh" \
         "Scheduled Reboot must fail if the cron spool cannot be prepared"
