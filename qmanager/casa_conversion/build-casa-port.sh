@@ -1936,7 +1936,8 @@ if [ "$REQUEST_METHOD" = "GET" ]; then
 fi
 
 if [ "$REQUEST_METHOD" = "POST" ]; then
-    input=$(cgi_read_post)
+    cgi_read_post
+    input="$POST_DATA"
     enabled=$(printf '%s' "$input" | jq -r '.enabled // false' 2>/dev/null || echo false)
     case "$enabled" in
         true|1|yes|on) enabled=true ;;
