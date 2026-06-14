@@ -116,7 +116,11 @@ repeated installs.
   - requires the matching `.sha256` asset and verifies it with SHA-256;
   - installs only after user confirmation.
 - Auto-update remains disabled for Casa CFW-3212.
-- Boot profile auto-apply disabled in `qmanager_poller`.
+- ICCID-matched SIM Profile auto-apply is exposed as a runtime user toggle on
+  the SIM Profiles page. It remains off by default, and when enabled applies
+  matching profiles at boot and after user SIM-switch actions.
+- Watchdog backup-SIM recovery is disabled on Casa CFW-3212 single-SIM hardware.
+  Tier 3 is forced off even if stale config says it is enabled.
 - System Health Check worker (`qmanager_health_check`): Casa binary paths
   (`/usrdata/bin`, `/usrdata/opt/bin`), sudoers and systemd locations,
   lighttpd listener checks on `9080`/`9000`, CGI PATH checks for
@@ -125,8 +129,9 @@ repeated installs.
   non-overlapping pass so sudoers rewrites do not cascade.
 
 The converter patches `qmanager_poller` surgically so future upstream poller
-changes are preserved where possible. The Casa poller patch only separates
-unsupported boot-time modem reads and disables profile auto-apply.
+changes are preserved where possible. The Casa poller patch separates
+unsupported boot-time modem reads and gates ICCID-matched profile auto-apply
+behind the SIM Profiles UI setting.
 
 Most rootfs path conversion is intentionally handled by `install_cfw3212.sh`
 at install time, because the upstream package still carries RM520N-style
@@ -170,7 +175,9 @@ The converter fails if it detects:
 - Updater paths that use upstream QManager releases directly.
 - Enabled auto-updater scripts.
 - Missing Casa package checksum verification.
-- Missing Casa profile auto-apply block.
+- Missing Casa profile auto-apply toggle block.
+- Watchdog SIM-slot switching commands or backup-SIM UI controls left in the
+  Casa output.
 - Changed `dependencies/atcli_smd11` SHA-256.
 - Upstream RM520N paths or `80/443` lighttpd labels left in
   `scripts/usr/bin/qmanager_health_check` after conversion.

@@ -228,12 +228,12 @@ This is the first public release since `.19`. It rolls up all of the stock-UI co
 ## v0.1.10 Casa Updates
 
 - Kept two v0.1.10 package releases available: `v0.1.10-cfw3212.16` as the router-verified checkpoint, and `v0.1.10-cfw3212.25` as the final v0.1.10 Casa package.
-- Manual SIM Profile save, apply, delete, and deactivate works on Casa, including APN, TTL/HL, IMEI, and the modem reboot apply step. Blind auto-apply by ICCID stays off by default.
+- Manual SIM Profile save, apply, delete, and deactivate works on Casa, including APN, TTL/HL, IMEI, and the modem reboot apply step. ICCID auto-apply is safety-limited and now requires the explicit SIM Profiles page toggle.
 - Casa/RG520N ICCID handling was cleaned up so SIM Profiles do not show false SIM mismatch warnings from a missing trailing padding nibble.
 - Dashboard freshness checks tolerate Casa boxes with a wrong wall clock as long as the router status timestamp keeps advancing.
 - Web Console, Software Update Casa notes, Email Alerts `msmtp` install/remove, Discord Bot backend install, Tailscale, and Ookla Speedtest support were added or tightened during the v0.1.10 Casa series.
 - Installs and GUI updates were made gentler on router flash: fewer unnecessary file writes, no duplicate full tarball extraction during online install/update, and GUI updates end in a reboot-required state instead of rebooting automatically.
-- Casa package safety limits stayed in place around USB composition, upstream IP Passthrough modem writes, and blind SIM Profile auto-apply.
+- Casa package safety limits stayed in place around USB composition, upstream IP Passthrough modem writes, and automatic SIM Profile apply behavior.
 
 ## Earlier Highlights
 
@@ -241,4 +241,4 @@ This is the first public release since `.19`. It rolls up all of the stock-UI co
 - Cut down on router flash churn: skip frontend payloads that haven't changed, compare before copying, pace fresh installs, and don't extract the tarball twice during online installs/updates.
 - GUI updates now end in a reboot-required state instead of rebooting on their own. You decide when the reboot happens.
 - QManager install paths are mapped to Casa's writable storage at `/usrdata` and `/etc/systemd/system`, with lighttpd on HTTP `9080` and HTTPS `9000`.
-- Kept the Casa safety lines drawn around USB composition, upstream IP Passthrough modem writes, and blind SIM profile auto-apply.
+- Kept the Casa safety lines drawn around USB composition, upstream IP Passthrough modem writes, and automatic SIM Profile apply behavior.

@@ -814,8 +814,8 @@ info "Casa LAN DNS reconciler staged"
 
 # Casa keeps the upstream SIM Profile UI/manual apply path enabled. Profiles
 # can save/delete JSON state and, when manually applied by the user, can set APN,
-# QManager TTL/HL firewall state, and IMEI followed by AT+CFUN=1,1. Blind
-# profile auto-apply remains disabled in the Casa build patches.
+# QManager TTL/HL firewall state, and IMEI followed by AT+CFUN=1,1. ICCID
+# auto-apply is an explicit SIM Profiles UI setting and remains off by default.
 info "Casa unsafe modem/network write endpoints switched to read-only mode"
 
 # --- Users and groups --------------------------------------------------------

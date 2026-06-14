@@ -40,6 +40,11 @@ checked out into the existing local workspace layout.
   no-internet install works on a clean stock router. The bundled `sudo` is
   pre-patched (ELF interpreter + RPATH repointed to `/usrdata/opt`, setuid
   preserved) so it needs no writable-root `/opt` symlink.
+- Keeps manual SIM Profiles enabled and exposes ICCID-matched profile
+  auto-apply as an explicit user toggle on the SIM Profiles page. It remains
+  off until enabled by the user.
+- Disables Watchdog backup-SIM recovery on Casa CFW-3212 single-SIM hardware,
+  including stale Tier 3 config values from older builds.
 - Keeps `qmanager_auto_update` disabled for Casa CFW-3212.
 
 ## Dev testing on a live router (no package release)
