@@ -2853,6 +2853,7 @@ patch_casa_scheduled_reboot_cfw3212() {
 
     python3 - "$settings_sh" "$setup" <<'PY'
 from pathlib import Path
+import re
 import sys
 
 settings_path = Path(sys.argv[1])
@@ -2914,12 +2915,6 @@ if old_disable_write not in settings:
     raise SystemExit("scheduled reboot disable write block not found")
 settings = settings.replace(old_disable_write, new_disable_write, 1)
 
-old_setup_dirs = '''mkdir -p /var/lock /etc/qmanager /usrdata/qmanager/lib /tmp/quecmanager /var/spool/cron/crontabs
-# Keep the cron spool root-owned and non-world-writable while preserving
-# current CGI schedule writers that update root's crontab directly.
-chown root:www-data /var/spool/cron /var/spool/cron/crontabs 2>/dev/null || true
-chmod 775 /var/spool/cron /var/spool/cron/crontabs
-'''
 new_setup_dirs = '''mkdir -p /var/lock /etc/qmanager /etc/qmanager/crontabs /usrdata/qmanager/lib /tmp/quecmanager
 # Keep scheduled-task state on persistent writable storage instead of Casa's
 # read-only /var/spool rootfs path.
@@ -2927,9 +2922,14 @@ chown www-data:www-data /etc/qmanager/crontabs 2>/dev/null || true
 chmod 750 /etc/qmanager/crontabs 2>/dev/null || true
 '''
 if '/etc/qmanager/crontabs' not in setup:
-    if old_setup_dirs not in setup:
+    setup, replacements = re.subn(
+        r'''mkdir -p /var/lock /etc/qmanager (?:/usr/lib/qmanager|/usrdata/qmanager/lib) /tmp/quecmanager /var/spool/cron/crontabs\n# Keep the cron spool root-owned and non-world-writable while preserving\n# current CGI schedule writers that update root's crontab directly\.\nchown root:www-data /var/spool/cron /var/spool/cron/crontabs 2>/dev/null \|\| true\nchmod 775 /var/spool/cron /var/spool/cron/crontabs\n''',
+        new_setup_dirs,
+        setup,
+        count=1,
+    )
+    if replacements != 1:
         raise SystemExit("qmanager_setup cron directory block not found")
-    setup = setup.replace(old_setup_dirs, new_setup_dirs, 1)
 
 setup_marker = '# Secure auth config\n'
 setup_block = '''# Casa does not reliably ship a managed cron service, so ensure BusyBox crond
