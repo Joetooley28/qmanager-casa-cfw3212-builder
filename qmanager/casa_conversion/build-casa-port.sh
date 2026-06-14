@@ -3007,6 +3007,11 @@ _qm_crond_start() {
         fi
     fi
     [ -n "$_qm_tz" ] && export TZ="$_qm_tz"
+    # BusyBox crond silently ignores crontab files not owned by root. The /etc
+    # overlay's persistent layer may not be in place during the early setup dir
+    # block, so repair ownership here — right before crond reads the file — to
+    # keep recurring Scheduled Reboots working across reboots.
+    [ -f /etc/qmanager/crontabs/root ] && chown root:root /etc/qmanager/crontabs/root 2>/dev/null || true
     if command -v crond >/dev/null 2>&1; then
         if pidof crond >/dev/null 2>&1; then
             killall crond 2>/dev/null || true
