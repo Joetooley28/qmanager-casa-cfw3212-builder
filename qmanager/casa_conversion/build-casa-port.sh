@@ -2982,7 +2982,47 @@ if '/etc/qmanager/crontabs' not in setup:
         raise SystemExit("qmanager_setup cron directory block not found")
 
 setup_marker = '# Secure auth config\n'
-setup_crond_block = '''# Casa does not reliably ship a managed cron service, so ensure BusyBox crond
+setup_crond_helper = '''# Casa: start BusyBox crond in the configured local timezone.
+# Scheduled Reboot cron times are wall-clock HH:MM from System Settings.
+_qm_crond_start() {
+    _qm_tz=""
+    if [ -f /etc/TZ ]; then
+        _qm_tz=$(cat /etc/TZ)
+    fi
+    if [ -z "$_qm_tz" ]; then
+        PATH="/usrdata/bin:/usrdata/opt/bin:$PATH"
+        . /usrdata/qmanager/lib/config.sh 2>/dev/null || true
+        . /usrdata/qmanager/lib/system_config.sh 2>/dev/null || true
+        if command -v sys_get_timezone >/dev/null 2>&1; then
+            _qm_tz=$(sys_get_timezone)
+        fi
+    fi
+    [ -n "$_qm_tz" ] && export TZ="$_qm_tz"
+    if command -v crond >/dev/null 2>&1; then
+        if pidof crond >/dev/null 2>&1; then
+            killall crond 2>/dev/null || true
+        fi
+        crond -c /etc/qmanager/crontabs >/dev/null 2>&1 || true
+    fi
+}
+
+'''
+setup_crond_call = '''
+# Start crond after config exists so timezone/jq paths resolve correctly.
+_qm_crond_start
+
+'''
+config_init_casa = '''if [ -f /usrdata/qmanager/lib/config.sh ]; then
+    . /usrdata/qmanager/lib/config.sh
+    qm_config_init
+fi
+'''
+config_init_gl = '''if [ -f /usr/lib/qmanager/config.sh ]; then
+    . /usr/lib/qmanager/config.sh
+    qm_config_init
+fi
+'''
+old_crond_inline = '''# Casa does not reliably ship a managed cron service, so ensure BusyBox crond
 # runs in QManager's configured timezone (Scheduled Reboot uses wall-clock times).
 . /usrdata/qmanager/lib/system_config.sh 2>/dev/null || true
 if command -v sys_get_timezone >/dev/null 2>&1; then
@@ -2996,21 +3036,38 @@ if command -v crond >/dev/null 2>&1; then
 fi
 
 '''
-setup_block = setup_crond_block + '# Secure auth config\n'
-if 'crond -c /etc/qmanager/crontabs' not in setup:
-    if setup_marker not in setup:
-        raise SystemExit("qmanager_setup secure auth marker not found")
-    setup = setup.replace(setup_marker, setup_block, 1)
-else:
-    old_crond_start = '''# Casa does not reliably ship a managed cron service, so ensure BusyBox crond
+old_crond_start = '''# Casa does not reliably ship a managed cron service, so ensure BusyBox crond
 # is available to execute Scheduled Reboot entries after boot/install.
 if command -v crond >/dev/null 2>&1 && ! pidof crond >/dev/null 2>&1; then
     crond -c /etc/qmanager/crontabs >/dev/null 2>&1 || true
 fi
 
 '''
-    if 'sys_get_timezone' not in setup and old_crond_start in setup:
-        setup = setup.replace(old_crond_start, setup_crond_block, 1)
+
+for old in (old_crond_inline, old_crond_start):
+    if old in setup:
+        setup = setup.replace(old, '', 1)
+
+if '_qm_crond_start()' not in setup:
+    if config_init_casa in setup:
+        setup = setup.replace(
+            config_init_casa,
+            setup_crond_helper + config_init_casa + setup_crond_call,
+            1,
+        )
+    elif config_init_gl in setup:
+        setup = setup.replace(
+            config_init_gl,
+            setup_crond_helper + config_init_gl + setup_crond_call,
+            1,
+        )
+    else:
+        raise SystemExit("qmanager_setup config init block not found")
+elif setup_crond_call.strip() not in setup:
+    if config_init_casa in setup:
+        setup = setup.replace(config_init_casa, config_init_casa + setup_crond_call, 1)
+    elif config_init_gl in setup:
+        setup = setup.replace(config_init_gl, config_init_gl + setup_crond_call, 1)
 
 old_sched_reload = '''            qlog_info "Scheduled reboot cron entries removed"
         fi
@@ -3022,6 +3079,27 @@ new_sched_reload = '''            qlog_info "Scheduled reboot cron entries remov
         fi
 
         # Reload crond with QManager timezone so schedule times match System Settings.
+        _qm_tz=""
+        if [ -f /etc/TZ ]; then
+            _qm_tz=$(cat /etc/TZ)
+        fi
+        if [ -z "$_qm_tz" ]; then
+            PATH="/usrdata/bin:/usrdata/opt/bin:$PATH"
+            . /usrdata/qmanager/lib/system_config.sh 2>/dev/null || true
+            if command -v sys_get_timezone >/dev/null 2>&1; then
+                _qm_tz=$(sys_get_timezone)
+            fi
+        fi
+        [ -n "$_qm_tz" ] && export TZ="$_qm_tz"
+        if command -v crond >/dev/null 2>&1; then
+            killall crond 2>/dev/null || true
+            crond -c /etc/qmanager/crontabs >/dev/null 2>&1 || true
+        fi
+
+        # Build response
+        DAYS_RESP=$(printf '%s' "$DAYS_RAW" | jq -Rc 'split(",") | map(tonumber)' 2>/dev/null)
+'''
+old_sched_reload_mid_v1 = '''        # Reload crond with QManager timezone so schedule times match System Settings.
         . /usrdata/qmanager/lib/system_config.sh 2>/dev/null || true
         if command -v sys_get_timezone >/dev/null 2>&1; then
             export TZ="$(sys_get_timezone)"
@@ -3031,10 +3109,31 @@ new_sched_reload = '''            qlog_info "Scheduled reboot cron entries remov
             crond -c /etc/qmanager/crontabs >/dev/null 2>&1 || true
         fi
 
-        # Build response
-        DAYS_RESP=$(printf '%s' "$DAYS_RAW" | jq -Rc 'split(",") | map(tonumber)' 2>/dev/null)
 '''
-if 'sys_get_timezone' not in settings and old_sched_reload in settings:
+new_sched_reload_mid = '''        # Reload crond with QManager timezone so schedule times match System Settings.
+        _qm_tz=""
+        if [ -f /etc/TZ ]; then
+            _qm_tz=$(cat /etc/TZ)
+        fi
+        if [ -z "$_qm_tz" ]; then
+            PATH="/usrdata/bin:/usrdata/opt/bin:$PATH"
+            . /usrdata/qmanager/lib/system_config.sh 2>/dev/null || true
+            if command -v sys_get_timezone >/dev/null 2>&1; then
+                _qm_tz=$(sys_get_timezone)
+            fi
+        fi
+        [ -n "$_qm_tz" ] && export TZ="$_qm_tz"
+        if command -v crond >/dev/null 2>&1; then
+            killall crond 2>/dev/null || true
+            crond -c /etc/qmanager/crontabs >/dev/null 2>&1 || true
+        fi
+
+'''
+if '/etc/TZ' in settings and '_qm_tz=' in settings:
+    pass
+elif old_sched_reload_mid_v1 in settings:
+    settings = settings.replace(old_sched_reload_mid_v1, new_sched_reload_mid, 1)
+elif old_sched_reload in settings:
     settings = settings.replace(old_sched_reload, new_sched_reload, 1)
 
 settings_path.write_text(settings)
@@ -3053,9 +3152,9 @@ PY
         || fail "Could not move Scheduled Reboot cron storage into /etc/qmanager"
     grep -q 'crond -c /etc/qmanager/crontabs' "$setup" \
         || fail "Could not add qmanager_setup crond startup"
-    grep -q 'sys_get_timezone' "$setup" \
+    grep -q '_qm_crond_start' "$setup" \
         || fail "Could not add timezone-aware crond startup to qmanager_setup"
-    grep -q 'sys_get_timezone' "$settings_sh" \
+    grep -q '/etc/TZ' "$settings_sh" \
         || fail "Could not add timezone-aware crond reload to settings.sh"
 }
 
