@@ -2931,17 +2931,134 @@ setup_path = Path(sys.argv[2])
 settings = settings_path.read_text()
 setup = setup_path.read_text()
 
-settings = settings.replace(
-    'SCHEDULE_SCRIPT="/usr/bin/qmanager_scheduled_reboot"',
-    'SCHEDULE_SCRIPT="/usrdata/bin/qmanager_scheduled_reboot"',
-)
-settings = settings.replace(
-    'CRON_FILE="/var/spool/cron/crontabs/root"',
-    'CRON_FILE="/usrdata/qmanager/crontabs/root"',
-)
+v13_sched_reboot = False
 
-spool_marker = '        current_cron=$(cat "$CRON_FILE" 2>/dev/null || true)\n'
-spool_block = '''        mkdir -p /usrdata/qmanager/crontabs 2>/dev/null || {
+old_v13_sched_systemd = '''        # --- Arm/disarm the runtime systemd timer (root helper) ---
+        # RM520N has no crond (qmanager_scheduled_reboot_arm's header explains
+        # why the old /var/spool/cron/crontabs/root write was a silent no-op).
+        # The helper hardcodes the unit + re-validates time/days itself before
+        # they touch a generated .timer file — this CGI-side validation above
+        # is necessary but not sufficient on its own.
+        if [ "$ENABLED" = "true" ]; then
+            arm_json=$(sudo -n /usr/bin/qmanager_scheduled_reboot_arm install "$SCHED_TIME" "$DAYS_RAW" 2>/dev/null)
+        else
+            arm_json=$(sudo -n /usr/bin/qmanager_scheduled_reboot_arm teardown 2>/dev/null)
+        fi
+
+        arm_ok=$(printf '%s' "$arm_json" | jq -r '.success // false' 2>/dev/null)
+        armed=$(printf '%s' "$arm_json" | jq -r 'if has("armed") then (.armed|tostring) else "false" end' 2>/dev/null)
+        arm_reason=$(printf '%s' "$arm_json" | jq -r '.reason // ""' 2>/dev/null)
+        if [ "$arm_ok" != "true" ]; then
+            qlog_error "Scheduled reboot timer arm/disarm failed: ${arm_json:-<empty response>}"
+        fi
+        qlog_info "Scheduled reboot timer ${ENABLED}: ${SCHED_TIME} days=${DAYS_RAW} armed=${armed}"
+
+        # Build response'''
+
+new_v13_sched_cron = '''        # --- Casa CFW-3212: arm/disarm scheduled reboot via BusyBox crond ---
+        # Upstream v0.1.13 moved to systemd timers (no crond on RM520N). Casa
+        # runs crond against persistent /usrdata/qmanager/crontabs instead.
+        CRON_MARKER="qmanager_scheduled_reboot"
+        SCHEDULE_SCRIPT="/usrdata/bin/qmanager_scheduled_reboot"
+        CRON_FILE="/usrdata/qmanager/crontabs/root"
+        armed=false
+        arm_reason=""
+
+        mkdir -p /usrdata/qmanager/crontabs 2>/dev/null || {
+            cgi_error "cron_spool_unavailable" "Could not create scheduled reboot cron directory"
+            exit 0
+        }
+        chown root:root /usrdata/qmanager/crontabs 2>/dev/null || true
+        chmod 755 /usrdata/qmanager/crontabs 2>/dev/null || true
+
+        current_cron=$(cat "$CRON_FILE" 2>/dev/null || true)
+        CRON_HEADER="# QManager Scheduled Reboot — DO NOT EDIT MANUALLY"
+        cleaned_cron=$(printf '%s\\n' "$current_cron" \\
+            | grep -v "$CRON_MARKER" \\
+            | grep -Fvx "$CRON_HEADER" \\
+            | sed '/^[[:space:]]*$/d')
+
+        if [ "$ENABLED" = "true" ]; then
+            sched_hour=$(printf '%s' "$SCHED_TIME" | cut -d: -f1 | sed 's/^0//')
+            sched_min=$(printf '%s' "$SCHED_TIME" | cut -d: -f2 | sed 's/^0//')
+            [ -z "$sched_hour" ] && sched_hour="0"
+            [ -z "$sched_min" ] && sched_min="0"
+
+            if [ -n "$cleaned_cron" ]; then
+                new_cron="${cleaned_cron}
+${CRON_HEADER}
+${sched_min} ${sched_hour} * * ${DAYS_RAW} ${SCHEDULE_SCRIPT}  # ${CRON_MARKER}"
+            else
+                new_cron="${CRON_HEADER}
+${sched_min} ${sched_hour} * * ${DAYS_RAW} ${SCHEDULE_SCRIPT}  # ${CRON_MARKER}"
+            fi
+
+            if ! printf '%s\\n' "$new_cron" > "$CRON_FILE"; then
+                cgi_error "cron_write_failed" "Could not write scheduled reboot cron entry"
+                exit 0
+            fi
+            chown root:root "$CRON_FILE" 2>/dev/null || true
+            qlog_info "Scheduled reboot cron installed: ${SCHED_TIME} days=${DAYS_RAW}"
+            armed=true
+        else
+            if [ -n "$cleaned_cron" ]; then
+                if ! printf '%s\\n' "$cleaned_cron" > "$CRON_FILE"; then
+                    cgi_error "cron_write_failed" "Could not write scheduled reboot cron entry"
+                    exit 0
+                fi
+                chown root:root "$CRON_FILE" 2>/dev/null || true
+            else
+                rm -f "$CRON_FILE"
+            fi
+            qlog_info "Scheduled reboot cron entries removed"
+        fi
+
+        # Reload crond with QManager timezone so schedule times match System Settings.
+        _qm_tz=""
+        if [ -f /etc/TZ ]; then
+            _qm_tz=$(cat /etc/TZ)
+        fi
+        if [ -z "$_qm_tz" ]; then
+            PATH="/usrdata/bin:/usrdata/opt/bin:$PATH"
+            . /usrdata/qmanager/lib/system_config.sh 2>/dev/null || true
+            if command -v sys_get_timezone >/dev/null 2>&1; then
+                _qm_tz=$(sys_get_timezone)
+            fi
+        fi
+        [ -n "$_qm_tz" ] && export TZ="$_qm_tz"
+        if command -v crond >/dev/null 2>&1; then
+            killall crond 2>/dev/null || true
+            if crond -c /usrdata/qmanager/crontabs >/dev/null 2>&1; then
+                [ "$ENABLED" = "true" ] && armed=true
+            else
+                armed=false
+                arm_reason="crond_start_failed"
+            fi
+        elif [ "$ENABLED" = "true" ]; then
+            armed=false
+            arm_reason="crond_missing"
+        fi
+        qlog_info "Scheduled reboot cron ${ENABLED}: ${SCHED_TIME} days=${DAYS_RAW} armed=${armed}"
+
+        # Build response'''
+
+if old_v13_sched_systemd in settings:
+    settings = settings.replace(old_v13_sched_systemd, new_v13_sched_cron, 1)
+    v13_sched_reboot = True
+
+if not v13_sched_reboot:
+    settings = settings.replace(
+        'SCHEDULE_SCRIPT="/usr/bin/qmanager_scheduled_reboot"',
+        'SCHEDULE_SCRIPT="/usrdata/bin/qmanager_scheduled_reboot"',
+    )
+    settings = settings.replace(
+        'CRON_FILE="/var/spool/cron/crontabs/root"',
+        'CRON_FILE="/usrdata/qmanager/crontabs/root"',
+    )
+
+if not v13_sched_reboot:
+    spool_marker = '        current_cron=$(cat "$CRON_FILE" 2>/dev/null || true)\n'
+    spool_block = '''        mkdir -p /usrdata/qmanager/crontabs 2>/dev/null || {
             cgi_error "cron_spool_unavailable" "Could not create scheduled reboot cron directory"
             exit 0
         }
@@ -2953,28 +3070,28 @@ spool_block = '''        mkdir -p /usrdata/qmanager/crontabs 2>/dev/null || {
 
         current_cron=$(cat "$CRON_FILE" 2>/dev/null || true)
 '''
-if 'cron_spool_unavailable' not in settings:
-    if spool_marker not in settings:
-        raise SystemExit("scheduled reboot spool marker not found")
-    settings = settings.replace(spool_marker, spool_block, 1)
+    if 'cron_spool_unavailable' not in settings:
+        if spool_marker not in settings:
+            raise SystemExit("scheduled reboot spool marker not found")
+        settings = settings.replace(spool_marker, spool_block, 1)
 
-old_cleaned_cron = '''        cleaned_cron=$(printf '%s\\n' "$current_cron" | grep -v "$CRON_MARKER")
+    old_cleaned_cron = '''        cleaned_cron=$(printf '%s\\n' "$current_cron" | grep -v "$CRON_MARKER")
 '''
-new_cleaned_cron = '''        CRON_HEADER="# QManager Scheduled Reboot — DO NOT EDIT MANUALLY"
+    new_cleaned_cron = '''        CRON_HEADER="# QManager Scheduled Reboot — DO NOT EDIT MANUALLY"
         cleaned_cron=$(printf '%s\\n' "$current_cron" \
             | grep -v "$CRON_MARKER" \
             | grep -Fvx "$CRON_HEADER" \
             | sed '/^[[:space:]]*$/d')
 '''
-if old_cleaned_cron not in settings:
-    raise SystemExit("scheduled reboot cleaned_cron block not found")
-settings = settings.replace(old_cleaned_cron, new_cleaned_cron, 1)
+    if old_cleaned_cron not in settings:
+        raise SystemExit("scheduled reboot cleaned_cron block not found")
+    settings = settings.replace(old_cleaned_cron, new_cleaned_cron, 1)
 
-old_new_cron = '''            new_cron="${cleaned_cron}
+    old_new_cron = '''            new_cron="${cleaned_cron}
 # QManager Scheduled Reboot — DO NOT EDIT MANUALLY
 ${sched_min} ${sched_hour} * * ${DAYS_RAW} ${SCHEDULE_SCRIPT}  # ${CRON_MARKER}"
 '''
-new_new_cron = '''            if [ -n "$cleaned_cron" ]; then
+    new_new_cron = '''            if [ -n "$cleaned_cron" ]; then
                 new_cron="${cleaned_cron}
 ${CRON_HEADER}
 ${sched_min} ${sched_hour} * * ${DAYS_RAW} ${SCHEDULE_SCRIPT}  # ${CRON_MARKER}"
@@ -2983,14 +3100,14 @@ ${sched_min} ${sched_hour} * * ${DAYS_RAW} ${SCHEDULE_SCRIPT}  # ${CRON_MARKER}"
 ${sched_min} ${sched_hour} * * ${DAYS_RAW} ${SCHEDULE_SCRIPT}  # ${CRON_MARKER}"
             fi
 '''
-if old_new_cron not in settings:
-    raise SystemExit("scheduled reboot new_cron block not found")
-settings = settings.replace(old_new_cron, new_new_cron, 1)
+    if old_new_cron not in settings:
+        raise SystemExit("scheduled reboot new_cron block not found")
+    settings = settings.replace(old_new_cron, new_new_cron, 1)
 
-old_enable_write = '''            printf '%s\\n' "$new_cron" > "$CRON_FILE"
+    old_enable_write = '''            printf '%s\\n' "$new_cron" > "$CRON_FILE"
             qlog_info "Scheduled reboot cron installed: ${SCHED_TIME} days=${DAYS_RAW}"
 '''
-new_enable_write = '''            if ! printf '%s\\n' "$new_cron" > "$CRON_FILE"; then
+    new_enable_write = '''            if ! printf '%s\\n' "$new_cron" > "$CRON_FILE"; then
                 cgi_error "cron_write_failed" "Could not write scheduled reboot cron entry"
                 exit 0
             fi
@@ -3000,16 +3117,16 @@ new_enable_write = '''            if ! printf '%s\\n' "$new_cron" > "$CRON_FILE"
             chown root:root "$CRON_FILE" 2>/dev/null || true
             qlog_info "Scheduled reboot cron installed: ${SCHED_TIME} days=${DAYS_RAW}"
 '''
-if 'cron_write_failed' not in settings:
-    if old_enable_write not in settings:
-        raise SystemExit("scheduled reboot enable write block not found")
-    settings = settings.replace(old_enable_write, new_enable_write, 1)
+    if 'cron_write_failed' not in settings:
+        if old_enable_write not in settings:
+            raise SystemExit("scheduled reboot enable write block not found")
+        settings = settings.replace(old_enable_write, new_enable_write, 1)
 
-old_disable_write = '''            if [ -n "$cleaned_cron" ]; then
+    old_disable_write = '''            if [ -n "$cleaned_cron" ]; then
                 printf '%s\\n' "$cleaned_cron" > "$CRON_FILE"
             else
 '''
-new_disable_write = '''            if [ -n "$cleaned_cron" ]; then
+    new_disable_write = '''            if [ -n "$cleaned_cron" ]; then
                 if ! printf '%s\\n' "$cleaned_cron" > "$CRON_FILE"; then
                     cgi_error "cron_write_failed" "Could not write scheduled reboot cron entry"
                     exit 0
@@ -3017,9 +3134,9 @@ new_disable_write = '''            if [ -n "$cleaned_cron" ]; then
                 chown root:root "$CRON_FILE" 2>/dev/null || true
             else
 '''
-if old_disable_write not in settings:
-    raise SystemExit("scheduled reboot disable write block not found")
-settings = settings.replace(old_disable_write, new_disable_write, 1)
+    if old_disable_write not in settings:
+        raise SystemExit("scheduled reboot disable write block not found")
+    settings = settings.replace(old_disable_write, new_disable_write, 1)
 
 new_setup_dirs = '''mkdir -p /var/lock /etc/qmanager /usrdata/qmanager/crontabs /usrdata/qmanager/lib /tmp/quecmanager
 # Scheduled-task state lives on persistent /usrdata (plain ubifs) instead of
@@ -3036,14 +3153,21 @@ chmod 755 /usrdata/qmanager/crontabs 2>/dev/null || true
 [ -f /usrdata/qmanager/crontabs/root ] && chown root:root /usrdata/qmanager/crontabs/root 2>/dev/null || true
 '''
 if '/usrdata/qmanager/crontabs' not in setup:
-    setup, replacements = re.subn(
-        r'''mkdir -p /var/lock /etc/qmanager (?:/usr/lib/qmanager|/usrdata/qmanager/lib) /tmp/quecmanager /var/spool/cron/crontabs\n# Keep the cron spool root-owned and non-world-writable while preserving\n# current CGI schedule writers that update root's crontab directly\.\nchown root:www-data /var/spool/cron /var/spool/cron/crontabs 2>/dev/null \|\| true\nchmod 775 /var/spool/cron /var/spool/cron/crontabs\n''',
-        new_setup_dirs,
-        setup,
-        count=1,
-    )
-    if replacements != 1:
-        raise SystemExit("qmanager_setup cron directory block not found")
+    setup_v13_old = '''mkdir -p /var/lock /etc/qmanager /usr/lib/qmanager /tmp/quecmanager /var/spool/cron/crontabs
+# CGI (www-data) writes cron entries for root — needs write access to spool dir
+chmod 777 /var/spool/cron/crontabs
+'''
+    if setup_v13_old in setup:
+        setup = setup.replace(setup_v13_old, new_setup_dirs, 1)
+    else:
+        setup, replacements = re.subn(
+            r'''mkdir -p /var/lock /etc/qmanager (?:/usr/lib/qmanager|/usrdata/qmanager/lib) /tmp/quecmanager /var/spool/cron/crontabs\n# Keep the cron spool root-owned and non-world-writable while preserving\n# current CGI schedule writers that update root's crontab directly\.\nchown root:www-data /var/spool/cron /var/spool/cron/crontabs 2>/dev/null \|\| true\nchmod 775 /var/spool/cron /var/spool/cron/crontabs\n''',
+            new_setup_dirs,
+            setup,
+            count=1,
+        )
+        if replacements != 1:
+            raise SystemExit("qmanager_setup cron directory block not found")
 
 setup_marker = '# Secure auth config\n'
 setup_crond_helper = '''# Casa: start BusyBox crond in the configured local timezone.
@@ -3137,13 +3261,14 @@ elif setup_crond_call.strip() not in setup:
     elif config_init_gl in setup:
         setup = setup.replace(config_init_gl, config_init_gl + setup_crond_call, 1)
 
-old_sched_reload = '''            qlog_info "Scheduled reboot cron entries removed"
+if not v13_sched_reboot:
+    old_sched_reload = '''            qlog_info "Scheduled reboot cron entries removed"
         fi
 
         # Build response
         DAYS_RESP=$(printf '%s' "$DAYS_RAW" | jq -Rc 'split(",") | map(tonumber)' 2>/dev/null)
 '''
-new_sched_reload = '''            qlog_info "Scheduled reboot cron entries removed"
+    new_sched_reload = '''            qlog_info "Scheduled reboot cron entries removed"
         fi
 
         # Reload crond with QManager timezone so schedule times match System Settings.
@@ -3167,7 +3292,7 @@ new_sched_reload = '''            qlog_info "Scheduled reboot cron entries remov
         # Build response
         DAYS_RESP=$(printf '%s' "$DAYS_RAW" | jq -Rc 'split(",") | map(tonumber)' 2>/dev/null)
 '''
-old_sched_reload_mid_v1 = '''        # Reload crond with QManager timezone so schedule times match System Settings.
+    old_sched_reload_mid_v1 = '''        # Reload crond with QManager timezone so schedule times match System Settings.
         . /usrdata/qmanager/lib/system_config.sh 2>/dev/null || true
         if command -v sys_get_timezone >/dev/null 2>&1; then
             export TZ="$(sys_get_timezone)"
@@ -3178,7 +3303,7 @@ old_sched_reload_mid_v1 = '''        # Reload crond with QManager timezone so sc
         fi
 
 '''
-new_sched_reload_mid = '''        # Reload crond with QManager timezone so schedule times match System Settings.
+    new_sched_reload_mid = '''        # Reload crond with QManager timezone so schedule times match System Settings.
         _qm_tz=""
         if [ -f /etc/TZ ]; then
             _qm_tz=$(cat /etc/TZ)
@@ -3197,12 +3322,15 @@ new_sched_reload_mid = '''        # Reload crond with QManager timezone so sched
         fi
 
 '''
-if '/etc/TZ' in settings and '_qm_tz=' in settings:
-    pass
-elif old_sched_reload_mid_v1 in settings:
-    settings = settings.replace(old_sched_reload_mid_v1, new_sched_reload_mid, 1)
-elif old_sched_reload in settings:
-    settings = settings.replace(old_sched_reload, new_sched_reload, 1)
+    if '/etc/TZ' in settings and '_qm_tz=' in settings:
+        pass
+    elif old_sched_reload_mid_v1 in settings:
+        settings = settings.replace(old_sched_reload_mid_v1, new_sched_reload_mid, 1)
+    elif old_sched_reload in settings:
+        settings = settings.replace(old_sched_reload, new_sched_reload, 1)
+
+elif 'qmanager_scheduled_reboot_arm' in settings:
+    raise SystemExit("scheduled reboot systemd block present but did not match v0.1.13 patch")
 
 settings_path.write_text(settings)
 setup_path.write_text(setup)
@@ -3265,6 +3393,162 @@ PY
         || fail "Could not add timezone-aware crond reload to settings.sh"
 }
 
+patch_casa_tower_schedule_cfw3212() {
+    local schedule="$TARGET/scripts/www/cgi-bin/quecmanager/tower/schedule.sh"
+    [ -f "$schedule" ] || return 0
+
+    python3 - "$schedule" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+
+old_v13_systemd = '''# --- Arm/disarm the runtime systemd timer pair (root helper) -----------------
+# RM520N has no crond — the old /var/spool/cron/crontabs/root write (two
+# lines: apply, clear) was never read by anything. qmanager_tower_schedule_arm
+# replaces both with a pair of runtime-generated .timer units armed in one
+# call; the helper hardcodes the units + re-validates start/end/days itself
+# before they touch a generated .timer file (this CGI-side validation above
+# is necessary but not sufficient on its own).
+day_list="$DAYS_RAW"
+
+if [ "$ENABLED" = "true" ]; then
+    arm_json=$(sudo -n /usr/bin/qmanager_tower_schedule_arm install "$START_TIME" "$END_TIME" "$day_list" 2>/dev/null)
+else
+    arm_json=$(sudo -n /usr/bin/qmanager_tower_schedule_arm teardown 2>/dev/null)
+fi
+
+arm_ok=$(printf '%s' "$arm_json" | jq -r '.success // false' 2>/dev/null)
+armed=$(printf '%s' "$arm_json" | jq -r 'if has("armed") then (.armed|tostring) else "false" end' 2>/dev/null)
+arm_reason=$(printf '%s' "$arm_json" | jq -r '.reason // ""' 2>/dev/null)
+if [ "$arm_ok" != "true" ]; then
+    qlog_error "Tower schedule timer arm/disarm failed: ${arm_json:-<empty response>}"
+fi
+qlog_info "Tower schedule timer ${ENABLED}: apply at ${START_TIME}, clear at ${END_TIME}, days=${day_list}, armed=${armed}"
+
+# --- Response (using jq for guaranteed valid JSON) ---------------------------'''
+
+new_v13_cron = '''# --- Casa CFW-3212: arm/disarm tower schedule via BusyBox crond ---
+CRON_MARKER="qmanager_tower_schedule"
+SCHEDULE_SCRIPT="/usrdata/bin/qmanager_tower_schedule"
+CRON_FILE="/usrdata/qmanager/crontabs/root"
+armed=false
+arm_reason=""
+day_list="$DAYS_RAW"
+
+mkdir -p /usrdata/qmanager/crontabs 2>/dev/null || {
+    cgi_error "cron_spool_unavailable" "Could not create tower schedule cron directory"
+    exit 0
+}
+chown root:root /usrdata/qmanager/crontabs 2>/dev/null || true
+chmod 755 /usrdata/qmanager/crontabs 2>/dev/null || true
+
+current_cron=$(cat "$CRON_FILE" 2>/dev/null || true)
+CRON_HEADER="# QManager Tower Lock Schedule — DO NOT EDIT MANUALLY"
+cleaned_cron=$(printf '%s\\n' "$current_cron" \\
+    | grep -v "$CRON_MARKER" \\
+    | grep -Fvx "$CRON_HEADER" \\
+    | sed '/^[[:space:]]*$/d')
+
+if [ "$ENABLED" = "true" ]; then
+    start_hour=$(printf '%s' "$START_TIME" | cut -d: -f1 | sed 's/^0//')
+    start_min=$(printf '%s' "$START_TIME" | cut -d: -f2 | sed 's/^0//')
+    end_hour=$(printf '%s' "$END_TIME" | cut -d: -f1 | sed 's/^0//')
+    end_min=$(printf '%s' "$END_TIME" | cut -d: -f2 | sed 's/^0//')
+    [ -z "$start_hour" ] && start_hour="0"
+    [ -z "$start_min" ] && start_min="0"
+    [ -z "$end_hour" ] && end_hour="0"
+    [ -z "$end_min" ] && end_min="0"
+
+    if [ -n "$cleaned_cron" ]; then
+        new_cron="${cleaned_cron}
+${CRON_HEADER}
+${start_min} ${start_hour} * * ${day_list} ${SCHEDULE_SCRIPT} apply  # ${CRON_MARKER}
+${end_min} ${end_hour} * * ${day_list} ${SCHEDULE_SCRIPT} clear  # ${CRON_MARKER}"
+    else
+        new_cron="${CRON_HEADER}
+${start_min} ${start_hour} * * ${day_list} ${SCHEDULE_SCRIPT} apply  # ${CRON_MARKER}
+${end_min} ${end_hour} * * ${day_list} ${SCHEDULE_SCRIPT} clear  # ${CRON_MARKER}"
+    fi
+
+    if ! printf '%s\\n' "$new_cron" > "$CRON_FILE"; then
+        cgi_error "cron_write_failed" "Could not write tower schedule cron entry"
+        exit 0
+    fi
+    chown root:root "$CRON_FILE" 2>/dev/null || true
+    qlog_info "Tower schedule cron entries installed: apply at ${START_TIME}, clear at ${END_TIME}, days=${day_list}"
+    armed=true
+else
+    if [ -n "$cleaned_cron" ]; then
+        if ! printf '%s\\n' "$cleaned_cron" > "$CRON_FILE"; then
+            cgi_error "cron_write_failed" "Could not write tower schedule cron entry"
+            exit 0
+        fi
+        chown root:root "$CRON_FILE" 2>/dev/null || true
+    else
+        rm -f "$CRON_FILE"
+    fi
+    qlog_info "Tower schedule cron entries removed"
+fi
+
+_qm_tz=""
+if [ -f /etc/TZ ]; then
+    _qm_tz=$(cat /etc/TZ)
+fi
+if [ -z "$_qm_tz" ]; then
+    PATH="/usrdata/bin:/usrdata/opt/bin:$PATH"
+    . /usrdata/qmanager/lib/system_config.sh 2>/dev/null || true
+    if command -v sys_get_timezone >/dev/null 2>&1; then
+        _qm_tz=$(sys_get_timezone)
+    fi
+fi
+[ -n "$_qm_tz" ] && export TZ="$_qm_tz"
+if command -v crond >/dev/null 2>&1; then
+    killall crond 2>/dev/null || true
+    if crond -c /usrdata/qmanager/crontabs >/dev/null 2>&1; then
+        [ "$ENABLED" = "true" ] && armed=true
+    else
+        armed=false
+        arm_reason="crond_start_failed"
+    fi
+elif [ "$ENABLED" = "true" ]; then
+    armed=false
+    arm_reason="crond_missing"
+fi
+qlog_info "Tower schedule cron ${ENABLED}: apply at ${START_TIME}, clear at ${END_TIME}, days=${day_list}, armed=${armed}"
+
+# --- Response (using jq for guaranteed valid JSON) ---------------------------'''
+
+if old_v13_systemd in text:
+    text = text.replace(old_v13_systemd, new_v13_cron, 1)
+elif 'CRON_FILE="/var/spool/cron/crontabs/root"' in text:
+    text = text.replace(
+        'SCHEDULE_SCRIPT="/usr/bin/qmanager_tower_schedule"',
+        'SCHEDULE_SCRIPT="/usrdata/bin/qmanager_tower_schedule"',
+    )
+    text = text.replace(
+        'CRON_FILE="/var/spool/cron/crontabs/root"',
+        'CRON_FILE="/usrdata/qmanager/crontabs/root"',
+    )
+elif 'qmanager_tower_schedule_arm' in text:
+    raise SystemExit("tower schedule systemd block present but did not match v0.1.13 patch")
+
+path.write_text(text)
+PY
+
+    grep -q '/usrdata/bin/qmanager_tower_schedule' "$schedule" \
+        || fail "Could not align tower schedule helper path to Casa /usrdata/bin"
+    grep -q '/usrdata/qmanager/crontabs/root' "$schedule" \
+        || fail "Could not move tower schedule cron file to persistent Casa storage"
+    if grep -q 'Casa CFW-3212: arm/disarm tower schedule via BusyBox crond' "$schedule"; then
+        grep -q 'cron_spool_unavailable' "$schedule" \
+            || fail "Could not add tower schedule cron directory creation guard"
+        grep -q 'cron_write_failed' "$schedule" \
+            || fail "Could not make tower schedule cron writes fail loudly"
+    fi
+}
+
 patch_casa_watchcat_tiers() {
     # Reroute the qmanager_watchcat recovery daemon so its automatic Tier 1
     # (reconnect) and Tier 4 (reboot) actions use the Casa RDB connection-
@@ -3301,9 +3585,6 @@ if "link.policy.1.trigger_connect" not in text:
         raise SystemExit("tier1 AT+COPS block not found")
     text = text.replace(old_tier1, new_tier1, 1)
 
-old_tier4 = '''    # Reboot after flushing state
-    ( sleep 1 && reboot ) &
-'''
 new_tier4 = '''    # Reboot after flushing state - Casa RDB reset path with reboot fallback
     (
         sleep 1
@@ -3318,10 +3599,19 @@ new_tier4 = '''    # Reboot after flushing state - Casa RDB reset path with rebo
         fi
     ) </dev/null >/dev/null 2>&1 &
 '''
+old_tier4_v13 = '''    # Reboot after flushing state
+    ( sleep 1 && run_reboot ) &
+'''
+old_tier4_v12 = '''    # Reboot after flushing state
+    ( sleep 1 && reboot ) &
+'''
 if "QManager watchcat tier4 recovery" not in text:
-    if old_tier4 not in text:
+    if old_tier4_v13 in text:
+        text = text.replace(old_tier4_v13, new_tier4, 1)
+    elif old_tier4_v12 in text:
+        text = text.replace(old_tier4_v12, new_tier4, 1)
+    else:
         raise SystemExit("tier4 reboot block not found")
-    text = text.replace(old_tier4, new_tier4, 1)
 
 path.write_text(text)
 PY
@@ -5280,6 +5570,11 @@ patch_terminal_sidebar_children_cfw3212() {
     local sidebar="$TARGET/components/app-sidebar.tsx"
     [ -f "$sidebar" ] || fail "Terminal sidebar patch: missing $sidebar"
 
+    if grep -q 't_key: "at_terminal", url: "/system-settings/at-terminal"' "$sidebar" && \
+       grep -q 't_key: "web_console", url: "/system-settings/web-console"' "$sidebar"; then
+        log "Terminal sidebar children patch already applied"
+        return 0
+    fi
     if grep -q '{ title: "AT Terminal", url: "/system-settings/at-terminal" }' "$sidebar" && \
        grep -q '{ title: "Web Console", url: "/system-settings/web-console" }' "$sidebar"; then
         log "Terminal sidebar children patch already applied"
@@ -5293,7 +5588,24 @@ import sys
 path = Path(sys.argv[1])
 text = path.read_text()
 
-old = '''    {
+old_v13 = '''    {
+      t_key: "terminals",
+      url: "/system-settings/at-terminal",
+      icon: TerminalIcon,
+      items: [{ t_key: "web_console", url: "/system-settings/web-console" }],
+    },'''
+
+new_v13 = '''    {
+      t_key: "terminals",
+      url: "/system-settings/at-terminal",
+      icon: TerminalIcon,
+      items: [
+        { t_key: "at_terminal", url: "/system-settings/at-terminal" },
+        { t_key: "web_console", url: "/system-settings/web-console" },
+      ],
+    },'''
+
+old_v12 = '''    {
       title: "Terminals",
       url: "/system-settings/at-terminal",
       icon: TerminalIcon,
@@ -5302,7 +5614,7 @@ old = '''    {
       ],
     },'''
 
-new = '''    {
+new_v12 = '''    {
       title: "Terminals",
       url: "/system-settings/at-terminal",
       icon: TerminalIcon,
@@ -5312,15 +5624,26 @@ new = '''    {
       ],
     },'''
 
-if old not in text:
+if old_v13 in text:
+    text = text.replace(old_v13, new_v13, 1)
+elif old_v12 in text:
+    text = text.replace(old_v12, new_v12, 1)
+else:
     raise SystemExit("app-sidebar: Terminals block not found (upstream may have changed)")
-path.write_text(text.replace(old, new, 1))
+path.write_text(text)
 PY
 
-    grep -q '{ title: "AT Terminal", url: "/system-settings/at-terminal" }' "$sidebar" \
-        || fail "Terminal sidebar patch did not add AT Terminal child"
-    grep -q '{ title: "Web Console", url: "/system-settings/web-console" }' "$sidebar" \
-        || fail "Terminal sidebar patch lost Web Console child"
+    if grep -q 't_key: "terminals"' "$sidebar"; then
+        grep -q 't_key: "at_terminal", url: "/system-settings/at-terminal"' "$sidebar" \
+            || fail "Terminal sidebar patch did not add AT Terminal child"
+        grep -q 't_key: "web_console", url: "/system-settings/web-console"' "$sidebar" \
+            || fail "Terminal sidebar patch lost Web Console child"
+    else
+        grep -q '{ title: "AT Terminal", url: "/system-settings/at-terminal" }' "$sidebar" \
+            || fail "Terminal sidebar patch did not add AT Terminal child"
+        grep -q '{ title: "Web Console", url: "/system-settings/web-console" }' "$sidebar" \
+            || fail "Terminal sidebar patch lost Web Console child"
+    fi
     log "Terminal sidebar now shows AT Terminal and Web Console children"
 }
 
@@ -5507,6 +5830,7 @@ apply_casa_overlays() {
     patch_casa_display_name
     patch_casa_reboot
     patch_casa_scheduled_reboot_cfw3212
+    patch_casa_tower_schedule_cfw3212
     patch_casa_watchcat_tiers
     copy_template_or_fallback "components/nav-user.tsx" "$TEMPLATE_DIR/components/nav-user.tsx"
     copy_template_or_fallback "components/monitoring/software-update/update-preferences-card.tsx" "$TEMPLATE_DIR/components/monitoring/software-update/update-preferences-card.tsx"
