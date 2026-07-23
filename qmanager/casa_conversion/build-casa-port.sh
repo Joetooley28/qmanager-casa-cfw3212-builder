@@ -3301,9 +3301,6 @@ if "link.policy.1.trigger_connect" not in text:
         raise SystemExit("tier1 AT+COPS block not found")
     text = text.replace(old_tier1, new_tier1, 1)
 
-old_tier4 = '''    # Reboot after flushing state
-    ( sleep 1 && reboot ) &
-'''
 new_tier4 = '''    # Reboot after flushing state - Casa RDB reset path with reboot fallback
     (
         sleep 1
@@ -3318,10 +3315,19 @@ new_tier4 = '''    # Reboot after flushing state - Casa RDB reset path with rebo
         fi
     ) </dev/null >/dev/null 2>&1 &
 '''
+old_tier4_v13 = '''    # Reboot after flushing state
+    ( sleep 1 && run_reboot ) &
+'''
+old_tier4_v12 = '''    # Reboot after flushing state
+    ( sleep 1 && reboot ) &
+'''
 if "QManager watchcat tier4 recovery" not in text:
-    if old_tier4 not in text:
+    if old_tier4_v13 in text:
+        text = text.replace(old_tier4_v13, new_tier4, 1)
+    elif old_tier4_v12 in text:
+        text = text.replace(old_tier4_v12, new_tier4, 1)
+    else:
         raise SystemExit("tier4 reboot block not found")
-    text = text.replace(old_tier4, new_tier4, 1)
 
 path.write_text(text)
 PY
@@ -5280,6 +5286,11 @@ patch_terminal_sidebar_children_cfw3212() {
     local sidebar="$TARGET/components/app-sidebar.tsx"
     [ -f "$sidebar" ] || fail "Terminal sidebar patch: missing $sidebar"
 
+    if grep -q 't_key: "at_terminal", url: "/system-settings/at-terminal"' "$sidebar" && \
+       grep -q 't_key: "web_console", url: "/system-settings/web-console"' "$sidebar"; then
+        log "Terminal sidebar children patch already applied"
+        return 0
+    fi
     if grep -q '{ title: "AT Terminal", url: "/system-settings/at-terminal" }' "$sidebar" && \
        grep -q '{ title: "Web Console", url: "/system-settings/web-console" }' "$sidebar"; then
         log "Terminal sidebar children patch already applied"
@@ -5293,7 +5304,24 @@ import sys
 path = Path(sys.argv[1])
 text = path.read_text()
 
-old = '''    {
+old_v13 = '''    {
+      t_key: "terminals",
+      url: "/system-settings/at-terminal",
+      icon: TerminalIcon,
+      items: [{ t_key: "web_console", url: "/system-settings/web-console" }],
+    },'''
+
+new_v13 = '''    {
+      t_key: "terminals",
+      url: "/system-settings/at-terminal",
+      icon: TerminalIcon,
+      items: [
+        { t_key: "at_terminal", url: "/system-settings/at-terminal" },
+        { t_key: "web_console", url: "/system-settings/web-console" },
+      ],
+    },'''
+
+old_v12 = '''    {
       title: "Terminals",
       url: "/system-settings/at-terminal",
       icon: TerminalIcon,
@@ -5302,7 +5330,7 @@ old = '''    {
       ],
     },'''
 
-new = '''    {
+new_v12 = '''    {
       title: "Terminals",
       url: "/system-settings/at-terminal",
       icon: TerminalIcon,
@@ -5312,15 +5340,26 @@ new = '''    {
       ],
     },'''
 
-if old not in text:
+if old_v13 in text:
+    text = text.replace(old_v13, new_v13, 1)
+elif old_v12 in text:
+    text = text.replace(old_v12, new_v12, 1)
+else:
     raise SystemExit("app-sidebar: Terminals block not found (upstream may have changed)")
-path.write_text(text.replace(old, new, 1))
+path.write_text(text)
 PY
 
-    grep -q '{ title: "AT Terminal", url: "/system-settings/at-terminal" }' "$sidebar" \
-        || fail "Terminal sidebar patch did not add AT Terminal child"
-    grep -q '{ title: "Web Console", url: "/system-settings/web-console" }' "$sidebar" \
-        || fail "Terminal sidebar patch lost Web Console child"
+    if grep -q 't_key: "terminals"' "$sidebar"; then
+        grep -q 't_key: "at_terminal", url: "/system-settings/at-terminal"' "$sidebar" \
+            || fail "Terminal sidebar patch did not add AT Terminal child"
+        grep -q 't_key: "web_console", url: "/system-settings/web-console"' "$sidebar" \
+            || fail "Terminal sidebar patch lost Web Console child"
+    else
+        grep -q '{ title: "AT Terminal", url: "/system-settings/at-terminal" }' "$sidebar" \
+            || fail "Terminal sidebar patch did not add AT Terminal child"
+        grep -q '{ title: "Web Console", url: "/system-settings/web-console" }' "$sidebar" \
+            || fail "Terminal sidebar patch lost Web Console child"
+    fi
     log "Terminal sidebar now shows AT Terminal and Web Console children"
 }
 
