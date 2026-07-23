@@ -1559,8 +1559,39 @@ import sys
 settings = Path(sys.argv[1])
 watchcat = Path(sys.argv[2])
 
+casa_sim_switch = '''# Casa CFW-3212 safety: do not auto-apply SIM profiles.
+                    qlog_info "Casa profile auto-apply disabled after SIM switch"'''
+
 text = settings.read_text()
-old = '''                    # Auto-apply matching profile for the new SIM
+# v0.1.13+: verified QUIMSLOT switch with known-SIM registration before apply.
+old_v13 = '''                # Auto-apply matching profile for the new SIM (verified switch only)
+                sleep 1  # let SIM initialize after CFUN=1
+                _new_iccid=$(qcmd 'AT+QCCID' 2>/dev/null | grep '+QCCID:' | sed 's/+QCCID: //g' | tr -d '\\r ')
+                if [ -n "$_new_iccid" ]; then
+                    # Register the switched-to SIM in the known-SIMs database so
+                    # the Known SIMs count reflects it immediately. A deliberate
+                    # slot switch is an expected SIM (like a watchdog failover),
+                    # not a physical swap to alert on — this also suppresses a
+                    # redundant "New SIM" toast on the next poller boot.
+                    ( . /usr/lib/qmanager/sim_db.sh 2>/dev/null && sim_db_add "$_new_iccid" )
+                    . /usr/lib/qmanager/profile_mgr.sh 2>/dev/null
+                    auto_apply_profile "$_new_iccid" "sim_switch"
+                fi
+'''
+new_v13 = f'''                sleep 1  # let SIM initialize after CFUN=1
+                _new_iccid=$(qcmd 'AT+QCCID' 2>/dev/null | grep '+QCCID:' | sed 's/+QCCID: //g' | tr -d '\\r ')
+                if [ -n "$_new_iccid" ]; then
+                    # Register the switched-to SIM in the known-SIMs database so
+                    # the Known SIMs count reflects it immediately. A deliberate
+                    # slot switch is an expected SIM (like a watchdog failover),
+                    # not a physical swap to alert on — this also suppresses a
+                    # redundant "New SIM" toast on the next poller boot.
+                    ( . /usr/lib/qmanager/sim_db.sh 2>/dev/null && sim_db_add "$_new_iccid" )
+                fi
+                {casa_sim_switch}
+'''
+# v0.1.12 and earlier: auto-apply directly after CFUN=1 restore.
+old_v12 = '''                    # Auto-apply matching profile for the new SIM
                     sleep 1  # let SIM initialize after CFUN=1
                     _new_iccid=$(qcmd 'AT+QCCID' 2>/dev/null | grep '+QCCID:' | sed 's/+QCCID: //g' | tr -d '\\r ')
                     if [ -n "$_new_iccid" ]; then
@@ -1568,24 +1599,41 @@ old = '''                    # Auto-apply matching profile for the new SIM
                         auto_apply_profile "$_new_iccid" "sim_switch"
                     fi
 '''
-new = '''                    # Casa CFW-3212 safety: do not auto-apply SIM profiles.
-                    qlog_info "Casa profile auto-apply disabled after SIM switch"
+new_v12 = f'''                    {casa_sim_switch}
 '''
-if old in text:
-    text = text.replace(old, new, 1)
+if old_v13 in text:
+    text = text.replace(old_v13, new_v13, 1)
+elif old_v12 in text:
+    text = text.replace(old_v12, new_v12, 1)
 settings.write_text(text)
 
+casa_watchdog_revert = '''    # Casa CFW-3212 safety: do not auto-apply SIM profiles.
+    qlog_info "Casa profile auto-apply disabled after watchdog SIM revert"'''
+
 text = watchcat.read_text()
-text = text.replace(
-    '''    # Auto-apply matching profile for the reverted SIM
+old_revert_v13 = '''    # Auto-apply matching profile for the reverted SIM
+    local _revert_iccid
+    _revert_iccid=$(qcmd 'AT+QCCID' 2>/dev/null | grep '+QCCID:' | sed 's/+QCCID: //g' | tr -d '\\r ')
+    sim_db_seed_if_absent >/dev/null 2>&1
+    sim_db_add "$_revert_iccid"
+    [ -n "$_revert_iccid" ] && auto_apply_profile "$_revert_iccid" "watchdog_revert"
+'''
+new_revert_v13 = f'''    local _revert_iccid
+    _revert_iccid=$(qcmd 'AT+QCCID' 2>/dev/null | grep '+QCCID:' | sed 's/+QCCID: //g' | tr -d '\\r ')
+    sim_db_seed_if_absent >/dev/null 2>&1
+    sim_db_add "$_revert_iccid"
+{casa_watchdog_revert}
+'''
+old_revert_v12 = '''    # Auto-apply matching profile for the reverted SIM
     local _revert_iccid
     _revert_iccid=$(qcmd 'AT+QCCID' 2>/dev/null | grep '+QCCID:' | sed 's/+QCCID: //g' | tr -d '\\r ')
     [ -n "$_revert_iccid" ] && auto_apply_profile "$_revert_iccid" "watchdog_revert"
-''',
-    '''    # Casa CFW-3212 safety: do not auto-apply SIM profiles.
-    qlog_info "Casa profile auto-apply disabled after watchdog SIM revert"
-''',
-)
+'''
+if old_revert_v13 in text:
+    text = text.replace(old_revert_v13, new_revert_v13, 1)
+elif old_revert_v12 in text:
+    text = text.replace(old_revert_v12, casa_watchdog_revert, 1)
+
 text = text.replace(
     '''            # Auto-apply matching profile for the new SIM
             if [ -n "$curr_iccid" ]; then
