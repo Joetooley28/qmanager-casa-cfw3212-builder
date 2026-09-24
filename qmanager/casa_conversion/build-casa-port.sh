@@ -3677,9 +3677,9 @@ if "link.policy.1.trigger_connect" not in text:
         raise SystemExit("tier1 AT+COPS block not found")
     text = text.replace(old_tier1, new_tier1, 1)
 
-old_tier4 = '''    # Reboot after flushing state
-    ( sleep 1 && reboot ) &
-'''
+import re
+_m4 = re.search(r"    # Reboot after flushing state\n    \( sleep 1 && (?:run_)?reboot \) &\n", text)
+old_tier4 = _m4.group(0) if _m4 else "\0never\0"
 new_tier4 = '''    # Reboot after flushing state - Casa RDB reset path with reboot fallback
     (
         sleep 1
@@ -3723,14 +3723,46 @@ import sys
 path = Path(sys.argv[1])
 text = path.read_text()
 
-old_config = '''    val=$(qm_config_get watchcat tier3_enabled "")
+# Structure-based edits (function names, condition lines, fi at the same
+# indent) rather than exact bodies, so upstream Tier 3 rewrites (v0.1.14+
+# added QUIMSLOT read-back and CPIN retries) do not break the Casa port.
+
+def replace_function(src, name, body):
+    m = re.search(r"^%s\(\) \{\n.*?^\}\n" % re.escape(name), src, flags=re.S | re.M)
+    if not m:
+        raise SystemExit(f"watchcat {name}() not found")
+    return src[:m.start()] + body + src[m.end():]
+
+def replace_if_blocks(src, cond_line, stub, required=True):
+    lines = src.split("\n")
+    out, i, hits = [], 0, 0
+    while i < len(lines):
+        line = lines[i]
+        if line.strip() == cond_line:
+            indent = line[: len(line) - len(line.lstrip())]
+            j = i + 1
+            while j < len(lines) and lines[j] != indent + "fi":
+                j += 1
+            if j == len(lines):
+                raise SystemExit(f"watchcat: unterminated block for {cond_line!r}")
+            out.extend(indent + s if s else s for s in stub.split("\n"))
+            i = j + 1
+            hits += 1
+            continue
+        out.append(line)
+        i += 1
+    if required and not hits:
+        raise SystemExit(f"watchcat block not found: {cond_line!r}")
+    return "\n".join(out), hits
+
+old_config = """    val=$(qm_config_get watchcat tier3_enabled "")
     [ -n "$val" ] && CFG_TIER3_ENABLED="$val"
-'''
-new_config = '''    val=$(qm_config_get watchcat tier3_enabled "")
+"""
+new_config = """    val=$(qm_config_get watchcat tier3_enabled "")
     [ -n "$val" ] && CFG_TIER3_ENABLED="$val"
     # Casa CFW-3212 is single-SIM hardware; never allow Watchdog SIM failover.
     CFG_TIER3_ENABLED=0
-'''
+"""
 if "never allow Watchdog SIM failover" not in text:
     if old_config not in text:
         raise SystemExit("watchcat tier3 config block not found")
@@ -3741,7 +3773,7 @@ text = text.replace(
     "#   Tier 3: SIM failover — disabled on Casa CFW-3212 single-SIM hardware\n",
 )
 
-replacement = '''execute_tier3() {
+text = replace_function(text, "execute_tier3", """execute_tier3() {
     qlog_info "TIER 3: SIM failover skipped on Casa CFW-3212 single-SIM hardware"
     append_event "sim_failover" "Watchcat: SIM failover skipped on Casa single-SIM hardware" "info"
     sim_failover_active="false"
@@ -3750,9 +3782,8 @@ replacement = '''execute_tier3() {
     rm -f "$SIM_FAILOVER_FILE" "$REVERT_FLAG"
     return 1
 }
-
-# Fallback: Casa CFW-3212 has no alternate SIM slot to revert from.
-sim_failover_fallback() {
+""")
+text = replace_function(text, "sim_failover_fallback", """sim_failover_fallback() {
     qlog_info "SIM failover fallback skipped on Casa CFW-3212 single-SIM hardware"
     sim_failover_active="false"
     original_sim_slot="null"
@@ -3760,70 +3791,37 @@ sim_failover_fallback() {
     rm -f "$SIM_FAILOVER_FILE" "$REVERT_FLAG"
     return 1
 }
+""")
 
-'''
-pattern = r'execute_tier3\(\) \{.*?\n\}\n\n# Fallback: revert SIM to original slot\nsim_failover_fallback\(\) \{.*?\n\}\n\n'
-text, count = re.subn(pattern, replacement, text, count=1, flags=re.S)
-if count != 1:
-    raise SystemExit("watchcat tier3/fallback function block not found")
+# Cooldown success/failure finalization for Tier 3 (success path also ran a
+# Watchdog-origin SIM profile auto-apply).
+text, _ = replace_if_blocks(
+    text,
+    'if [ "$current_tier" -eq 3 ] && [ "$current_sim_slot" != "$original_sim_slot" ] && [ "$original_sim_slot" != "null" ]; then',
+    """# Casa CFW-3212 is single-SIM hardware; never finalize Watchdog SIM failover state.
+if [ "$current_tier" -eq 3 ]; then
+    sim_failover_active="false"
+    original_sim_slot="null"
+    current_sim_slot="null"
+    rm -f "$SIM_FAILOVER_FILE" "$REVERT_FLAG"
+fi""",
+)
 
-old_finalize = '''        # If this was Tier 3 SIM failover, finalize the failover state
-        if [ "$current_tier" -eq 3 ] && [ "$current_sim_slot" != "$original_sim_slot" ] && [ "$original_sim_slot" != "null" ]; then
-            sim_failover_active="true"
-
-            # Read ICCIDs for the state file
-            local orig_iccid curr_iccid_raw curr_iccid
-            orig_iccid=""  # we don't have it cached
-            curr_iccid_raw=$(qcmd 'AT+QCCID' 2>/dev/null)
-            curr_iccid=$(printf '%s' "$curr_iccid_raw" | grep '+QCCID:' | sed 's/+QCCID: //g' | tr -d '\\r ')
-
-            local ts
-            ts=$(date +%s)
-            printf '{"active":true,"original_slot":%s,"current_slot":%s,"switched_at":%d,"reason":"connectivity_failure","original_iccid":"","current_iccid":"%s"}\\n' \\
-                "$original_sim_slot" "$current_sim_slot" "$ts" "$curr_iccid" \\
-                > "$SIM_FAILOVER_FILE"
-
-            qlog_info "SIM failover state saved: slot $original_sim_slot → $current_sim_slot"
-
-            # Casa CFW-3212 is single-SIM hardware; Watchdog SIM failover is disabled.
-            qlog_info "Casa Watchdog SIM failover profile apply skipped on single-SIM hardware"
-        fi
-'''
-new_finalize = '''        # Casa CFW-3212 is single-SIM hardware; never finalize Watchdog SIM failover state.
-        if [ "$current_tier" -eq 3 ]; then
-            sim_failover_active="false"
-            original_sim_slot="null"
-            current_sim_slot="null"
-            rm -f "$SIM_FAILOVER_FILE" "$REVERT_FLAG"
-        fi
-'''
-if old_finalize in text:
-    text = text.replace(old_finalize, new_finalize, 1)
-else:
-    raise SystemExit("watchcat tier3 cooldown finalization block not found")
-
-old_stale = '''    # Check for stale SIM failover state from before reboot
-    if [ -f "$SIM_FAILOVER_FILE" ]; then
-        local sf_active_val
-        sf_active_val=$(jq -r '(.active) | if . == null then "false" else tostring end' "$SIM_FAILOVER_FILE" 2>/dev/null)
-        if [ "$sf_active_val" = "true" ]; then
-            sim_failover_active="true"
-            original_sim_slot=$(jq -r '(.original_slot) | if . == null then "null" else tostring end' "$SIM_FAILOVER_FILE" 2>/dev/null)
-            current_sim_slot=$(jq -r '(.current_slot) | if . == null then "null" else tostring end' "$SIM_FAILOVER_FILE" 2>/dev/null)
-            qlog_info "Resuming SIM failover state: slot $original_sim_slot → $current_sim_slot"
-        fi
-    fi
-'''
-new_stale = '''    # Casa CFW-3212 is single-SIM hardware; discard stale upstream SIM failover state.
-    if [ -f "$SIM_FAILOVER_FILE" ]; then
-        qlog_info "Discarding stale SIM failover state on Casa single-SIM hardware"
-        rm -f "$SIM_FAILOVER_FILE" "$REVERT_FLAG"
-    fi
-'''
-if old_stale in text:
-    text = text.replace(old_stale, new_stale, 1)
-else:
-    raise SystemExit("watchcat stale sim failover state block not found")
+# Boot-time resume of saved failover state in main().
+main_at = text.find("\nmain() {")
+if main_at < 0:
+    raise SystemExit("watchcat main() not found")
+head, tail = text[:main_at], text[main_at:]
+tail, _ = replace_if_blocks(
+    tail,
+    'if [ -f "$SIM_FAILOVER_FILE" ]; then',
+    """# Casa CFW-3212 is single-SIM hardware; discard stale upstream SIM failover state.
+if [ -f "$SIM_FAILOVER_FILE" ]; then
+    qlog_info "Discarding stale SIM failover state on Casa single-SIM hardware"
+    rm -f "$SIM_FAILOVER_FILE" "$REVERT_FLAG"
+fi""",
+)
+text = head + tail
 
 path.write_text(text)
 PY
