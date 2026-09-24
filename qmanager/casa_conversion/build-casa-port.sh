@@ -212,6 +212,290 @@ copy_template_or_fallback() {
     fail "Template/reference overlay missing: $rel"
 }
 
+upstream_has_v14_software_update() {
+    [ -f "$TARGET/components/system-settings/software-update/derive.ts" ]
+}
+
+# Casa whole-file overrides are stored with the upstream file they were written
+# against (templates/upstream-base/<tag>/<rel>). When the target still matches
+# that base, the template is copied as-is; otherwise Casa's changes are
+# three-way merged onto the newer upstream file, failing on real conflicts.
+merge_template_cfw3212() {
+    local rel="$1"
+    local template="$TEMPLATE_DIR/$rel"
+    local target="$TARGET/$rel"
+    local base_dir base merged
+    [ -f "$template" ] || fail "Template missing: $rel"
+    [ -f "$target" ] || fail "Upstream target missing for template merge: $rel"
+    for base_dir in "$TEMPLATE_DIR"/upstream-base/*/; do
+        base="$base_dir$rel"
+        [ -f "$base" ] || continue
+        if cmp -s "$base" "$target"; then
+            cp "$template" "$target"
+            sed -i 's/\r$//' "$target" 2>/dev/null || true
+            return 0
+        fi
+        merged="$(mktemp)"
+        if git merge-file -p "$template" "$base" "$target" > "$merged" 2>/dev/null; then
+            mv "$merged" "$target"
+            sed -i 's/\r$//' "$target" 2>/dev/null || true
+            log "Merged Casa template onto newer upstream: $rel (base $(basename "$base_dir"))"
+            return 0
+        fi
+        rm -f "$merged"
+    done
+    fail "Casa template does not merge cleanly onto upstream: $rel"
+}
+
+patch_software_update_v14_cfw3212() {
+    # Upstream v0.1.14+ rebuilt Software Update (components/system-settings/
+    # software-update/* driven by derive.ts). Casa keeps its own update CGI and
+    # installer: install restarts QManager services and then reports
+    # reboot_required instead of rebooting, and the CGI serves Joetooley and
+    # upstream release notes separately.
+    local hook="$TARGET/hooks/use-software-update.ts"
+    local dir="$TARGET/components/system-settings/software-update"
+    local page="$dir/software-update.tsx"
+    local notes="$dir/release-notes-card.tsx"
+    local locale="$TARGET/public/locales/en/system-settings.json"
+    [ -f "$hook" ] || fail "use-software-update.ts missing in target"
+    [ -f "$page" ] || fail "software-update.tsx missing in target"
+    [ -f "$notes" ] || fail "release-notes-card.tsx missing in target"
+    [ -f "$locale" ] || fail "en/system-settings.json missing in target"
+
+    python3 - "$hook" "$page" "$notes" "$locale" <<'PY'
+from pathlib import Path
+import json
+import sys
+
+hook, page, notes, locale = map(Path, sys.argv[1:5])
+
+def sub(path, old, new, label, count=1):
+    text = path.read_text()
+    if new in text:
+        return
+    if text.count(old) < 1:
+        raise SystemExit(f"software update v14: {label} anchor not found in {path.name}")
+    path.write_text(text.replace(old, new, count))
+
+# --- hook -----------------------------------------------------------------
+sub(hook, "  current_changelog: string | null;\n",
+    "  current_changelog: string | null;\n"
+    "  /** Casa CFW-3212 package CGI: split Joetooley / upstream release notes. */\n"
+    "  joetooley_changelog?: string | null;\n"
+    "  upstream_changelog?: string | null;\n"
+    "  current_joetooley_changelog?: string | null;\n"
+    "  current_upstream_changelog?: string | null;\n"
+    "  upstream_release_url?: string | null;\n",
+    "UpdateInfo fields")
+sub(hook, '  status: "idle" | "downloading" | "installing" | "rebooting" | "error";',
+    '  status: "idle" | "downloading" | "installing" | "reboot_required" | "rebooting" | "error";',
+    "UpdateStatus union")
+sub(hook, "  installVersion: (version: string) => Promise<void>;\n",
+    "  installVersion: (version: string) => Promise<void>;\n"
+    "  /** Casa: finish a reboot_required install. */\n"
+    "  rebootNow: () => Promise<void>;\n",
+    "return type")
+sub(hook, "  const fetchUpdateInfo = useCallback(async (silent = false) => {\n",
+    "  const fetchUpdateInfo = useCallback(async (silent = false, refresh = false) => {\n",
+    "fetchUpdateInfo signature")
+sub(hook, "      const resp = await authFetch(CGI_ENDPOINT);\n",
+    '      const resp = await authFetch(`${CGI_ENDPOINT}${refresh ? "?refresh=1" : ""}`);\n',
+    "fetchUpdateInfo url")
+sub(hook, "    await fetchUpdateInfo(true);\n", "    await fetchUpdateInfo(true, true);\n",
+    "checkForUpdates refresh")
+
+# Install poller: stop on reboot_required; ride out Casa's service restart.
+text = hook.read_text()
+start = text.index("  const startPolling = useCallback(() => {")
+end = text.index("  }, [fail]);", start)
+block = text[start:end]
+if 'json.status === "reboot_required"' not in block:
+    block = block.replace('        if (json.status === "rebooting") {\n',
+        '        if (json.status === "reboot_required") {\n'
+        '          if (pollRef.current) clearInterval(pollRef.current);\n'
+        '          pollRef.current = null;\n'
+        '          sessionStorage.removeItem("qm_update_reload_scheduled");\n'
+        '          setIsUpdating(false);\n'
+        '          return;\n'
+        '        }\n\n'
+        '        if (json.status === "rebooting") {\n', 1)
+    old_catch = block[block.index("      } catch {\n"):block.index("    }, POLL_INTERVAL);")]
+    block = block.replace(old_catch,
+        "      } catch {\n"
+        "        // Casa restarts QManager/lighttpd during install, so a failed poll is\n"
+        "        // expected. Keep polling until the worker reports reboot_required or\n"
+        "        // an error; reload this page as a fallback for a dropped session.\n"
+        '        if (!sessionStorage.getItem("qm_update_reload_scheduled")) {\n'
+        '          sessionStorage.setItem("qm_update_reload_scheduled", "1");\n'
+        "          window.setTimeout(() => {\n"
+        "            window.location.reload();\n"
+        "          }, 30000);\n"
+        "        }\n"
+        "        setUpdateStatus({\n"
+        '          status: "installing",\n'
+        '          message: "QManager services are restarting; reconnecting.",\n'
+        "        });\n"
+        "      }\n", 1)
+    if 'json.status === "reboot_required"' not in block or "qm_update_reload_scheduled" not in block:
+        raise SystemExit("software update v14: install poller patch failed")
+    text = text[:start] + block + text[end:]
+    hook.write_text(text)
+
+sub(hook, "  // Fetch on mount\n  useEffect(() => {\n    fetchUpdateInfo();\n  }, [fetchUpdateInfo]);\n",
+    "  // Fetch on mount\n  useEffect(() => {\n    fetchUpdateInfo();\n  }, [fetchUpdateInfo]);\n\n"
+    "  // Casa: restore a pending post-install reboot after navigation. The backend\n"
+    "  // keeps reboot_required in /tmp/qmanager_update.json until the reboot.\n"
+    "  useEffect(() => {\n"
+    "    let cancelled = false;\n"
+    "    (async () => {\n"
+    "      try {\n"
+    "        const resp = await authFetch(`${CGI_ENDPOINT}?action=status`);\n"
+    "        if (!resp.ok) return;\n"
+    "        const json: UpdateStatus = await resp.json();\n"
+    "        if (cancelled || !mountedRef.current) return;\n"
+    '        if (json.status === "reboot_required") setUpdateStatus(json);\n'
+    "      } catch {\n"
+    "        // the install poller picks it up if a job is active\n"
+    "      }\n"
+    "    })();\n"
+    "    return () => {\n"
+    "      cancelled = true;\n"
+    "    };\n"
+    "  }, []);\n",
+    "mount effect")
+sub(hook, "  const checkForUpdates = useCallback(async () => {\n",
+    "  const rebootNow = useCallback(async () => {\n"
+    '    setUpdateStatus({ status: "rebooting" });\n'
+    '    sessionStorage.setItem("qm_rebooting", "1");\n'
+    '    document.cookie = "qm_logged_in=; Path=/; Max-Age=0";\n'
+    "    fetch(CGI_ENDPOINT, {\n"
+    '      method: "POST",\n'
+    '      headers: { "Content-Type": "application/json" },\n'
+    '      body: JSON.stringify({ action: "reboot_now" }),\n'
+    "      keepalive: true,\n"
+    "    }).catch(() => {});\n"
+    '    window.location.href = "/reboot/";\n'
+    "  }, []);\n\n"
+    "  const checkForUpdates = useCallback(async () => {\n",
+    "rebootNow callback")
+sub(hook, "    installVersion,\n    togglePrerelease,\n    saveAutoUpdate,\n  };\n",
+    "    installVersion,\n    rebootNow,\n    togglePrerelease,\n    saveAutoUpdate,\n  };\n",
+    "return object")
+
+# --- page: reboot-required banner ------------------------------------------
+sub(page, "    installVersion,\n    togglePrerelease,\n    saveAutoUpdate,\n  } = useSoftwareUpdate();\n",
+    "    installVersion,\n    rebootNow,\n    togglePrerelease,\n    saveAutoUpdate,\n  } = useSoftwareUpdate();\n",
+    "page hook destructure")
+sub(page, "      <PageHeader\n",
+    "      {/* Casa CFW-3212: install restarts QManager services, then waits for a\n"
+    "          user-chosen reboot to finish applying the update. */}\n"
+    '      {updateStatus.status === "reboot_required" && (\n'
+    "        <Banner\n"
+    '          role="degraded"\n'
+    '          title="Reboot required"\n'
+    "          description={\n"
+    "            updateStatus.message ||\n"
+    '            "Installation complete. Reboot when ready to finish applying the update."\n'
+    "          }\n"
+    "          action={\n"
+    "            <button\n"
+    '              type="button"\n'
+    "              onClick={() => void rebootNow()}\n"
+    '              className={bannerActionVariants({ tone: "on-warning" })}\n'
+    "            >\n"
+    "              Reboot now\n"
+    "            </button>\n"
+    "          }\n"
+    "        />\n"
+    "      )}\n\n"
+    "      <PageHeader\n",
+    "page banner")
+
+# --- release notes: Joetooley / upstream tabs -------------------------------
+sub(notes,
+    "  const changelog =\n    (next ? info?.changelog : info?.current_changelog)?.trim() || null;\n",
+    '  const [notesSource, setNotesSource] = React.useState<"joetooley" | "upstream">(\n'
+    '    "joetooley",\n'
+    "  );\n"
+    "  // Casa CFW-3212: the package CGI serves Joetooley (Casa) and upstream notes\n"
+    "  // separately; fall back to the combined changelog when neither is present.\n"
+    "  const joetooleyNotes =\n"
+    "    (next ? info?.joetooley_changelog : info?.current_joetooley_changelog)?.trim() || null;\n"
+    "  const upstreamNotes =\n"
+    "    (next ? info?.upstream_changelog : info?.current_upstream_changelog)?.trim() ||\n"
+    "    (info?.upstream_release_url\n"
+    "      ? `[View upstream release notes](${info.upstream_release_url})`\n"
+    "      : null);\n"
+    "  const hasSplitNotes = Boolean(joetooleyNotes || upstreamNotes);\n"
+    "  const fallbackNotes =\n"
+    "    (next ? info?.changelog : info?.current_changelog)?.trim() || null;\n"
+    "  const changelog =\n"
+    '    (notesSource === "upstream" ? upstreamNotes : joetooleyNotes) || fallbackNotes;\n',
+    "release notes changelog")
+sub(notes,
+    "          {changelog ? (\n            <>\n",
+    "          {changelog ? (\n            <>\n"
+    "              {hasSplitNotes && (\n"
+    '                <div className="inline-flex w-fit rounded-md border bg-background p-0.5">\n'
+    "                  <Button\n"
+    '                    type="button"\n'
+    '                    variant={notesSource === "joetooley" ? "secondary" : "ghost"}\n'
+    '                    size="sm"\n'
+    '                    className="h-7 px-2 text-xs"\n'
+    '                    onClick={() => setNotesSource("joetooley")}\n'
+    "                  >\n"
+    "                    Joetooley\n"
+    "                  </Button>\n"
+    "                  <Button\n"
+    '                    type="button"\n'
+    '                    variant={notesSource === "upstream" ? "secondary" : "ghost"}\n'
+    '                    size="sm"\n'
+    '                    className="h-7 px-2 text-xs"\n'
+    '                    onClick={() => setNotesSource("upstream")}\n'
+    "                  >\n"
+    "                    Rus | Ame / Dr. D\n"
+    "                  </Button>\n"
+    "                </div>\n"
+    "              )}\n",
+    "release notes toggle")
+
+# --- English wording: Casa installs restart services, then ask for a reboot --
+data = json.loads(locale.read_text())
+su = data["software_update"]
+casa = {
+    ("page", "description"): "QManager checks the Casa CFW-3212 package releases and installs them on the modem itself. Installing replaces the app and restarts QManager services; you reboot when ready to finish.",
+    ("card", "available", "description"): "Downloading and installing takes a few minutes. QManager restarts its services, then asks you to reboot when ready.",
+    ("card", "staged", "description"): "The package is downloaded and verified. Installing replaces QManager and restarts its services; reboot when prompted.",
+    ("notice", "rest"): "Installing restarts QManager services, which briefly drops this session. A reboot is requested afterwards to finish.",
+    ("notice", "staged"): "Installing replaces QManager and restarts its services. This session drops briefly, then you are asked to reboot.",
+    ("notice", "versions"): "Every option here restarts QManager services and then asks for a reboot, and an older build can undo settings a newer one introduced.",
+    ("preferences", "auto", "description"): "Unattended updates are disabled on Casa CFW-3212 builds.",
+    ("versions", "dialog", "description_install"): "This installs {{version}} in place of {{current}}. QManager restarts its services, then asks you to reboot when ready.",
+    ("versions", "dialog", "description_reinstall"): "This reinstalls {{version}} over the copy already on the modem, to repair it. QManager restarts its services, then asks you to reboot when ready.",
+}
+for keys, value in casa.items():
+    node = su
+    for k in keys[:-1]:
+        node = node.get(k)
+        if not isinstance(node, dict):
+            raise SystemExit(f"software update v14: locale key missing {'.'.join(keys)}")
+    if keys[-1] not in node:
+        raise SystemExit(f"software update v14: locale key missing {'.'.join(keys)}")
+    node[keys[-1]] = value
+locale.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n")
+PY
+
+    grep -q 'json.status === "reboot_required"' "$hook" \
+        || fail "Software Update v14: hook missing reboot_required handling"
+    grep -q 'rebootNow,' "$hook" \
+        || fail "Software Update v14: hook missing rebootNow"
+    grep -q 'Reboot required' "$page" \
+        || fail "Software Update v14: page missing reboot-required banner"
+    grep -q 'joetooley_changelog' "$notes" \
+        || fail "Software Update v14: release notes missing Joetooley source"
+}
+
 patch_build_script() {
     local build="$TARGET/build.sh"
     [ -f "$build" ] || fail "Target missing build.sh"
@@ -6498,11 +6782,13 @@ apply_casa_overlays() {
     patch_casa_watchcat_single_sim_cfw3212
     patch_casa_watchdog_ui_single_sim_cfw3212
     patch_casa_watchcat_ping_health_cfw3212
-    copy_template_or_fallback "components/nav-user.tsx" "$TEMPLATE_DIR/components/nav-user.tsx"
-    copy_template_or_fallback "components/monitoring/software-update/update-preferences-card.tsx" "$TEMPLATE_DIR/components/monitoring/software-update/update-preferences-card.tsx"
-    copy_template_or_fallback "components/monitoring/software-update/software-update.tsx" "$TEMPLATE_DIR/components/monitoring/software-update/software-update.tsx"
-    copy_template_or_fallback "hooks/use-software-update.ts" "$TEMPLATE_DIR/hooks/use-software-update.ts"
-    copy_template_or_fallback "components/reboot/reboot-countdown.tsx" "$TEMPLATE_DIR/components/reboot/reboot-countdown.tsx"
+    merge_template_cfw3212 "components/nav-user.tsx"
+    merge_template_cfw3212 "components/reboot/reboot-countdown.tsx"
+    if ! upstream_has_v14_software_update; then
+        copy_template_or_fallback "components/monitoring/software-update/update-preferences-card.tsx" "$TEMPLATE_DIR/components/monitoring/software-update/update-preferences-card.tsx"
+        copy_template_or_fallback "components/monitoring/software-update/software-update.tsx" "$TEMPLATE_DIR/components/monitoring/software-update/software-update.tsx"
+        copy_template_or_fallback "hooks/use-software-update.ts" "$TEMPLATE_DIR/hooks/use-software-update.ts"
+    fi
     patch_casa_tailscale_tiny_cfw3212
     patch_casa_tailscale_install_label_cfw3212
     patch_casa_poller_boot_identity_cfw3212
@@ -6511,7 +6797,11 @@ apply_casa_overlays() {
     patch_email_alerts_casa_msmtp
     patch_ping_profile_service_toggle_cfw3212
     patch_speedtest_latency_iqm_guard_cfw3212
-    patch_software_update_reboot_required_cfw3212
+    if upstream_has_v14_software_update; then
+        patch_software_update_v14_cfw3212
+    else
+        patch_software_update_reboot_required_cfw3212
+    fi
     patch_deterministic_frontend_build_id_cfw3212
 
     write_qmanager_update_cfw3212

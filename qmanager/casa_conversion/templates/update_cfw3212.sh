@@ -356,7 +356,7 @@ if [ "$REQUEST_METHOD" = "GET" ]; then
                     --argjson include_prerelease_bool "$include_prerelease_json" \
                     --arg auto_time "$auto_time" \
                     '{
-                        success: true, current_version: $cv,
+                        success: true, previous_install_failed: false, pending_version: null, current_version: $cv,
                         latest_version: null, update_available: false,
                         changelog: null, current_changelog: null,
                         download_url: null, download_size: null,
@@ -380,7 +380,7 @@ if [ "$REQUEST_METHOD" = "GET" ]; then
                 --argjson include_prerelease_bool "$include_prerelease_json" \
                 --arg auto_time "$auto_time" \
                 '{
-                    success: true, current_version: $cv,
+                    success: true, previous_install_failed: false, pending_version: null, current_version: $cv,
                     latest_version: null, update_available: false,
                     changelog: null, current_changelog: null,
                     download_url: null, download_size: null,
@@ -518,6 +518,8 @@ if [ "$REQUEST_METHOD" = "GET" ]; then
         --arg auto_time "$auto_time" \
         '{
             success: true,
+            previous_install_failed: false,
+            pending_version: null,
             current_version: $cv,
             latest_version: (if $lv == "" then null else $lv end),
             update_available: $ua,
