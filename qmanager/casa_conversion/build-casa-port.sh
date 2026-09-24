@@ -2620,6 +2620,7 @@ patch_ai62_cookie_cors_config_hardening_cfw3212() {
 
     python3 - "$cgi_auth" "$cgi_base" "$setup" <<'PY'
 from pathlib import Path
+import re
 import sys
 
 cgi_auth_path, cgi_base_path, setup_path = map(Path, sys.argv[1:])
@@ -2680,24 +2681,22 @@ cgi_base = replace_once(
 cgi_base_path.write_text(cgi_base)
 
 setup = setup_path.read_text()
-setup = replace_once(
-    setup,
-    '''# Config directory — www-data needs write access for auth.json, profiles
-chown -R www-data:www-data /etc/qmanager
-
-# Make all qmanager binaries executable
-''',
-    '''# Config directory — www-data needs write access for auth.json, profiles,
-# settings, and schedule state. Deny world access to persistent config.
-chown -R www-data:www-data /etc/qmanager
+# Upstream moves comments/self-heal code around the chown between releases;
+# anchor on the chown line itself and add the Casa mode tightening after it.
+if "find /etc/qmanager -type d -exec chmod 750" not in setup:
+    setup, _n = re.subn(
+        r"^chown -R www-data:www-data /etc/qmanager\n",
+        """chown -R www-data:www-data /etc/qmanager
+# Casa CFW-3212: deny world access to persistent config.
 find /etc/qmanager -type d -exec chmod 750 {} \\; 2>/dev/null || true
 find /etc/qmanager -type f -exec chmod 640 {} \\; 2>/dev/null || true
-[ -f /etc/qmanager/auth.json ] && chmod 600 /etc/qmanager/auth.json
-
-# Make all qmanager binaries executable
-''',
-    "qmanager_setup config permissions",
-)
+""",
+        setup,
+        count=1,
+        flags=re.M,
+    )
+    if not _n:
+        raise SystemExit("qmanager_setup config permissions marker not found")
 setup_path.write_text(setup)
 PY
 
@@ -3242,10 +3241,31 @@ new = '''        qlog_info "Device reboot requested via system menu"
         ) </dev/null >/dev/null 2>&1 &
         exit 0
 '''
-if "service.system.reset_reason" not in text:
-    if old not in text:
-        raise SystemExit("reboot command block not found")
+if "service.system.reset_reason" not in text and old in text:
     text = text.replace(old, new, 1)
+
+# Upstream v0.1.14+ logs a user-initiated crash.log entry before rebooting.
+old_v14 = '''        ( ( sleep 1; $_SUDO /usr/bin/qmanager_crash_log_append user 2>/dev/null; $_reboot_cmd ) </dev/null >/dev/null 2>&1 & )
+        exit 0
+'''
+new_v14 = '''        (
+            sleep 1
+            $_SUDO /usr/bin/qmanager_crash_log_append user 2>/dev/null
+            if command -v rdb_set >/dev/null 2>&1 && command -v rdb_get >/dev/null 2>&1 && rdb_get service.system.reset >/dev/null 2>&1; then
+                rdb_set service.system.reset_reason "QManager web reboot"
+                rdb_set service.system.reset.delay 5
+                rdb_set service.system.reset 1
+            else
+                $_reboot_cmd
+            fi
+        ) </dev/null >/dev/null 2>&1 &
+        exit 0
+'''
+if "service.system.reset_reason" not in text and old_v14 in text:
+    text = text.replace(old_v14, new_v14, 1)
+
+if "service.system.reset_reason" not in text:
+    raise SystemExit("reboot command block not found")
 
 path.write_text(text)
 PY
@@ -3264,6 +3284,15 @@ patch_casa_scheduled_reboot_cfw3212() {
     [ -f "$settings_sh" ] || fail "Target missing system/settings.sh"
     [ -f "$setup" ] || fail "Target missing qmanager_setup"
 
+    # Upstream v0.1.14+ replaced cron with runtime-armed systemd OnCalendar
+    # timers (qmanager_scheduled_reboot_arm). Casa runs those as-is: the
+    # installer rewrites /lib/systemd/system to /etc/systemd/system, and timers
+    # fire in Casa local time (/etc/localtime follows RDB system.config.tz).
+    # Only the BusyBox crond path for older upstreams needs the cron patches.
+    local sched_uses_timers=0
+    [ -f "$TARGET/scripts/usr/bin/qmanager_scheduled_reboot_arm" ] && sched_uses_timers=1
+
+    if [ "$sched_uses_timers" = "0" ]; then
     python3 - "$settings_sh" "$setup" <<'PY'
 from pathlib import Path
 import re
@@ -3551,6 +3580,7 @@ elif old_sched_reload in settings:
 settings_path.write_text(settings)
 setup_path.write_text(setup)
 PY
+    fi
 
     # Route the scheduled reboot through Casa's RDB managed-reset path so the
     # reboot is logged with a real reason (like the System menu Reboot button)
@@ -3565,11 +3595,11 @@ import sys
 path = Path(sys.argv[1])
 text = path.read_text()
 
-old = '''qlog_info "Scheduled system reboot triggered"
-reboot
-'''
+import re
+m = re.search(r'qlog_info "Scheduled system reboot triggered"\n((?:_qm_crash_log_append[^\n]*\n)?)reboot\n', text)
+old = m.group(0) if m else "\0never\0"
 new = '''qlog_info "Scheduled system reboot triggered"
-# Prefer Casa's RDB managed reset (records a real reboot reason), matching the
+''' + (m.group(1) if m else "") + '''# Prefer Casa's RDB managed reset (records a real reboot reason), matching the
 # System menu reboot button; fall back to a bare reboot when RDB is absent.
 if command -v rdb_set >/dev/null 2>&1 && command -v rdb_get >/dev/null 2>&1 && rdb_get service.system.reset >/dev/null 2>&1; then
     rdb_set service.system.reset_reason "QManager scheduled reboot"
@@ -3590,6 +3620,8 @@ PY
         grep -q 'QManager scheduled reboot' "$sched_helper" \
             || fail "Could not apply Casa RDB reset path to scheduled reboot helper"
     fi
+
+    [ "$sched_uses_timers" = "1" ] && return 0
 
     grep -q '/usrdata/bin/qmanager_scheduled_reboot' "$settings_sh" \
         || fail "Could not align Scheduled Reboot helper path to Casa /usrdata/bin"
@@ -6628,22 +6660,29 @@ safety_checks() {
         "CGI auth library fallback must fail closed"
     require_rg_present "QM_MAX_POST_SIZE:=65536" "$TARGET/scripts/usr/lib/qmanager/cgi_base.sh" \
         "CGI POST body reader must enforce default size limit"
-    require_rg_present "/usrdata/qmanager/crontabs" "$TARGET/scripts/usr/bin/qmanager_setup" \
-        "qmanager_setup must store Scheduled Reboot cron data in writable persistent QManager storage"
-    require_rg_present "crond -c /usrdata/qmanager/crontabs" "$TARGET/scripts/usr/bin/qmanager_setup" \
-        "qmanager_setup must ensure BusyBox crond is running for Scheduled Reboot"
+    if [ -f "$TARGET/scripts/usr/bin/qmanager_scheduled_reboot_arm" ]; then
+        require_rg_present 'QManager scheduled reboot' "$TARGET/scripts/usr/bin/qmanager_scheduled_reboot" \
+            "Scheduled Reboot timer worker must use Casa RDB managed reset"
+    else
+        require_rg_present "/usrdata/qmanager/crontabs" "$TARGET/scripts/usr/bin/qmanager_setup" \
+            "qmanager_setup must store Scheduled Reboot cron data in writable persistent QManager storage"
+        require_rg_present "crond -c /usrdata/qmanager/crontabs" "$TARGET/scripts/usr/bin/qmanager_setup" \
+            "qmanager_setup must ensure BusyBox crond is running for Scheduled Reboot"
+    fi
     require_rg_present "find /etc/qmanager -type d -exec chmod 750" "$TARGET/scripts/usr/bin/qmanager_setup" \
         "qmanager_setup must restrict /etc/qmanager directory permissions"
     require_rg_present "find /etc/qmanager -type f -exec chmod 640" "$TARGET/scripts/usr/bin/qmanager_setup" \
         "qmanager_setup must restrict /etc/qmanager file permissions"
-    require_rg_present '/usrdata/bin/qmanager_scheduled_reboot' "$TARGET/scripts/www/cgi-bin/quecmanager/system/settings.sh" \
-        "Scheduled Reboot must target the Casa-installed helper path"
-    require_rg_present '/usrdata/qmanager/crontabs/root' "$TARGET/scripts/www/cgi-bin/quecmanager/system/settings.sh" \
-        "Scheduled Reboot must write cron entries to persistent writable Casa storage"
-    require_rg_present 'cron_spool_unavailable' "$TARGET/scripts/www/cgi-bin/quecmanager/system/settings.sh" \
-        "Scheduled Reboot must fail if the cron spool cannot be prepared"
-    require_rg_present 'cron_write_failed' "$TARGET/scripts/www/cgi-bin/quecmanager/system/settings.sh" \
-        "Scheduled Reboot must fail if writing the cron file fails"
+    if [ ! -f "$TARGET/scripts/usr/bin/qmanager_scheduled_reboot_arm" ]; then
+        require_rg_present '/usrdata/bin/qmanager_scheduled_reboot' "$TARGET/scripts/www/cgi-bin/quecmanager/system/settings.sh" \
+            "Scheduled Reboot must target the Casa-installed helper path"
+        require_rg_present '/usrdata/qmanager/crontabs/root' "$TARGET/scripts/www/cgi-bin/quecmanager/system/settings.sh" \
+            "Scheduled Reboot must write cron entries to persistent writable Casa storage"
+        require_rg_present 'cron_spool_unavailable' "$TARGET/scripts/www/cgi-bin/quecmanager/system/settings.sh" \
+            "Scheduled Reboot must fail if the cron spool cannot be prepared"
+        require_rg_present 'cron_write_failed' "$TARGET/scripts/www/cgi-bin/quecmanager/system/settings.sh" \
+            "Scheduled Reboot must fail if writing the cron file fails"
+    fi
     require_rg_present "HttpOnly; Secure; SameSite=Strict" "$TARGET/scripts/usr/lib/qmanager/cgi_auth.sh" \
         "QManager session cookie must include Secure"
     require_rg_present "COOKIE_INDICATOR.*Secure; SameSite=Strict" "$TARGET/scripts/usr/lib/qmanager/cgi_auth.sh" \
