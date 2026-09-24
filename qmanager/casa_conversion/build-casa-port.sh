@@ -2551,24 +2551,31 @@ patch_logging_cfw3212() {
     local qlog="$TARGET/scripts/usr/lib/qmanager/qlog.sh"
     local logs_card="$TARGET/components/monitoring/logs/system-logs-card.tsx"
     local data_used="$TARGET/scripts/www/cgi-bin/quecmanager/network/data_used.sh"
+    # v0.1.14+ (== v0.1.16) split the old single-file logs card apart; the
+    # timestamp math that used to live in system-logs-card.tsx now lives in
+    # components/system-settings/logs/derive.ts (system-logs-card.tsx is gone).
+    local logs_derive="$TARGET/components/system-settings/logs/derive.ts"
 
     [ -f "$qlog" ] || fail "Target missing qlog.sh"
     if [ ! -f "$logs_card" ]; then
         logs_card="$TARGET/components/system-settings/logs/system-logs-card.tsx"
     fi
-    [ -f "$logs_card" ] || fail "Target missing system-logs-card.tsx"
+    if [ ! -f "$logs_card" ] && [ ! -f "$logs_derive" ]; then
+        fail "Target missing system logs timestamp component (system-logs-card.tsx or system-settings/logs/derive.ts)"
+    fi
 
     local py_bin
     py_bin="$(command -v python3 || command -v python || true)"
     [ -n "$py_bin" ] || fail "python3/python is required to patch logging safely"
 
-    "$py_bin" - "$qlog" "$logs_card" "$data_used" <<'PY'
+    "$py_bin" - "$qlog" "$logs_card" "$logs_derive" "$data_used" <<'PY'
 from pathlib import Path
 import sys
 
 qlog_path = Path(sys.argv[1])
 logs_card_path = Path(sys.argv[2])
-data_used_path = Path(sys.argv[3])
+logs_derive_path = Path(sys.argv[3])
+data_used_path = Path(sys.argv[4])
 
 qlog = qlog_path.read_text()
 qlog = qlog.replace(
@@ -2582,27 +2589,76 @@ qlog = qlog.replace(
 )
 qlog_path.write_text(qlog)
 
+# v0.1.12 layout: system-logs-card.tsx owns both parsing and rendering.
 logs_card = logs_card_path.read_text() if logs_card_path.exists() else ""
-logs_card = logs_card.replace(
-    """const formatLogTimestamp = (timestamp: string) => {
+if logs_card:
+    logs_card = logs_card.replace(
+        """const formatLogTimestamp = (timestamp: string) => {
   const parsed = new Date(`${timestamp.replace(" ", "T")}Z`);
   if (Number.isNaN(parsed.getTime())) return timestamp;
   return parsed.toLocaleString();
 };""",
-    """const formatLogTimestamp = (timestamp: string) => {
+        """const formatLogTimestamp = (timestamp: string) => {
   const hasTimeZone = /(?:[zZ]|[+-]\\d{2}:?\\d{2})$/.test(timestamp);
   const normalized = hasTimeZone ? timestamp : `${timestamp.replace(" ", "T")}Z`;
   const parsed = new Date(normalized);
   if (Number.isNaN(parsed.getTime())) return timestamp;
   return parsed.toLocaleString();
 };""",
-)
-logs_card = logs_card.replace(
-    '<span title={`${entry.timestamp} UTC`}>',
-    '<span title={entry.timestamp}>',
-)
-if logs_card:
+    )
+    logs_card = logs_card.replace(
+        '<span title={`${entry.timestamp} UTC`}>',
+        '<span title={entry.timestamp}>',
+    )
     logs_card_path.write_text(logs_card)
+
+# v0.1.14+ layout: components/system-settings/logs/derive.ts::parseLogTimestamp
+# is the only place that turns a device timestamp into epoch seconds; LogRow
+# no longer renders a raw "... UTC" title, so only the parser needs the same
+# offset-awareness the v0.1.12 formatLogTimestamp patch gave it.
+logs_derive = logs_derive_path.read_text() if logs_derive_path.exists() else ""
+if logs_derive:
+    logs_derive = logs_derive.replace(
+        "const TIMESTAMP = /^(\\d{4})-(\\d{2})-(\\d{2})[ T](\\d{2}):(\\d{2}):(\\d{2})$/;",
+        "const TIMESTAMP =\n"
+        "  /^(\\d{4})-(\\d{2})-(\\d{2})[ T](\\d{2}):(\\d{2}):(\\d{2})(Z|[+-]\\d{2}:?\\d{2})?$/;",
+    )
+    logs_derive = logs_derive.replace(
+        """export function parseLogTimestamp(raw: string): number | null {
+  const m = TIMESTAMP.exec(raw.trim());
+  if (!m) return null;
+  const at = new Date(
+    Number(m[1]),
+    Number(m[2]) - 1,
+    Number(m[3]),
+    Number(m[4]),
+    Number(m[5]),
+    Number(m[6]),
+  );
+  return Number.isNaN(at.getTime()) ? null : Math.floor(at.getTime() / 1000);
+}""",
+        """export function parseLogTimestamp(raw: string): number | null {
+  const m = TIMESTAMP.exec(raw.trim());
+  if (!m) return null;
+  if (m[7]) {
+    // Casa's qlog.sh writes `%Y-%m-%dT%H:%M:%S%z` (an explicit offset) so the
+    // UI never has to guess whether the router logged in UTC or local time;
+    // let Date parse the offset instead of assuming the viewer's own zone.
+    const at = new Date(`${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}${m[7]}`);
+    return Number.isNaN(at.getTime()) ? null : Math.floor(at.getTime() / 1000);
+  }
+  const at = new Date(
+    Number(m[1]),
+    Number(m[2]) - 1,
+    Number(m[3]),
+    Number(m[4]),
+    Number(m[5]),
+    Number(m[6]),
+  );
+  return Number.isNaN(at.getTime()) ? null : Math.floor(at.getTime() / 1000);
+}""",
+    )
+    logs_derive_path.write_text(logs_derive)
 
 if data_used_path.exists():
     data_used = data_used_path.read_text()
@@ -2615,9 +2671,13 @@ PY
 
     grep -q "%Y-%m-%dT%H:%M:%S%z" "$qlog" \
         || fail "Could not apply timezone-aware qlog patch"
-    if grep -q "formatLogTimestamp" "$logs_card"; then
+    if [ -f "$logs_card" ] && grep -q "formatLogTimestamp" "$logs_card"; then
         grep -q "hasTimeZone" "$logs_card" \
             || fail "Could not apply system logs timestamp patch"
+    fi
+    if [ -f "$logs_derive" ]; then
+        grep -q "Casa's qlog.sh writes" "$logs_derive" \
+            || fail "Could not apply timezone-aware system logs parser patch"
     fi
     if [ -f "$data_used" ]; then
         grep -q 'qlog_debug "data_used block absent' "$data_used" \
@@ -4912,8 +4972,14 @@ patch_casa_tailscale_install_label_cfw3212() {
     # (see patch_casa_tailscale_tiny_cfw3212); label the UI install button to
     # match so users know which build they're installing.
     local tscard="$TARGET/components/monitoring/tailscale/tailscale-connection-card.tsx"
-    [ -f "$tscard" ] || fail "tailscale-connection-card.tsx not found at $tscard"
-    python3 - "$tscard" <<'PY'
+    # v0.1.14+ split this card apart (components/monitoring/tailscale/tailscale.tsx
+    # + install-card.tsx etc.) and moved the button label to i18n
+    # (public/locales/en/common.json: tailscale.install.install), so there is no
+    # longer a literal "Install Tailscale" string in a component file.
+    local locale="$TARGET/public/locales/en/common.json"
+
+    if [ -f "$tscard" ]; then
+        python3 - "$tscard" <<'PY'
 from pathlib import Path
 import sys
 p = Path(sys.argv[1])
@@ -4924,7 +4990,28 @@ if t.count(old) != 1:
 t = t.replace(old, "Install Tiny Tailscale", 1)
 p.write_text(t)
 PY
-    grep -q 'Install Tiny Tailscale' "$tscard" \
+        grep -q 'Install Tiny Tailscale' "$tscard" \
+            || fail "Could not apply Tiny Tailscale install button label"
+        return
+    fi
+
+    [ -f "$locale" ] || fail "tailscale-connection-card.tsx not found at $tscard and en/common.json missing"
+
+    python3 - "$locale" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+p = Path(sys.argv[1])
+data = json.loads(p.read_text())
+install = data["tailscale"]["install"]
+if install.get("install") == "Install Tailscale":
+    install["install"] = "Install Tiny Tailscale"
+elif install.get("install") != "Install Tiny Tailscale":
+    raise SystemExit(f"tiny-tailscale: unexpected tailscale.install.install value: {install.get('install')!r}")
+p.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+PY
+    grep -q '"install": "Install Tiny Tailscale"' "$locale" \
         || fail "Could not apply Tiny Tailscale install button label"
 }
 
@@ -5702,33 +5789,42 @@ import sys
 path = Path(sys.argv[1])
 text = path.read_text()
 
-replacements = [
-    (
-        '''            {result.download.latency.iqm.toFixed(1)} ms
+# v0.1.14+ rewrote this dialog and already derives dlLatency/ulLatency with
+# `result.download.latency?.iqm !== undefined ? ... : <absent>` before calling
+# .toFixed() — the exact Casa intent (never crash on missing iqm). No-op here.
+if (
+    "result.download.latency?.iqm !== undefined" in text
+    and "result.upload.latency?.iqm !== undefined" in text
+):
+    pass
+else:
+    replacements = [
+        (
+            '''            {result.download.latency.iqm.toFixed(1)} ms
 ''',
-        '''            {result.download.latency?.iqm !== undefined
+            '''            {result.download.latency?.iqm !== undefined
               ? `${result.download.latency.iqm.toFixed(1)} ms`
               : "-"}
 ''',
-    ),
-    (
-        '''            {result.upload.latency.iqm.toFixed(1)} ms
+        ),
+        (
+            '''            {result.upload.latency.iqm.toFixed(1)} ms
 ''',
-        '''            {result.upload.latency?.iqm !== undefined
+            '''            {result.upload.latency?.iqm !== undefined
               ? `${result.upload.latency.iqm.toFixed(1)} ms`
               : "-"}
 ''',
-    ),
-]
+        ),
+    ]
 
-for old, new in replacements:
-    if new in text:
-        continue
-    if old not in text:
-        raise SystemExit(f"patch target not found in {path}: {old.strip()!r}")
-    text = text.replace(old, new, 1)
+    for old, new in replacements:
+        if new in text:
+            continue
+        if old not in text:
+            raise SystemExit(f"patch target not found in {path}: {old.strip()!r}")
+        text = text.replace(old, new, 1)
 
-path.write_text(text)
+    path.write_text(text)
 PY
 
     grep -Fq 'result.download.latency?.iqm !== undefined' "$dialog" \
@@ -5739,6 +5835,65 @@ PY
         || fail "speedtest-dialog.tsx still has unsafe DL latency iqm read"
     ! grep -Fq '            {result.upload.latency.iqm.toFixed(1)} ms' "$dialog" \
         || fail "speedtest-dialog.tsx still has unsafe UL latency iqm read"
+}
+
+patch_casa_hide_video_optimizer_cfw3212() {
+    # Upstream v0.1.14+ added a Traffic Engine / DPI page (components/local-
+    # network/traffic-engine) with three selectable modes: "none", "full_bypass"
+    # and "video_optimizer" -- the latter installs/runs a DPI binary driven by
+    # scripts/www/cgi-bin/quecmanager/network/video_optimizer.sh. Casa wants to
+    # keep shipping the backend (to try later) but not expose it as choosable
+    # yet, pending Casa-specific validation. Remove just the "video_optimizer"
+    # entry from the mode selector's MODES array so the UI can never select or
+    # enable it; leave the hook/CGI/backend files untouched. Absent entirely on
+    # v0.1.12 (Traffic Engine is a v0.1.14+ feature), so this is a no-op there.
+    local mode_card="$TARGET/components/local-network/traffic-engine/mode-card.tsx"
+    if [ ! -f "$mode_card" ]; then
+        log "Video Optimizer hide: no-op (Traffic Engine not present, pre-v0.1.14 layout)"
+        return 0
+    fi
+
+    if grep -q "Casa CFW-3212: Video Optimizer mode hidden pending validation" "$mode_card"; then
+        log "Video Optimizer hide patch already applied"
+        return 0
+    fi
+
+    python3 - "$mode_card" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+
+entry = '''  {
+    mode: "video_optimizer",
+    nameKey: "trafficEngine.mode.video_optimizer",
+    hintKey: "trafficEngine.mode.video_optimizer_hint",
+    glyph: VideoIcon,
+  },
+'''
+if entry not in text:
+    raise SystemExit("mode-card: video_optimizer MODES entry not found (upstream may have changed)")
+text = text.replace(
+    entry,
+    "  // Casa CFW-3212: Video Optimizer mode hidden pending validation (backend\n"
+    "  // kept for a later try; see patch_casa_hide_video_optimizer_cfw3212).\n",
+    1,
+)
+
+# VideoIcon import is now unused; drop it so lint/tsc stay clean.
+unused_import = "  VideoIcon,\n"
+if unused_import in text and "VideoIcon" not in text.replace(unused_import, "", 1):
+    text = text.replace(unused_import, "", 1)
+
+path.write_text(text)
+PY
+
+    grep -q "Casa CFW-3212: Video Optimizer mode hidden pending validation" "$mode_card" \
+        || fail "Could not hide Video Optimizer mode from Traffic Engine selector"
+    ! grep -q 'mode: "video_optimizer"' "$mode_card" \
+        || fail "Video Optimizer mode entry still selectable in Traffic Engine"
+    log "Video Optimizer mode hidden from Traffic Engine selector (backend kept)"
 }
 
 patch_software_update_reboot_required_cfw3212() {
@@ -6504,6 +6659,21 @@ PYBADGE
 
 patch_active_bands_multi_expand_cfw3212() {
     local active_bands="$TARGET/components/cellular/active-bands.tsx"
+    # v0.1.14+ moved/renamed this to components/cellular/radio/active-bands-card.tsx
+    # and, per its own top-of-file comment, deliberately DELETED the Radix
+    # Accordion this Casa patch used to force open ("This replaced a Radix
+    # Accordion (`type="single" collapsible`, PCC open by default) ... Deleting
+    # it retires that exception"). Every carrier's metrics now render at once,
+    # unconditionally -- a stronger form of Casa's "let the user see every band
+    # panel expanded" intent than the accordion tweak ever was. Nothing to patch.
+    local active_bands_card="$TARGET/components/cellular/radio/active-bands-card.tsx"
+    if [ ! -f "$active_bands" ] && [ -f "$active_bands_card" ]; then
+        if grep -Eq '<Accordion[ />]' "$active_bands_card"; then
+            fail "Active bands multi-expand: active-bands-card.tsx reintroduced an Accordion; Casa multi-expand intent needs re-evaluating"
+        fi
+        log "Active bands multi-expand: no-op on v0.1.14+ (accordion removed upstream, all bands always shown)"
+        return 0
+    fi
     [ -f "$active_bands" ] || fail "Active bands multi-expand: missing $active_bands"
 
     if grep -q 'type="multiple"' "$active_bands" && \
@@ -6549,11 +6719,67 @@ PY
 
 patch_terminal_sidebar_children_cfw3212() {
     local sidebar="$TARGET/components/app-sidebar.tsx"
+    # v0.1.14+ rewrote app-sidebar.tsx: nav-main/nav-cellular etc. (with
+    # per-item `title` strings) were replaced by module-level arrays whose
+    # items carry `t_key` and are resolved through i18n (public/locales/en/
+    # sidebar.json's "items" map, which already ships an "at_terminal": "AT
+    # Terminal" entry upstream never wires into a nav item -- see below).
+    local locale="$TARGET/public/locales/en/sidebar.json"
     [ -f "$sidebar" ] || fail "Terminal sidebar patch: missing $sidebar"
 
     if grep -q '{ title: "AT Terminal", url: "/system-settings/at-terminal" }' "$sidebar" && \
        grep -q '{ title: "Web Console", url: "/system-settings/web-console" }' "$sidebar"; then
         log "Terminal sidebar children patch already applied"
+        return 0
+    fi
+    if grep -q '{ t_key: "at_terminal", url: "/system-settings/at-terminal" }' "$sidebar" && \
+       grep -q '{ t_key: "web_console", url: "/system-settings/web-console" }' "$sidebar"; then
+        log "Terminal sidebar children patch already applied (t_key layout)"
+        return 0
+    fi
+
+    if grep -q 't_key: "terminals"' "$sidebar"; then
+        [ -f "$locale" ] || fail "Terminal sidebar patch: missing $locale (t_key layout needs sidebar.json)"
+        python3 - "$sidebar" "$locale" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+sidebar_path, locale_path = map(Path, sys.argv[1:3])
+text = sidebar_path.read_text()
+
+old = '''  {
+    t_key: "terminals",
+    url: "/system-settings/at-terminal",
+    icon: "terminal",
+    items: [{ t_key: "web_console", url: "/system-settings/web-console" }],
+  },'''
+new = '''  {
+    t_key: "terminals",
+    url: "/system-settings/at-terminal",
+    icon: "terminal",
+    items: [
+      { t_key: "at_terminal", url: "/system-settings/at-terminal" },
+      { t_key: "web_console", url: "/system-settings/web-console" },
+    ],
+  },'''
+if old not in text:
+    raise SystemExit("app-sidebar: Terminals block not found (upstream may have changed)")
+sidebar_path.write_text(text.replace(old, new, 1))
+
+data = json.loads(locale_path.read_text())
+items = data["items"]
+if items.get("at_terminal") != "AT Terminal":
+    raise SystemExit(f"sidebar.json: unexpected items.at_terminal value: {items.get('at_terminal')!r}")
+if items.get("web_console") is None:
+    raise SystemExit("sidebar.json: items.web_console missing")
+PY
+
+        grep -q '{ t_key: "at_terminal", url: "/system-settings/at-terminal" }' "$sidebar" \
+            || fail "Terminal sidebar patch did not add AT Terminal child"
+        grep -q '{ t_key: "web_console", url: "/system-settings/web-console" }' "$sidebar" \
+            || fail "Terminal sidebar patch lost Web Console child"
+        log "Terminal sidebar now shows AT Terminal and Web Console children (t_key layout)"
         return 0
     fi
 
@@ -6689,6 +6915,7 @@ if needle not in text:
     raise SystemExit("band-locking: getBandString call block not found (upstream may have changed)")
 text = text.replace(needle, replacement, 1)
 
+# v0.1.12: submit()'s useCallback dependency array is a single line.
 dep_needle = (
     '  }, [ltePreset, nr5gPreset, lteCustom, nr5gCustom, ltePresets, '
     'nr5gPresets, onLoadingChange, onSuccess]);\n'
@@ -6697,15 +6924,52 @@ dep_replacement = (
     '  }, [ltePreset, nr5gPreset, lteCustom, nr5gCustom, ltePresets, '
     'nr5gPresets, supportedLte, supportedNr5g, onLoadingChange, onSuccess]);\n'
 )
-if dep_needle not in text:
+# v0.1.14+: the array was reformatted multi-line and gained `outcome` (partial
+# apply/retry state) as a dependency; insert supportedLte/supportedNr5g the
+# same way, ahead of the newer deps rather than replacing the whole block.
+dep_needle_v14 = (
+    '  }, [\n'
+    '    ltePreset,\n'
+    '    nr5gPreset,\n'
+    '    lteCustom,\n'
+    '    nr5gCustom,\n'
+    '    ltePresets,\n'
+    '    nr5gPresets,\n'
+    '    outcome,\n'
+    '    onLoadingChange,\n'
+    '    onSuccess,\n'
+    '  ]);\n'
+)
+dep_replacement_v14 = (
+    '  }, [\n'
+    '    ltePreset,\n'
+    '    nr5gPreset,\n'
+    '    lteCustom,\n'
+    '    nr5gCustom,\n'
+    '    ltePresets,\n'
+    '    nr5gPresets,\n'
+    '    supportedLte,\n'
+    '    supportedNr5g,\n'
+    '    outcome,\n'
+    '    onLoadingChange,\n'
+    '    onSuccess,\n'
+    '  ]);\n'
+)
+if dep_needle in text:
+    text = text.replace(dep_needle, dep_replacement, 1)
+elif dep_needle_v14 in text:
+    text = text.replace(dep_needle_v14, dep_replacement_v14, 1)
+else:
     raise SystemExit("band-locking: submit() dependency array not found (upstream may have changed)")
-text = text.replace(dep_needle, dep_replacement, 1)
 
 path.write_text(text)
 PY
     grep -q "onboarding band normalize" "$bl" \
         || fail "Onboarding normalize: band-locking patch did not apply"
-    grep -q "supportedLte, supportedNr5g, onLoadingChange" "$bl" \
+    # v0.1.12's dependency array is single-line; v0.1.14+'s is multi-line
+    # (see the two dep_needle variants above), so check membership rather than
+    # one exact joined substring.
+    grep -q "supportedLte" "$bl" && grep -q "supportedNr5g" "$bl" \
         || fail "Onboarding normalize: band-locking dependency array not updated"
 
     log "Onboarding default-normalize patches applied (RAT + band lock)"
@@ -6796,6 +7060,7 @@ apply_casa_overlays() {
     patch_casa_band_locking_persist_cfw3212
     patch_email_alerts_casa_msmtp
     patch_ping_profile_service_toggle_cfw3212
+    patch_casa_hide_video_optimizer_cfw3212
     patch_speedtest_latency_iqm_guard_cfw3212
     if upstream_has_v14_software_update; then
         patch_software_update_v14_cfw3212
@@ -7103,9 +7368,11 @@ safety_checks() {
         "Tailscale CGI must not sudo-run raw Tailscale binary (AI-62 phase 2)"
     [ -x "$TARGET/scripts/usr/bin/qmanager_tailscale_cli" ] \
         || fail "Packaged qmanager_tailscale_cli helper must be executable"
-    require_rg_present 'title: "AT Terminal"' "$TARGET/components/app-sidebar.tsx" \
+    # v0.1.12 sidebar items use `title: "..."`; v0.1.14+ resolves labels from
+    # locale JSON via `t_key: "..."` instead (see patch_terminal_sidebar_children_cfw3212).
+    require_rg_present '(title: "AT Terminal"|t_key: "at_terminal")' "$TARGET/components/app-sidebar.tsx" \
         "Terminals sidebar dropdown must show AT Terminal"
-    require_rg_present 'title: "Web Console"' "$TARGET/components/app-sidebar.tsx" \
+    require_rg_present '(title: "Web Console"|t_key: "web_console")' "$TARGET/components/app-sidebar.tsx" \
         "Terminals sidebar dropdown must show Web Console"
 
     require_rg_present "Joetooley28/qmanager-casa-cfw3212-package" "$TARGET/scripts/www/cgi-bin/quecmanager/system/update.sh" \
