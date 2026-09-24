@@ -3037,6 +3037,32 @@ www-data ALL=(root) NOPASSWD: /bin/chown radio\\:radio /etc/data/dnsmasq.conf
 
 if text == new_text:
     raise SystemExit("sudoers already narrowed — duplicate patch?")
+
+# Upstream v0.1.14+ adds root helpers that CGIs reach through sudo (schedule
+# timer arming, crash-log classification, secrets, email, timezone, SIM
+# registry, language packs). Keep them allowed at their Casa install path,
+# but only when the target actually ships the helper. DPI helpers are left
+# out: the zapret video optimizer is not supported on Casa.
+bin_dir = path.parents[2] / "usr" / "bin"
+extra = [
+    name for name in (
+        "qmanager_crash_log_append",
+        "qmanager_auto_update_arm",
+        "qmanager_scenario_schedule_arm",
+        "qmanager_scheduled_reboot_arm",
+        "qmanager_tower_schedule_arm",
+        "qmanager_secret_set",
+        "qmanager_email_send",
+        "qmanager_timezone_apply",
+        "qmanager_language_pack_apply",
+        "qmanager_sim_registry_apply",
+    )
+    if (bin_dir / name).is_file()
+]
+if extra:
+    new_text += "\n# Upstream v0.1.14+ root helpers (Casa install path)\n"
+    new_text += "".join(f"www-data ALL=(root) NOPASSWD: /usrdata/bin/{name}\n" for name in extra)
+
 path.write_text(new_text)
 PY
 
