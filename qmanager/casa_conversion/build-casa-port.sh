@@ -2719,6 +2719,7 @@ if "find /etc/qmanager -type d -exec chmod 750" not in setup:
 # Casa CFW-3212: deny world access to persistent config.
 find /etc/qmanager -type d -exec chmod 750 {} \\; 2>/dev/null || true
 find /etc/qmanager -type f -exec chmod 640 {} \\; 2>/dev/null || true
+[ -f /etc/qmanager/auth.json ] && chmod 600 /etc/qmanager/auth.json
 """,
         setup,
         count=1,
