@@ -867,6 +867,21 @@ write_qmanager_auto_update_cfw3212() {
 
 write_ippt_card_cfw3212() {
     mkdir -p "$TARGET/components/local-network/ip-passthrough"
+
+    # Upstream v0.1.14+ landed "ippt-strip.tsx" alongside a page-shell rewrite:
+    # ip-passthrough.tsx now owns the single useIpPassthrough() read and hands
+    # this card fully-controlled props (see upstream `IpPassthroughCardProps`
+    # in ip-passthrough-card.tsx) instead of letting the card fetch for
+    # itself. That file's existence is a stable, structure-tolerant anchor for
+    # "we're on the new prop-driven layout" — the old v0.1.12 template/fallback
+    # below (self-fetching via useIpPassthrough()) would build but silently
+    # ignore every prop the v0.1.16 shell passes it, so it must not be used
+    # once ippt-strip.tsx is present.
+    if [ -f "$TARGET/components/local-network/ip-passthrough/ippt-strip.tsx" ]; then
+        write_ippt_card_cfw3212_v16
+        return
+    fi
+
     if [ -f "$TEMPLATE_DIR/ip-passthrough-card.tsx" ]; then
         cp "$TEMPLATE_DIR/ip-passthrough-card.tsx" "$TARGET/components/local-network/ip-passthrough/ip-passthrough-card.tsx"
         return
@@ -961,6 +976,140 @@ const IPPassthroughCard = () => {
             <Button type="button" variant="outline" size="icon" onClick={refresh} disabled={isSaving} title="Refresh">
               <RotateCcwIcon className="size-4" />
             </Button>
+            <SaveButton type="submit" isSaving={isSaving} saved={saved} label="Save" />
+          </div>
+        </form>
+      </CardContent>
+    </Card>
+  );
+};
+
+export default IPPassthroughCard;
+EOF
+}
+
+# Casa CFW-3212 IP Passthrough card for the v0.1.14+ ("ippt-strip.tsx") page
+# shell. The shell owns the single useIpPassthrough() read and passes this
+# card fully-controlled props (IpPassthroughCardProps upstream); Casa hardware
+# only supports Disabled / Enabled Ethernet, so the extra MAC/NAT/USB/DNS-proxy
+# fields upstream's card grew are dropped, same as the v0.1.12 Casa card.
+write_ippt_card_cfw3212_v16() {
+    cat > "$TARGET/components/local-network/ip-passthrough/ip-passthrough-card.tsx" <<'EOF'
+"use client";
+
+import { useEffect, useState, type FormEvent } from "react";
+import { toast } from "sonner";
+
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Field, FieldGroup, FieldLabel, FieldSet } from "@/components/ui/field";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { SaveButton, useSaveFlash } from "@/components/ui/save-button";
+import { Skeleton } from "@/components/ui/skeleton";
+import type { DnsProxy, IpptNat, PassthroughMode, UsbMode } from "@/types/ip-passthrough";
+import type { IpPassthroughApplyData } from "@/hooks/use-ip-passthrough";
+
+// Casa CFW-3212: this card is now CONTROLLED by the page shell
+// (ip-passthrough.tsx), which owns the one useIpPassthrough() read and hands
+// down passthroughMode/isLoading/isSaving/failed/saveSettings. It must not
+// call useIpPassthrough() itself (that was the v0.1.12 shape) — doing so
+// would issue a second, redundant GET and desync from the shell's state.
+export interface IpPassthroughCardProps {
+  passthroughMode: PassthroughMode | null;
+  targetMac: string | null;
+  ipptNat: IpptNat | null;
+  usbMode: UsbMode | null;
+  dnsProxy: DnsProxy | null;
+  isLoading: boolean;
+  isSaving: boolean;
+  /** True when the shell's read failed and left nothing behind. */
+  failed: boolean;
+  saveSettings: (data: IpPassthroughApplyData) => Promise<boolean>;
+}
+
+const IPPassthroughCard = ({
+  passthroughMode,
+  isLoading,
+  isSaving,
+  failed,
+  saveSettings,
+}: IpPassthroughCardProps) => {
+  const { saved, markSaved } = useSaveFlash();
+  const [localMode, setLocalMode] = useState<PassthroughMode>("disabled");
+
+  useEffect(() => {
+    if (passthroughMode === "eth" || passthroughMode === "disabled") {
+      setLocalMode(passthroughMode);
+    }
+  }, [passthroughMode]);
+
+  const handleSubmit = async (event: FormEvent) => {
+    event.preventDefault();
+    // Casa CFW-3212 supports Disabled or Enabled Ethernet only; the backend
+    // (ip_passthrough.sh) ignores target_mac/ippt_nat/usb_mode/dns_proxy, but
+    // the shared IpPassthroughApplyData shape still requires them.
+    const success = await saveSettings({
+      passthrough_mode: localMode,
+      target_mac: "",
+      ippt_nat: "1",
+      usb_mode: "1",
+      dns_proxy: "disabled",
+    });
+    if (success) {
+      markSaved();
+      toast.success("IP Passthrough settings saved");
+    } else {
+      toast.error("Failed to save IP Passthrough settings");
+    }
+  };
+
+  if (isLoading) {
+    return (
+      <Card className="@container/card">
+        <CardHeader>
+          <CardTitle>IP Passthrough Configuration</CardTitle>
+          <CardDescription>Casa CFW-3212 Ethernet handoff state.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Skeleton className="h-9 w-full" />
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <Card className="@container/card">
+      <CardHeader>
+        <CardTitle>IP Passthrough Configuration</CardTitle>
+        <CardDescription>Casa CFW-3212 Ethernet handoff state.</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <form onSubmit={handleSubmit} className="space-y-6">
+          <FieldSet>
+            <FieldGroup>
+              <Field>
+                <FieldLabel>Mode</FieldLabel>
+                <Select
+                  value={localMode}
+                  onValueChange={(value) => setLocalMode(value as PassthroughMode)}
+                  disabled={isSaving}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="disabled">Disabled</SelectItem>
+                    <SelectItem value="eth">Enabled Ethernet</SelectItem>
+                  </SelectContent>
+                </Select>
+              </Field>
+            </FieldGroup>
+          </FieldSet>
+
+          {failed ? (
+            <p className="text-sm text-destructive">Could not read current IP Passthrough state.</p>
+          ) : null}
+
+          <div className="flex items-center justify-end gap-2">
             <SaveButton type="submit" isSaving={isSaving} saved={saved} label="Save" />
           </div>
         </form>
@@ -3655,25 +3804,38 @@ EOF
 patch_qmanager_display_version() {
     local about_sh="$TARGET/scripts/www/cgi-bin/quecmanager/device/about.sh"
     local about_card="$TARGET/components/about-device/about-qmanager-card.tsx"
+    local qmanager_band="$TARGET/components/about-device/qmanager-band.tsx"
+    local about_device_page="$TARGET/components/about-device/about-device.tsx"
     local about_types="$TARGET/types/about-device.ts"
     local modem_types="$TARGET/types/modem-status.ts"
     local device_status="$TARGET/components/dashboard/device-status.tsx"
 
     [ -f "$about_sh" ] || fail "Target missing device/about.sh"
-    [ -f "$about_card" ] || fail "Target missing about-qmanager-card.tsx"
     [ -f "$about_types" ] || fail "Target missing about-device.ts"
     [ -f "$modem_types" ] || fail "Target missing modem-status.ts"
     [ -f "$device_status" ] || fail "Target missing dashboard/device-status.tsx"
 
-    python3 - "$about_sh" "$about_card" "$about_types" "$modem_types" "$device_status" <<'INNERPY'
+    # Upstream v0.1.14+ split the old single about-qmanager-card.tsx apart;
+    # the About-page QManager version tag now lives in qmanager-band.tsx,
+    # which takes no `data` prop at all (only `onSupport`) and is rendered by
+    # about-device.tsx, which does hold the fetched AboutDeviceData. Presence
+    # of qmanager-band.tsx (and absence of about-qmanager-card.tsx) is the
+    # structure-tolerant anchor for which variant to patch.
+    local new_layout=0
+    if [ -f "$qmanager_band" ]; then
+        new_layout=1
+        [ -f "$about_device_page" ] || fail "Target missing about-device/about-device.tsx"
+    else
+        [ -f "$about_card" ] || fail "Target missing about-qmanager-card.tsx"
+    fi
+
+    python3 - "$about_sh" "$about_types" "$modem_types" <<'INNERPY'
 from pathlib import Path
 import sys
 
 about_sh = Path(sys.argv[1])
-about_card = Path(sys.argv[2])
-about_types = Path(sys.argv[3])
-modem_types = Path(sys.argv[4])
-device_status = Path(sys.argv[5])
+about_types = Path(sys.argv[2])
+modem_types = Path(sys.argv[3])
 
 text = about_sh.read_text()
 if "sys_qmanager_version=" not in text:
@@ -3704,10 +3866,6 @@ if "qmanager_version: string;" not in text:
     text = text.replace("    openwrt_version: string;\n", "    openwrt_version: string;\n    qmanager_version: string;\n", 1)
 about_types.write_text(text)
 
-text = about_card.read_text()
-text = text.replace("{packageJson.version}", "{data?.system.qmanager_version || packageJson.version}")
-about_card.write_text(text)
-
 text = modem_types.read_text()
 if "qmanager_version: string;" not in text:
     text = text.replace(
@@ -3716,6 +3874,36 @@ if "qmanager_version: string;" not in text:
         1,
     )
 modem_types.write_text(text)
+INNERPY
+
+    grep -q "sys_qmanager_version=" "$about_sh" \
+        || fail "Could not apply Casa about-page QManager version patch"
+    grep -q "qmanager_version: string;" "$modem_types" \
+        || fail "Could not apply Casa dashboard QManager version type patch"
+
+    if [ "$new_layout" = "1" ]; then
+        _patch_qmanager_display_version_v16_cfw3212 "$qmanager_band" "$about_device_page" "$device_status"
+    else
+        _patch_qmanager_display_version_v12_cfw3212 "$about_card" "$device_status"
+    fi
+}
+
+# v0.1.12 layout: single about-qmanager-card.tsx self-reads `data`, and
+# device-status.tsx used a literal "QManager Version" label string.
+_patch_qmanager_display_version_v12_cfw3212() {
+    local about_card="$1"
+    local device_status="$2"
+
+    python3 - "$about_card" "$device_status" <<'INNERPY'
+from pathlib import Path
+import sys
+
+about_card = Path(sys.argv[1])
+device_status = Path(sys.argv[2])
+
+text = about_card.read_text()
+text = text.replace("{packageJson.version}", "{data?.system.qmanager_version || packageJson.version}")
+about_card.write_text(text)
 
 text = device_status.read_text()
 text = text.replace(
@@ -3725,10 +3913,105 @@ text = text.replace(
 device_status.write_text(text)
 INNERPY
 
-    grep -q "sys_qmanager_version=" "$about_sh" \
-        || fail "Could not apply Casa about-page QManager version patch"
-    grep -q "qmanager_version: string;" "$modem_types" \
-        || fail "Could not apply Casa dashboard QManager version type patch"
+    grep -q "data?.qmanager_version" "$device_status" \
+        || fail "Could not apply Casa dashboard QManager version display patch"
+}
+
+# v0.1.14+ layout: qmanager-band.tsx (About page) takes no `data` prop, so it
+# needs a new prop threaded from about-device.tsx's fetched AboutDeviceData;
+# device-status.tsx moved the label to i18n (`t("device_status.qmanager_version")`)
+# but still reads the same `packageJson.version` fallback value.
+_patch_qmanager_display_version_v16_cfw3212() {
+    local qmanager_band="$1"
+    local about_device_page="$2"
+    local device_status="$3"
+
+    if grep -q "qmanagerVersion" "$qmanager_band"; then
+        log "QManager display-version already applied (v0.1.14+ layout)"
+    else
+        python3 - "$qmanager_band" "$about_device_page" <<'INNERPY'
+from pathlib import Path
+import sys
+
+band_p, page_p = Path(sys.argv[1]), Path(sys.argv[2])
+
+band = band_p.read_text()
+props_old = (
+    "export interface QManagerBandProps {\n"
+    "  onSupport: () => void;\n"
+    "}"
+)
+props_new = (
+    "export interface QManagerBandProps {\n"
+    "  onSupport: () => void;\n"
+    "  /** Installed QManager package version from /etc/qmanager/VERSION (Casa CFW-3212). */\n"
+    "  qmanagerVersion?: string;\n"
+    "}"
+)
+assert band.count(props_old) == 1, "qmanager-band: QManagerBandProps anchor"
+band = band.replace(props_old, props_new, 1)
+
+sig_old = (
+    "export function QManagerBand({\n"
+    "  onSupport,\n"
+    "}: QManagerBandProps): React.JSX.Element {"
+)
+sig_new = (
+    "export function QManagerBand({\n"
+    "  onSupport,\n"
+    "  qmanagerVersion,\n"
+    "}: QManagerBandProps): React.JSX.Element {"
+)
+assert band.count(sig_old) == 1, "qmanager-band: QManagerBand signature anchor"
+band = band.replace(sig_old, sig_new, 1)
+
+tag_old = "<Tag variant=\"neutral\">{packageJson.version}</Tag>"
+assert band.count(tag_old) == 1, "qmanager-band: version Tag anchor"
+band = band.replace(tag_old, "<Tag variant=\"neutral\">{qmanagerVersion || packageJson.version}</Tag>", 1)
+band_p.write_text(band)
+
+page = page_p.read_text()
+call_old = '<QManagerBand onSupport={() => setDonateOpen(true)} />'
+assert page.count(call_old) == 1, "about-device: QManagerBand call site anchor"
+page = page.replace(
+    call_old,
+    '<QManagerBand\n        onSupport={() => setDonateOpen(true)}\n        qmanagerVersion={data?.system.qmanager_version}\n      />',
+    1,
+)
+page_p.write_text(page)
+INNERPY
+        grep -q "qmanagerVersion" "$qmanager_band" \
+            || fail "Could not apply Casa dashboard QManager version type patch"
+        grep -q "qmanagerVersion" "$about_device_page" \
+            || fail "Could not apply Casa dashboard QManager version type patch"
+    fi
+
+    if grep -q 'device_status.qmanager_version' "$device_status" && ! grep -q "data?.qmanager_version" "$device_status"; then
+        python3 - "$device_status" <<'INNERPY'
+from pathlib import Path
+import sys
+
+p = Path(sys.argv[1])
+text = p.read_text()
+old = (
+    "    {\n"
+    "      label: t(\"device_status.qmanager_version\"),\n"
+    "      value: packageJson.version,\n"
+    "      mono: true,\n"
+    "    },"
+)
+new = (
+    "    {\n"
+    "      label: t(\"device_status.qmanager_version\"),\n"
+    "      value: data?.qmanager_version || packageJson.version,\n"
+    "      mono: true,\n"
+    "    },"
+)
+assert text.count(old) == 1, "device-status: qmanager_version row anchor"
+p.write_text(text.replace(old, new, 1))
+INNERPY
+    fi
+
     grep -q "data?.qmanager_version" "$device_status" \
         || fail "Could not apply Casa dashboard QManager version display patch"
 }
@@ -6775,9 +7058,57 @@ patch_casa_dns_badges_cfw3212() {
     local hc="$TARGET/components/dashboard/home-component.tsx"
     local ty="$TARGET/types/modem-status.ts"
     local comp="$TARGET/components/dashboard/dns-source-badges.tsx"
+    local rail="$TARGET/components/dashboard/status-rail.tsx"
     for x in "$ns" "$hc" "$ty"; do
         [ -f "$x" ] || fail "DNS badges: missing $x"
     done
+
+    # Shared by both layouts: the DnsStatus type + ModemStatus.dns_status field.
+    # Anchors (ModemStatus interface open brace, connectivity field) are
+    # unchanged between v0.1.12 and v0.1.14+/v0.1.16.
+    if ! grep -q "export interface DnsStatus" "$ty"; then
+        python3 - "$ty" <<'PYTYPES'
+import sys
+from pathlib import Path
+ty_p = Path(sys.argv[1])
+ty = ty_p.read_text()
+dns_iface = (
+    "/** Casa CFW-3212 LAN DNS reconciler state (AI-64). Router/LAN scope. */\n"
+    "export interface DnsStatus {\n"
+    "  ippt_on: boolean;\n"
+    "  dns_source: \"carrier\" | \"custom\" | \"public_fallback\" | \"poisoned\" | \"unknown\";\n"
+    "  carrier_reachable: boolean;\n"
+    "  scope: string;\n"
+    "  checked_at: number;\n"
+    "}\n\n"
+)
+anchor_ms = "export interface ModemStatus {"
+assert ty.count(anchor_ms) == 1, "ModemStatus interface anchor"
+ty = ty.replace(anchor_ms, dns_iface + anchor_ms, 1)
+conn_field = "  /** Internet connectivity and latency (from ping daemon) */\n  connectivity: ConnectivityStatus;\n"
+assert ty.count(conn_field) == 1, "connectivity field anchor"
+ty = ty.replace(
+    conn_field,
+    conn_field + "  /** LAN DNS reconciler state (AI-64) */\n  dns_status?: DnsStatus;\n",
+    1,
+)
+ty_p.write_text(ty)
+PYTYPES
+        grep -q "export interface DnsStatus" "$ty" || fail "DNS badges: DnsStatus type missing"
+    fi
+
+    # Upstream v0.1.14+ moved the dashboard's Online/Offline + Radio/Internet
+    # chips out of network-status.tsx into a dedicated page-header rail
+    # component, "status-rail.tsx" (DashboardStatusRail). Its presence is a
+    # stable, structure-tolerant anchor for which layout we're on: on that
+    # layout the IPPT/DNS chips belong beside the other rail chips, not inside
+    # the (now badge-less) network-status.tsx card.
+    if [ -f "$rail" ]; then
+        _patch_casa_dns_badges_rail_cfw3212 "$rail" "$hc"
+        return
+    fi
+
+    # --- v0.1.12 layout: badges render inside network-status.tsx ---
     if grep -q "DnsSourceBadges" "$ns"; then
         log "DNS badges already applied"
         return 0
@@ -6880,34 +7211,10 @@ export function DnsSourceBadges({ dnsStatus }: { dnsStatus: DnsStatus | null }) 
 }
 TSXEOF
 
-    python3 - "$ns" "$hc" "$ty" << 'PYBADGE'
+    python3 - "$ns" "$hc" << 'PYBADGE'
 import sys, re
 from pathlib import Path
-ns_p, hc_p, ty_p = (Path(p) for p in sys.argv[1:4])
-
-# --- types/modem-status.ts ---
-ty = ty_p.read_text()
-dns_iface = (
-    "/** Casa CFW-3212 LAN DNS reconciler state (AI-64). Router/LAN scope. */\n"
-    "export interface DnsStatus {\n"
-    "  ippt_on: boolean;\n"
-    "  dns_source: \"carrier\" | \"custom\" | \"public_fallback\" | \"poisoned\" | \"unknown\";\n"
-    "  carrier_reachable: boolean;\n"
-    "  scope: string;\n"
-    "  checked_at: number;\n"
-    "}\n\n"
-)
-anchor_ms = "export interface ModemStatus {"
-assert ty.count(anchor_ms) == 1, "ModemStatus interface anchor"
-ty = ty.replace(anchor_ms, dns_iface + anchor_ms, 1)
-conn_field = "  /** Internet connectivity and latency (from ping daemon) */\n  connectivity: ConnectivityStatus;\n"
-assert ty.count(conn_field) == 1, "connectivity field anchor"
-ty = ty.replace(
-    conn_field,
-    conn_field + "  /** LAN DNS reconciler state (AI-64) */\n  dns_status?: DnsStatus;\n",
-    1,
-)
-ty_p.write_text(ty)
+ns_p, hc_p = (Path(p) for p in sys.argv[1:3])
 
 # --- network-status.tsx ---
 ns = ns_p.read_text()
@@ -6965,12 +7272,204 @@ def add_dns(m):
 hc2 = re.sub(r'(<NetworkStatusComponent\n)([ \t]*)', add_dns, hc)
 assert n[0] >= 1, "no <NetworkStatusComponent> usage found"
 hc_p.write_text(hc2)
-print(f"DNS badges patched: ns+ty+hc ({n[0]} home-component usages threaded)")
+print(f"DNS badges patched: ns+hc ({n[0]} home-component usages threaded)")
 PYBADGE
     grep -q "DnsSourceBadges" "$ns" || fail "DNS badges: network-status insertion failed"
     grep -q "dns_status" "$hc" || fail "DNS badges: home-component threading failed"
     grep -q "export interface DnsStatus" "$ty" || fail "DNS badges: DnsStatus type missing"
     log "Casa IPPT + DNS-source dashboard badges applied (AI-64)"
+}
+
+# Upstream v0.1.14+ layout: thread dns_status into the page-header status
+# rail (status-rail.tsx / DashboardStatusRail) instead of network-status.tsx,
+# which no longer renders any badges (they moved to the rail — see the file's
+# own header comment). Reuses the rail's own Chip component/tone system
+# rather than the shadcn Badge/Tooltip pair dns-source-badges.tsx uses, so the
+# two new chips read as part of the same family as Radio/Internet/Stale
+# instead of as a bolted-on card.
+_patch_casa_dns_badges_rail_cfw3212() {
+    local rail="$1"
+    local hc="$2"
+
+    if grep -q "dnsStatus" "$rail"; then
+        log "DNS badges already applied (status-rail layout)"
+        return 0
+    fi
+
+    python3 - "$rail" "$hc" <<'PYRAIL'
+import sys
+from pathlib import Path
+rail_p, hc_p = (Path(p) for p in sys.argv[1:3])
+
+# --- status-rail.tsx ---
+rail = rail_p.read_text()
+
+import_old = (
+    "import type {\n"
+    "  NetworkStatus,\n"
+    "  ConnectivityStatus,\n"
+    "  ConnectivityState,\n"
+    "} from \"@/types/modem-status\";"
+)
+import_new = (
+    "import type {\n"
+    "  NetworkStatus,\n"
+    "  ConnectivityStatus,\n"
+    "  ConnectivityState,\n"
+    "  DnsStatus,\n"
+    "} from \"@/types/modem-status\";"
+)
+assert rail.count(import_old) == 1, "status-rail: modem-status type import anchor"
+rail = rail.replace(import_old, import_new, 1)
+
+props_old = (
+    "interface DashboardStatusRailProps {\n"
+    "  data: NetworkStatus | null;\n"
+    "  connectivity: ConnectivityStatus | null;\n"
+    "  modemReachable: boolean;\n"
+    "  isLoading: boolean;\n"
+    "  isStale: boolean;\n"
+    "}"
+)
+props_new = (
+    "interface DashboardStatusRailProps {\n"
+    "  data: NetworkStatus | null;\n"
+    "  connectivity: ConnectivityStatus | null;\n"
+    "  modemReachable: boolean;\n"
+    "  isLoading: boolean;\n"
+    "  isStale: boolean;\n"
+    "  /** Casa CFW-3212 LAN DNS reconciler state (AI-64). */\n"
+    "  dnsStatus: DnsStatus | null;\n"
+    "}"
+)
+assert rail.count(props_old) == 1, "status-rail: DashboardStatusRailProps anchor"
+rail = rail.replace(props_old, props_new, 1)
+
+tone_old = (
+    "const CHIP_TONE: Record<ChipTone, string> = {\n"
+    "  success: \"bg-success-container text-on-success-container\",\n"
+    "  warning: \"bg-warning-container text-on-warning-container\",\n"
+    "  destructive: \"bg-destructive-container text-on-destructive-container\",\n"
+    "  muted: \"bg-surface-container-high text-on-surface-variant\",\n"
+    "};"
+)
+tone_new = tone_old + (
+    "\n\n"
+    "// Casa CFW-3212 (AI-64): tone + label maps for the LAN DNS-source chip.\n"
+    "const DNS_SOURCE_TONE: Record<DnsStatus[\"dns_source\"], ChipTone> = {\n"
+    "  carrier: \"success\",\n"
+    "  custom: \"success\",\n"
+    "  public_fallback: \"warning\",\n"
+    "  poisoned: \"destructive\",\n"
+    "  unknown: \"muted\",\n"
+    "};\n\n"
+    "const DNS_SOURCE_LABEL: Record<DnsStatus[\"dns_source\"], string> = {\n"
+    "  carrier: \"Carrier\",\n"
+    "  custom: \"Custom\",\n"
+    "  public_fallback: \"Public\",\n"
+    "  poisoned: \"Poisoned\",\n"
+    "  unknown: \"Unknown\",\n"
+    "};"
+)
+assert rail.count(tone_old) == 1, "status-rail: CHIP_TONE anchor"
+rail = rail.replace(tone_old, tone_new, 1)
+
+sig_old = (
+    "export function DashboardStatusRail({\n"
+    "  data,\n"
+    "  connectivity,\n"
+    "  modemReachable,\n"
+    "  isLoading,\n"
+    "  isStale,\n"
+    "}: DashboardStatusRailProps) {"
+)
+sig_new = (
+    "export function DashboardStatusRail({\n"
+    "  data,\n"
+    "  connectivity,\n"
+    "  modemReachable,\n"
+    "  isLoading,\n"
+    "  isStale,\n"
+    "  dnsStatus,\n"
+    "}: DashboardStatusRailProps) {"
+)
+assert rail.count(sig_old) == 1, "status-rail: DashboardStatusRail signature anchor"
+rail = rail.replace(sig_old, sig_new, 1)
+
+tail_old = (
+    "          </Chip>\n"
+    "        )}\n"
+    "      </motion.span>\n"
+    "    </motion.div>\n"
+    "  );\n"
+    "}\n"
+)
+tail_new = (
+    "          </Chip>\n"
+    "        )}\n"
+    "      </motion.span>\n"
+    "\n"
+    "      {/* Casa CFW-3212 (AI-64): IPPT + LAN DNS source chips */}\n"
+    "      {dnsStatus && (\n"
+    "        <>\n"
+    "          <motion.span variants={staggerRowItem} className=\"inline-flex\">\n"
+    "            <Chip\n"
+    "              tone={dnsStatus.ippt_on ? \"success\" : \"muted\"}\n"
+    "              swapKey={dnsStatus.ippt_on ? \"ippt-on\" : \"ippt-off\"}\n"
+    "            >\n"
+    "              <MaterialSymbol name=\"swap_horiz\" size={15} filled className=\"shrink-0\" />\n"
+    "              {dnsStatus.ippt_on ? \"IPPT On\" : \"IPPT Off\"}\n"
+    "            </Chip>\n"
+    "          </motion.span>\n"
+    "          <motion.span variants={staggerRowItem} className=\"inline-flex\">\n"
+    "            <Chip\n"
+    "              tone={DNS_SOURCE_TONE[dnsStatus.dns_source]}\n"
+    "              swapKey={dnsStatus.dns_source}\n"
+    "            >\n"
+    "              <MaterialSymbol name=\"dns\" size={15} filled className=\"shrink-0\" />\n"
+    "              {`DNS: ${DNS_SOURCE_LABEL[dnsStatus.dns_source]}`}\n"
+    "            </Chip>\n"
+    "          </motion.span>\n"
+    "        </>\n"
+    "      )}\n"
+    "    </motion.div>\n"
+    "  );\n"
+    "}\n"
+)
+assert rail.count(tail_old) == 1, "status-rail: rail tail (Internet chip close + motion.div close) anchor"
+rail = rail.replace(tail_old, tail_new, 1)
+
+rail_p.write_text(rail)
+
+# --- home-component.tsx: thread dnsStatus into the single <DashboardStatusRail> call ---
+hc = hc_p.read_text()
+call_old = (
+    "            <DashboardStatusRail\n"
+    "              data={data?.network ?? null}\n"
+    "              connectivity={data?.connectivity ?? null}\n"
+    "              modemReachable={data?.modem_reachable ?? false}\n"
+    "              isLoading={isLoading}\n"
+    "              isStale={isStale}\n"
+    "            />"
+)
+call_new = (
+    "            <DashboardStatusRail\n"
+    "              data={data?.network ?? null}\n"
+    "              connectivity={data?.connectivity ?? null}\n"
+    "              modemReachable={data?.modem_reachable ?? false}\n"
+    "              isLoading={isLoading}\n"
+    "              isStale={isStale}\n"
+    "              dnsStatus={data?.dns_status ?? null}\n"
+    "            />"
+)
+assert hc.count(call_old) == 1, "home-component: DashboardStatusRail call site anchor"
+hc = hc.replace(call_old, call_new, 1)
+hc_p.write_text(hc)
+print("DNS badges patched (status-rail layout): rail+hc")
+PYRAIL
+    grep -q "dnsStatus" "$rail" || fail "DNS badges: status-rail insertion failed"
+    grep -q "dns_status" "$hc" || fail "DNS badges: home-component threading failed"
+    log "Casa IPPT + DNS-source status-rail chips applied (AI-64)"
 }
 
 patch_active_bands_multi_expand_cfw3212() {
