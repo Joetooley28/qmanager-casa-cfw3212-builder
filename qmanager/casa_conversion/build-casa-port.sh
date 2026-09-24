@@ -1646,6 +1646,7 @@ patch_disable_profile_auto_apply() {
 
     python3 - "$settings_sh" "$watchcat" "$poller" "$profile_mgr" "$sim_types" "$sim_hook" "$profile_page" <<'PY'
 from pathlib import Path
+import re
 import sys
 
 settings, watchcat, poller, profile_mgr, sim_types, sim_hook, profile_page = map(Path, sys.argv[1:8])
@@ -1764,6 +1765,23 @@ new = '''                    # Casa CFW-3212: ICCID profile auto-apply is user c
 '''
 if old in text:
     text = text.replace(old, new, 1)
+elif "profile_auto_apply_enabled" not in text:
+    # Upstream v0.1.14+: sim_db registration precedes the profile_mgr source.
+    text = re.sub(
+        r'^( +)\. /usr/lib/qmanager/profile_mgr\.sh 2>/dev/null\n\1auto_apply_profile "\$_new_iccid" "sim_switch"\n',
+        lambda m: (
+            f'{m.group(1)}# Casa CFW-3212: ICCID profile auto-apply is user controlled.\n'
+            f'{m.group(1)}. /usrdata/qmanager/lib/profile_mgr.sh 2>/dev/null || . /usr/lib/qmanager/profile_mgr.sh 2>/dev/null\n'
+            f'{m.group(1)}if profile_auto_apply_enabled; then\n'
+            f'{m.group(1)}    auto_apply_profile "$_new_iccid" "sim_switch"\n'
+            f'{m.group(1)}else\n'
+            f'{m.group(1)}    qlog_info "Casa profile auto-apply disabled after SIM switch"\n'
+            f'{m.group(1)}fi\n'
+        ),
+        text,
+        count=1,
+        flags=re.M,
+    )
 settings.write_text(text)
 
 text = watchcat.read_text()
@@ -1776,6 +1794,16 @@ text = text.replace(
     '''    # Casa CFW-3212 is single-SIM hardware; Watchdog SIM recovery is disabled.
     qlog_info "Casa Watchdog SIM revert skipped on single-SIM hardware"
 ''',
+)
+text = re.sub(
+    r'^( +)\[ -n "\$_revert_iccid" \] && auto_apply_profile "\$_revert_iccid" "watchdog_revert"\n',
+    lambda m: (
+        f"{m.group(1)}# Casa CFW-3212 is single-SIM hardware; Watchdog SIM recovery is disabled.\n"
+        f'{m.group(1)}qlog_info "Casa Watchdog SIM revert skipped on single-SIM hardware"\n'
+    ),
+    text,
+    count=1,
+    flags=re.M,
 )
 text = text.replace(
     '''            # Auto-apply matching profile for the new SIM
@@ -2270,7 +2298,7 @@ qlog = qlog.replace(
 )
 qlog_path.write_text(qlog)
 
-logs_card = logs_card_path.read_text()
+logs_card = logs_card_path.read_text() if logs_card_path.exists() else ""
 logs_card = logs_card.replace(
     """const formatLogTimestamp = (timestamp: string) => {
   const parsed = new Date(`${timestamp.replace(" ", "T")}Z`);
@@ -2289,7 +2317,8 @@ logs_card = logs_card.replace(
     '<span title={`${entry.timestamp} UTC`}>',
     '<span title={entry.timestamp}>',
 )
-logs_card_path.write_text(logs_card)
+if logs_card:
+    logs_card_path.write_text(logs_card)
 
 if data_used_path.exists():
     data_used = data_used_path.read_text()
@@ -3897,6 +3926,29 @@ text = text.replace(
     '''        val=$(printf '%s' "$POST_DATA" | jq -r '.backup_sim_slot // empty')
         if [ -n "$val" ] && [ "$val" != "null" ]; then
             qm_config_set watchcat backup_sim_slot "$val"
+        else
+            qm_config_set watchcat backup_sim_slot ""
+        fi
+''',
+    '''        # Casa CFW-3212 single-SIM hardware: no backup SIM slot exists.
+        qm_config_set watchcat backup_sim_slot ""
+''',
+    1,
+)
+# Upstream v0.1.14+ parses POST fields into f_* variables before saving.
+text = text.replace(
+    '''        if [ -n "$f_tier3" ]; then
+            case "$f_tier3" in true) qm_config_set watchcat tier3_enabled 1 ;; false) qm_config_set watchcat tier3_enabled 0 ;; esac
+        fi
+''',
+    '''        # Casa CFW-3212 single-SIM hardware: never persist Watchdog SIM failover enabled.
+        qm_config_set watchcat tier3_enabled 0
+''',
+    1,
+)
+text = text.replace(
+    '''        if [ -n "$f_backup_sim_slot" ] && [ "$f_backup_sim_slot" != "null" ]; then
+            qm_config_set watchcat backup_sim_slot "$f_backup_sim_slot"
         else
             qm_config_set watchcat backup_sim_slot ""
         fi
