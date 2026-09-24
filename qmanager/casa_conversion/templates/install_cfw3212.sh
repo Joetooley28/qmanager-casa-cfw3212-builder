@@ -385,6 +385,9 @@ _patch_file() {
         -e 's|/usr/bin/sms_tool|/usrdata/bin/sms_tool|g' \
         -e 's|/lib/systemd/system/multi-user\.target\.wants|/etc/systemd/system/multi-user.target.wants|g' \
         -e 's|/lib/systemd/system|/etc/systemd/system|g' \
+        -e 's#\(^\|[^a-z]\)/opt/bin:/opt/sbin:#\1/usrdata/opt/bin:/usrdata/opt/sbin:/usrdata/bin:#g' \
+        -e 's#\(^\|[^a-z]\)/opt/share/#\1/usrdata/opt/share/#g' \
+        -e 's#\(^\|[^a-z]\)/opt/var/#\1/usrdata/opt/var/#g' \
         -e 's|/opt/bin/\([a-z]\)|/usrdata/opt/bin/\1|g' \
         -e 's|/opt/sbin/\([a-z]\)|/usrdata/opt/sbin/\1|g' \
         -e 's|/opt/etc/\([a-z]\)|/usrdata/opt/etc/\1|g' \
@@ -1486,12 +1489,13 @@ if systemctl list-unit-files turbontc.service >/dev/null 2>&1; then
         || warn "Casa stock UI turbontc.service did not start — check: systemctl status turbontc"
 fi
 
-for f in "$SRC_SCRIPTS/etc/systemd/system"/qmanager*.service; do
+for f in "$SRC_SCRIPTS/etc/systemd/system"/qmanager*.service \
+         "$SRC_SCRIPTS/etc/systemd/system"/qmanager*.timer; do
     [ -f "$f" ] || continue
     cp "$f" "$SYSTEMD_DIR/"
     sed -i 's/\r$//' "$SYSTEMD_DIR/$(basename "$f")"
 done
-info "qmanager service units installed"
+info "qmanager service and timer units installed"
 
 # --- Casa LAN DNS reconciler timer (AI-64) ----------------------------------
 # Runs the reconciler every 30s so the LAN DNS source stays correct after the

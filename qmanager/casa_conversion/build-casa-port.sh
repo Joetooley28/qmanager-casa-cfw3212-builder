@@ -2327,6 +2327,7 @@ patch_ai62_flash_and_cgi_hardening_cfw3212() {
 
     python3 - "$poller" "$qlog" "$setup" "$cgi_base" "$health" <<'PY'
 from pathlib import Path
+import re
 import sys
 
 poller_path, qlog_path, setup_path, cgi_base_path, health_path = map(Path, sys.argv[1:])
@@ -2352,84 +2353,43 @@ DATA_USED_FLUSH_INTERVAL="${DATA_USED_FLUSH_INTERVAL:-300}"
 ''',
     "poller data_used constants",
 )
-poller = replace_once(
+poller, _n = re.subn(
+    r"^du_modem_reset_count=0\n",
+    "du_modem_reset_count=0\ndu_last_flush_ts=0\n",
     poller,
-    "du_modem_reset_count=0\n\n# Orientation detection state.",
-    "du_modem_reset_count=0\ndu_last_flush_ts=0\n\n# Orientation detection state.",
-    "poller flush timestamp state",
+    count=1,
+    flags=re.M,
 )
+if not _n:
+    raise SystemExit("poller flush timestamp state marker not found")
 poller = poller.replace(
     "# to DATA_USED_FILE each tick.",
     "# to a RAM-backed hot file each tick and to persistent flash on a bounded cadence.",
     1,
 )
-old_func = '''write_data_used_state() {
+# Shape-independent: upstream changes the jq field list between releases
+# (v0.1.12 orientation_history_swapped, v0.1.14+ orientation), so only the
+# function header and the final tmp/mv line are rewritten.
+poller = replace_once(
+    poller,
+    """write_data_used_state() {
     mkdir -p /usrdata/qmanager 2>/dev/null
-    local _hist_sw_json
-    if [ "$orientation_history_swapped" = "true" ]; then
-        _hist_sw_json=true
-    else
-        _hist_sw_json=false
-    fi
-    jq -n \\
-        --argjson schema    "$DATA_USED_SCHEMA" \\
-        --argjson acc_rx    "$du_accumulated_rx" \\
-        --argjson acc_tx    "$du_accumulated_tx" \\
-        --arg     sel       "$du_selected_counter" \\
-        --argjson prev_i_rx "$du_prev_ipa_rx" \\
-        --argjson prev_i_tx "$du_prev_ipa_tx" \\
-        --argjson last_upd  "$du_last_update_ts" \\
-        --argjson last_rst  "$du_last_reset_ts" \\
-        --argjson modem_rst "$du_modem_reset_count" \\
-        --argjson hist_sw   "$_hist_sw_json" \\
-        '{
-            schema:               $schema,
-            accumulated_rx_bytes: $acc_rx,
-            accumulated_tx_bytes: $acc_tx,
-            selected_counter:     $sel,
-            prev_ipa_rx:          $prev_i_rx,
-            prev_ipa_tx:          $prev_i_tx,
-            last_update_ts:       $last_upd,
-            last_reset_ts:        $last_rst,
-            modem_reset_count:    $modem_rst,
-            orientation_history_swapped: $hist_sw
-        }' > "$DATA_USED_TMP" && mv "$DATA_USED_TMP" "$DATA_USED_FILE"
-}
-'''
-new_func = '''_write_data_used_state_file() {
-    local _file="$1" _tmp _dir _hist_sw_json
+""",
+    """_write_data_used_state_file() {
+    local _file="$1" _tmp _dir
     [ -n "$_file" ] || return 1
     _tmp="${_file}.tmp"
     _dir=$(dirname "$_file")
     mkdir -p "$_dir" 2>/dev/null || return 1
-    if [ "$orientation_history_swapped" = "true" ]; then
-        _hist_sw_json=true
-    else
-        _hist_sw_json=false
-    fi
-    jq -n \\
-        --argjson schema    "$DATA_USED_SCHEMA" \\
-        --argjson acc_rx    "$du_accumulated_rx" \\
-        --argjson acc_tx    "$du_accumulated_tx" \\
-        --arg     sel       "$du_selected_counter" \\
-        --argjson prev_i_rx "$du_prev_ipa_rx" \\
-        --argjson prev_i_tx "$du_prev_ipa_tx" \\
-        --argjson last_upd  "$du_last_update_ts" \\
-        --argjson last_rst  "$du_last_reset_ts" \\
-        --argjson modem_rst "$du_modem_reset_count" \\
-        --argjson hist_sw   "$_hist_sw_json" \\
-        '{
-            schema:               $schema,
-            accumulated_rx_bytes: $acc_rx,
-            accumulated_tx_bytes: $acc_tx,
-            selected_counter:     $sel,
-            prev_ipa_rx:          $prev_i_rx,
-            prev_ipa_tx:          $prev_i_tx,
-            last_update_ts:       $last_upd,
-            last_reset_ts:        $last_rst,
-            modem_reset_count:    $modem_rst,
-            orientation_history_swapped: $hist_sw
-        }' > "$_tmp" && mv "$_tmp" "$_file"
+""",
+    "poller write_data_used_state header",
+)
+poller = replace_once(
+    poller,
+    """        }' > "$DATA_USED_TMP" && mv "$DATA_USED_TMP" "$DATA_USED_FILE"
+}
+""",
+    """        }' > "$_tmp" && mv "$_tmp" "$_file"
 }
 
 write_data_used_state() {
@@ -2448,8 +2408,9 @@ flush_data_used_state() {
         fi
     fi
 }
-'''
-poller = replace_once(poller, old_func, new_func, "poller write_data_used_state function")
+""",
+    "poller write_data_used_state tail",
+)
 poller = poller.replace(
     "                qlog_info \"orientation: swapped persisted accumulators (schema v4 migration)\"\n"
     "                write_data_used_state\n",
@@ -2516,7 +2477,9 @@ qlog = qlog.replace('QLOG_TO_SYSLOG="${QLOG_TO_SYSLOG:-1}"', 'QLOG_TO_SYSLOG="${
 qlog_path.write_text(qlog)
 
 setup = setup_path.read_text()
-setup = replace_once(
+# Upstream v0.1.14+ already re-asserts a root-owned 0755 spool on every boot.
+if "install -d -o root -g root -m 0755 /var/spool/cron/crontabs" not in setup:
+  setup = replace_once(
     setup,
     '''# CGI (www-data) writes cron entries for root — needs write access to spool dir
 chmod 777 /var/spool/cron/crontabs
@@ -2635,7 +2598,8 @@ PY
         || fail "Could not apply data_used durable flush function"
     grep -q 'QLOG_TO_SYSLOG="${QLOG_TO_SYSLOG:-0}"' "$qlog" \
         || fail "Could not disable Casa syslog forwarding default"
-    grep -q 'chmod 775 /var/spool/cron /var/spool/cron/crontabs' "$setup" \
+    grep -q -e 'chmod 775 /var/spool/cron /var/spool/cron/crontabs' \
+        -e 'install -d -o root -g root -m 0755 /var/spool/cron/crontabs' "$setup" \
         || fail "Could not harden cron spool permissions"
     grep -q 'auth_unavailable' "$cgi_base" \
         || fail "Could not apply CGI auth fail-closed fallback"
