@@ -18,6 +18,16 @@
 - Software Update → Version Management can now install a different version (including rollbacks). After the download verifies, the Install button switches to "Install Now" so the staged package actually gets applied instead of being left on disk.
 - A handful of upstream modem-management actions stay blocked or limited on Casa because they'd let you push the modem into a state we don't want it in.
 
+## v0.1.16-cfw3212.1
+
+- Moves the Casa build onto upstream QManager **v0.1.16** (upstream v0.1.13–v0.1.16 include a full UI redesign, translations, SMS forwarding, known-SIM tracking, alert routing, connection-scenario schedules and more). All existing Casa changes were carried over to the new UI.
+- Software Update on the redesigned page keeps the Casa flow: installing restarts QManager services and then shows a **Reboot required** banner with a **Reboot now** button, and release notes still switch between Joetooley and upstream notes. Updates still come only from the Casa package repo.
+- **Scheduled Reboot** now uses upstream's systemd timers instead of BusyBox `crond`, and still reboots through the Casa managed reboot path so the reason is recorded.
+- The Watchdog's SIM failover tier stays disabled on the new Watchdog page because CFW-3212 has one SIM slot.
+- The **Video Optimizer** traffic mode is hidden on Casa for now while it is checked on this hardware.
+- Language packs download from the upstream QManager releases.
+- New upstream helper scripts are pointed at Casa's `/usrdata` locations, including the Entware tools they need.
+
 ## v0.1.12-cfw3212.22
 
 - QManager's web server (`qmanager-lighttpd`) now writes errors to a RAM-only log at `/tmp/qmanager-lighttpd-error.log` instead of leaving logging unset. HTTP access logging stays off on Casa so routine UI traffic does not churn flash. The `qmanager-lighttpd` service also sends stdout/stderr to the system journal for same-session diagnostics. These logs are cleared on reboot — they are for troubleshooting while the router is running, not for post-reboot forensics.
