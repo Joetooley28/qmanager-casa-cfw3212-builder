@@ -2117,11 +2117,26 @@ if 'autoApplyEnabled' not in text:
         '  activeProfileId: string | null;\n  /** Whether ICCID-matched profiles auto-apply automatically */\n  autoApplyEnabled: boolean;\n  /** True while saving the auto-apply setting */\n  isSavingAutoApply: boolean;\n',
         1,
     )
-    text = text.replace(
-        '  deactivateProfile: () => Promise<boolean>;\n',
-        '  deactivateProfile: () => Promise<boolean>;\n  /** Enable/disable ICCID-matched profile auto-apply */\n  setAutoApplyEnabled: (enabled: boolean) => Promise<boolean>;\n',
-        1,
-    )
+    if 'setAutoApplyEnabled: (enabled: boolean) => Promise<boolean>;' not in text:
+        old_iface = '  deactivateProfile: () => Promise<boolean>;\n'
+        if old_iface in text:
+            text = text.replace(
+                old_iface,
+                old_iface + '  /** Enable/disable ICCID-matched profile auto-apply */\n  setAutoApplyEnabled: (enabled: boolean) => Promise<boolean>;\n',
+                1,
+            )
+        else:
+            # Upstream v0.1.14+: deactivateProfile's signature changed
+            # (opts?: DeactivateOptions) => Promise<DeactivateResult>, and
+            # `refresh` is now the last field before the interface closes.
+            old_iface_v16 = '  /** Manually refresh the profile list */\n  refresh: () => void;\n}\n'
+            if old_iface_v16 not in text:
+                raise SystemExit("use-sim-profiles UseSimProfilesReturn interface anchor not found")
+            text = text.replace(
+                old_iface_v16,
+                '  /** Manually refresh the profile list */\n  refresh: () => void;\n  /** Enable/disable ICCID-matched profile auto-apply */\n  setAutoApplyEnabled: (enabled: boolean) => Promise<boolean>;\n}\n',
+                1,
+            )
     text = text.replace(
         '  const [isLoading, setIsLoading] = useState(true);\n  const [error, setError] = useState<string | null>(null);\n',
         '  const [isLoading, setIsLoading] = useState(true);\n  const [error, setError] = useState<string | null>(null);\n  const [autoApplyEnabled, setAutoApplyEnabledState] = useState(false);\n  const [isSavingAutoApply, setIsSavingAutoApply] = useState(false);\n',
@@ -2195,11 +2210,12 @@ sim_hook.write_text(text)
 
 text = profile_page.read_text()
 if 'autoApplyEnabled' not in text:
-    text = text.replace(
-        'import React, { useState, useCallback } from "react";\n',
-        'import React, { useState, useCallback } from "react";\nimport { toast } from "sonner";\n',
-        1,
-    )
+    if 'from "sonner"' not in text:
+        text = text.replace(
+            'import React, { useState, useCallback } from "react";\n',
+            'import React, { useState, useCallback } from "react";\nimport { toast } from "sonner";\n',
+            1,
+        )
     text = text.replace(
         'import type { SimProfile } from "@/types/sim-profile";\n',
         'import type { SimProfile } from "@/types/sim-profile";\nimport { Switch } from "@/components/ui/switch";\n',
@@ -2223,12 +2239,7 @@ if 'autoApplyEnabled' not in text:
 ''',
         1,
     )
-    text = text.replace(
-        '''  // ---------------------------------------------------------------------------
-  // Handle Edit: fetch full profile, switch form to edit mode
-  // ---------------------------------------------------------------------------
-''',
-        '''  const handleAutoApplyToggle = useCallback(
+    handler = '''  const handleAutoApplyToggle = useCallback(
     async (enabled: boolean) => {
       const success = await setAutoApplyEnabled(enabled);
       if (success) {
@@ -2242,12 +2253,26 @@ if 'autoApplyEnabled' not in text:
     [setAutoApplyEnabled]
   );
 
-  // ---------------------------------------------------------------------------
+'''
+    marker = '''  // ---------------------------------------------------------------------------
   // Handle Edit: fetch full profile, switch form to edit mode
   // ---------------------------------------------------------------------------
-''',
-        1,
-    )
+'''
+    if marker in text:
+        text = text.replace(marker, handler + marker, 1)
+    else:
+        # Upstream v0.1.14+: no "Handle Edit" comment banner; anchor on the
+        # standalone handleNewProfile callback instead (stable, self-contained).
+        marker_v16 = '''  const handleNewProfile = useCallback(() => {
+    setEditingProfile(null);
+    setFormInitialTab("identity");
+    setFormOpen(true);
+  }, []);
+'''
+        if marker_v16 not in text:
+            raise SystemExit("custom-profile.tsx handleNewProfile/Handle-Edit anchor not found")
+        text = text.replace(marker_v16, handler + marker_v16, 1)
+
     old_header = '''      <div className="mb-6">
         <h1 className="text-3xl font-bold mb-2">Custom SIM Profile</h1>
         <p className="text-muted-foreground">
@@ -2286,9 +2311,41 @@ if 'autoApplyEnabled' not in text:
         </div>
       </div>
 '''
-    if old_header not in text:
-        raise SystemExit("custom-profile header block not found")
-    text = text.replace(old_header, new_header, 1)
+    if old_header in text:
+        text = text.replace(old_header, new_header, 1)
+    else:
+        # Upstream v0.1.14+: the local <h1> was replaced by <CellularPageHeader>.
+        # Splice the toggle in as its own card, immediately after the header,
+        # rather than fighting the header's own actions layout.
+        header_anchor = '''        />
+      </motion.div>
+
+      {/* --- What is in force right now'''
+        if header_anchor not in text:
+            raise SystemExit("custom-profile header block not found")
+        toggle_card = '''        />
+      </motion.div>
+
+      {/* Casa CFW-3212: ICCID-matched profile auto-apply is user controlled. */}
+      <motion.div variants={staggerItem}>
+        <div className="flex min-w-64 items-center justify-between gap-4 rounded-md border bg-card px-4 py-3">
+          <div className="space-y-1">
+            <div className="text-sm font-medium">ICCID auto-apply</div>
+            <div className="text-xs text-muted-foreground">
+              Apply matching profiles on boot, SIM switch, and Watchdog SIM recovery.
+            </div>
+          </div>
+          <Switch
+            checked={autoApplyEnabled}
+            disabled={isSavingAutoApply}
+            onCheckedChange={handleAutoApplyToggle}
+            aria-label="Toggle ICCID auto-apply"
+          />
+        </div>
+      </motion.div>
+
+      {/* --- What is in force right now'''
+        text = text.replace(header_anchor, toggle_card, 1)
 profile_page.write_text(text)
 PY
 
@@ -2351,18 +2408,36 @@ patch_casa_iccid_and_staleness_cfw3212() {
     local profile_mgr="$TARGET/scripts/usr/lib/qmanager/profile_mgr.sh"
     local poller="$TARGET/scripts/usr/bin/qmanager_poller"
     local table="$TARGET/components/cellular/custom-profiles/custom-profile-table.tsx"
+    local view="$TARGET/components/cellular/custom-profiles/custom-profile-view.tsx"
+    local hero="$TARGET/components/cellular/custom-profiles/active-profile-hero.tsx"
     local modem_hook="$TARGET/hooks/use-modem-status.ts"
 
     [ -f "$profile_mgr" ] || fail "Target missing profile_mgr.sh"
     [ -f "$poller" ] || fail "Target missing qmanager_poller"
-    [ -f "$table" ] || fail "Target missing custom-profile-table.tsx"
     [ -f "$modem_hook" ] || fail "Target missing use-modem-status.ts"
+    # Upstream v0.1.14+ dropped custom-profile-table.tsx; the row-level and
+    # hero-level ICCID mismatch UI moved into custom-profile-view.tsx and
+    # active-profile-hero.tsx respectively. Neither canonicalizes the ICCID
+    # (confirmed: custom-profile-view.tsx still does a naive string compare),
+    # so the Casa normalization is still needed there.
+    if [ ! -f "$table" ]; then
+        table=""
+        [ -f "$view" ] || fail "Target missing custom-profile-table.tsx and custom-profile-view.tsx"
+        [ -f "$hero" ] || fail "Target missing active-profile-hero.tsx"
+    else
+        view=""
+        hero=""
+    fi
 
-    python3 - "$profile_mgr" "$poller" "$table" "$modem_hook" <<'PY'
+    python3 - "$profile_mgr" "$poller" "$table" "$view" "$hero" "$modem_hook" <<'PY'
 from pathlib import Path
 import sys
 
-profile_mgr, poller, table, modem_hook = map(Path, sys.argv[1:5])
+profile_mgr, poller, table, view, hero, modem_hook = sys.argv[1:7]
+profile_mgr, poller, modem_hook = Path(profile_mgr), Path(poller), Path(modem_hook)
+table = Path(table) if table else None
+view = Path(view) if view else None
+hero = Path(hero) if hero else None
 
 text = profile_mgr.read_text()
 if "_normalize_iccid()" not in text:
@@ -2465,34 +2540,118 @@ if '_ap_iccid=$(_normalize_iccid "$_ap_iccid")' not in text:
     )
 poller.write_text(text)
 
-text = table.read_text()
-if "normalizeIccid" not in text:
-    marker = 'import { formatProfileDate } from "@/types/sim-profile";\n'
-    if marker not in text:
-        raise SystemExit("custom-profile-table.tsx import marker not found")
-    text = text.replace(
-        marker,
-        marker + '''
+if table is not None:
+    text = table.read_text()
+    if "normalizeIccid" not in text:
+        marker = 'import { formatProfileDate } from "@/types/sim-profile";\n'
+        if marker not in text:
+            raise SystemExit("custom-profile-table.tsx import marker not found")
+        text = text.replace(
+            marker,
+            marker + '''
 function normalizeIccid(value: string | null | undefined): string {
   return (value ?? "").trim().replace(/[Ff]$/, "");
 }
 ''',
-        1,
-    )
-if 'normalizeIccid(row.original.sim_iccid)' not in text:
-    text = text.replace(
-        '''            const profileIccid = row.original.sim_iccid;
+            1,
+        )
+    if 'normalizeIccid(row.original.sim_iccid)' not in text:
+        text = text.replace(
+            '''            const profileIccid = row.original.sim_iccid;
             const isMismatch =
               profileIccid && currentIccid && profileIccid !== currentIccid;
 ''',
-        '''            const profileIccid = normalizeIccid(row.original.sim_iccid);
+            '''            const profileIccid = normalizeIccid(row.original.sim_iccid);
             const liveIccid = normalizeIccid(currentIccid);
             const isMismatch =
               profileIccid && liveIccid && profileIccid !== liveIccid;
 ''',
-        1,
-    )
-table.write_text(text)
+            1,
+        )
+    table.write_text(text)
+
+# Upstream v0.1.14+: custom-profile-table.tsx was replaced by
+# custom-profile-view.tsx (row-level mismatch status via deriveStatus()) and
+# active-profile-hero.tsx (hero-level mismatch banner). Neither canonicalizes
+# the ICCID client-side (custom-profile-view.tsx says so explicitly in a
+# comment), so both still need the Casa normalization.
+if view is not None:
+    text = view.read_text()
+    if "function normalizeIccid" not in text:
+        marker = 'type ProfileStatus = "active" | "mismatch" | "inactive";\n'
+        if marker not in text:
+            raise SystemExit("custom-profile-view.tsx ProfileStatus marker not found")
+        text = text.replace(
+            marker,
+            marker + '''
+function normalizeIccid(value: string | null | undefined): string {
+  return (value ?? "").trim().replace(/[Ff]$/, "");
+}
+''',
+            1,
+        )
+    if 'normalizedProfileIccid' not in text:
+        old = '''  if (!isActive) return "inactive";
+  if (profileIccid && currentIccid && profileIccid !== currentIccid) {
+    return "mismatch";
+  }
+  return "active";
+'''
+        if old not in text:
+            raise SystemExit("custom-profile-view.tsx deriveStatus body not found")
+        text = text.replace(
+            old,
+            '''  if (!isActive) return "inactive";
+  const normalizedProfileIccid = normalizeIccid(profileIccid);
+  const normalizedCurrentIccid = normalizeIccid(currentIccid);
+  if (
+    normalizedProfileIccid &&
+    normalizedCurrentIccid &&
+    normalizedProfileIccid !== normalizedCurrentIccid
+  ) {
+    return "mismatch";
+  }
+  return "active";
+''',
+            1,
+        )
+    view.write_text(text)
+
+if hero is not None:
+    text = hero.read_text()
+    if "function normalizeIccid" not in text:
+        marker = 'export interface ActiveProfileHeroProps {\n'
+        if marker not in text:
+            raise SystemExit("active-profile-hero.tsx ActiveProfileHeroProps marker not found")
+        text = text.replace(
+            marker,
+            '''function normalizeIccid(value: string | null | undefined): string {
+  return (value ?? "").trim().replace(/[Ff]$/, "");
+}
+
+''' + marker,
+            1,
+        )
+    if 'normalizedProfileIccid' not in text:
+        old = '''  const isMismatch =
+    Boolean(profile.sim_iccid) &&
+    Boolean(currentIccid) &&
+    profile.sim_iccid !== currentIccid;
+'''
+        if old not in text:
+            raise SystemExit("active-profile-hero.tsx isMismatch block not found")
+        text = text.replace(
+            old,
+            '''  const normalizedProfileIccid = normalizeIccid(profile.sim_iccid);
+  const normalizedCurrentIccid = normalizeIccid(currentIccid);
+  const isMismatch =
+    Boolean(normalizedProfileIccid) &&
+    Boolean(normalizedCurrentIccid) &&
+    normalizedProfileIccid !== normalizedCurrentIccid;
+''',
+            1,
+        )
+    hero.write_text(text)
 
 text = modem_hook.read_text()
 if "lastTimestampRef" not in text:
@@ -2508,13 +2667,15 @@ if "lastTimestampRef" not in text:
         1,
     )
 if "timestampAdvanced" not in text:
-    text = text.replace(
-        '''      // Check staleness: compare the JSON timestamp to current time
+    old_v12 = '''      // Check staleness: compare the JSON timestamp to current time
       const now = Math.floor(Date.now() / 1000);
       const age = now - json.timestamp;
       setIsStale(age > STALE_THRESHOLD_SECONDS);
-''',
-        '''      // Check staleness. Prefer an advancing router timestamp because
+'''
+    if old_v12 in text:
+        text = text.replace(
+            old_v12,
+            '''      // Check staleness. Prefer an advancing router timestamp because
       // some Casa units can boot with an incorrect wall clock until time sync.
       const nowMs = Date.now();
       const previousTimestamp = lastTimestampRef.current;
@@ -2530,8 +2691,37 @@ if "timestampAdvanced" not in text:
         setIsStale(stalledAge > STALE_THRESHOLD_SECONDS);
       }
 ''',
-        1,
-    )
+            1,
+        )
+    else:
+        # Upstream v0.1.14+: `nowMs` is already read once above (shared with
+        # receivedAtMs) and the staleness comment/formula changed slightly.
+        old_v16 = '''      const age = Math.floor(nowMs / 1000) - json.timestamp;
+      setIsStale(age > STALE_THRESHOLD_SECONDS);
+'''
+        if old_v16 not in text:
+            raise SystemExit("use-modem-status.ts staleness block not found")
+        text = text.replace(
+            old_v16,
+            '''      // Casa CFW-3212: prefer an advancing router timestamp over raw clock
+      // comparison — some Casa units boot with an incorrect wall clock until
+      // time sync, which the modem-vs-browser age check above would flag as
+      // permanently stale.
+      const previousTimestamp = lastTimestampRef.current;
+      const timestampAdvanced =
+        typeof previousTimestamp !== "number" || json.timestamp > previousTimestamp;
+      if (timestampAdvanced) {
+        lastTimestampRef.current = json.timestamp;
+        lastTimestampAdvanceMsRef.current = nowMs;
+        setIsStale(false);
+      } else {
+        const stalledAge =
+          (nowMs - lastTimestampAdvanceMsRef.current) / 1000;
+        setIsStale(stalledAge > STALE_THRESHOLD_SECONDS);
+      }
+''',
+            1,
+        )
 modem_hook.write_text(text)
 PY
 
@@ -2539,10 +2729,19 @@ PY
         || fail "profile_mgr.sh missing ICCID normalization"
     grep -q "_normalize_iccid" "$poller" \
         || fail "qmanager_poller missing ICCID normalization"
-    grep -q "normalizeIccid" "$table" \
-        || fail "custom-profile-table.tsx missing ICCID normalization"
-    grep -q "function normalizeIccid" "$table" \
-        || fail "custom-profile-table.tsx missing normalizeIccid function"
+    if [ -n "$table" ]; then
+        grep -q "normalizeIccid" "$table" \
+            || fail "custom-profile-table.tsx missing ICCID normalization"
+        grep -q "function normalizeIccid" "$table" \
+            || fail "custom-profile-table.tsx missing normalizeIccid function"
+    else
+        grep -q "normalizeIccid" "$view" \
+            || fail "custom-profile-view.tsx missing ICCID normalization"
+        grep -q "function normalizeIccid" "$view" \
+            || fail "custom-profile-view.tsx missing normalizeIccid function"
+        grep -q "normalizeIccid" "$hero" \
+            || fail "active-profile-hero.tsx missing ICCID normalization"
+    fi
     grep -q "lastTimestampAdvanceMsRef" "$modem_hook" \
         || fail "use-modem-status.ts missing Casa timestamp staleness patch"
 }
@@ -4244,18 +4443,30 @@ patch_casa_watchdog_ui_single_sim_cfw3212() {
     # implying that backup-SIM recovery exists on CFW-3212.
     local watchdog_cgi="$TARGET/scripts/www/cgi-bin/quecmanager/monitoring/watchdog.sh"
     local watchdog_card="$TARGET/components/monitoring/watchdog/watchdog-settings-card.tsx"
+    local ladder_card="$TARGET/components/monitoring/watchdog/ladder-card.tsx"
     local profile_page="$TARGET/components/cellular/custom-profiles/custom-profile.tsx"
 
     [ -f "$watchdog_cgi" ] || fail "Target missing monitoring/watchdog.sh"
-    [ -f "$watchdog_card" ] || fail "Target missing watchdog-settings-card.tsx"
     [ -f "$profile_page" ] || fail "Target missing custom-profile.tsx"
+    # Upstream v0.1.14+ replaced the settings-card Recovery tab with the
+    # "ladder" — one Rung per tier, tier 3 being the backup-SIM rung — under
+    # components/monitoring/watchdog/. watchdog-settings-card.tsx is gone.
+    if [ ! -f "$watchdog_card" ]; then
+        watchdog_card=""
+        [ -f "$ladder_card" ] || fail "Target missing watchdog-settings-card.tsx and ladder-card.tsx"
+    else
+        ladder_card=""
+    fi
 
-	    python3 - "$watchdog_cgi" "$watchdog_card" "$profile_page" <<'PY'
+    python3 - "$watchdog_cgi" "$watchdog_card" "$ladder_card" "$profile_page" <<'PY'
 from pathlib import Path
 import re
 import sys
 
-watchdog_cgi, watchdog_card, profile_page = map(Path, sys.argv[1:4])
+watchdog_cgi, watchdog_card, ladder_card, profile_page = sys.argv[1:5]
+watchdog_cgi, profile_page = Path(watchdog_cgi), Path(profile_page)
+watchdog_card = Path(watchdog_card) if watchdog_card else None
+ladder_card = Path(ladder_card) if ladder_card else None
 
 text = watchdog_cgi.read_text()
 text = text.replace(
@@ -4331,36 +4542,37 @@ text = text.replace(
 )
 watchdog_cgi.write_text(text)
 
-text = watchdog_card.read_text()
-text = text.replace(
-    '''  const [tier3Enabled, setTier3Enabled] = useState(
+if watchdog_card is not None:
+    text = watchdog_card.read_text()
+    text = text.replace(
+        '''  const [tier3Enabled, setTier3Enabled] = useState(
     settings?.tier3_enabled ?? false,
   );
 ''',
-    '''  const tier3Enabled = false;
+        '''  const tier3Enabled = false;
 ''',
-    1,
-)
-text = text.replace(
-    '''  const [backupSimSlot, setBackupSimSlot] = useState<string>(
+        1,
+    )
+    text = text.replace(
+        '''  const [backupSimSlot, setBackupSimSlot] = useState<string>(
     settings?.backup_sim_slot != null ? String(settings.backup_sim_slot) : "",
   );
 ''',
-    '''  const backupSimSlot = "";
+        '''  const backupSimSlot = "";
 ''',
-    1,
-)
-text, backup_count = re.subn(
-    r'\n                <div aria-live="polite">\n                  \{tier3Enabled && \(\n                    <Field>\n                      <FieldLabel htmlFor="backup-sim-slot">.*?\n                </div>\n',
-    '\n',
-    text,
-    count=1,
-    flags=re.S,
-)
-if backup_count != 1:
-    raise SystemExit("Watchdog backup SIM slot block not found")
-text = text.replace(
-    '''                <Field orientation="horizontal" className="w-fit">
+        1,
+    )
+    text, backup_count = re.subn(
+        r'\n                <div aria-live="polite">\n                  \{tier3Enabled && \(\n                    <Field>\n                      <FieldLabel htmlFor="backup-sim-slot">.*?\n                </div>\n',
+        '\n',
+        text,
+        count=1,
+        flags=re.S,
+    )
+    if backup_count != 1:
+        raise SystemExit("Watchdog backup SIM slot block not found")
+    text = text.replace(
+        '''                <Field orientation="horizontal" className="w-fit">
                   <FieldLabel htmlFor="tier3-enabled">
                     Switch to Backup SIM
                   </FieldLabel>
@@ -4373,7 +4585,7 @@ text = text.replace(
                 </Field>
 
 ''',
-    '''                <Field>
+        '''                <Field>
                   <FieldLabel>Backup SIM Recovery</FieldLabel>
                   <FieldDescription>
                     Disabled on Casa CFW-3212 single-SIM hardware.
@@ -4381,9 +4593,106 @@ text = text.replace(
                 </Field>
 
 ''',
-    1,
-)
-watchdog_card.write_text(text)
+        1,
+    )
+    watchdog_card.write_text(text)
+
+# Upstream v0.1.14+: the Recovery tab's per-tier toggle became the ladder's
+# Rung component, one per tier, shared across all four tiers. Tier 3's own
+# field slot (previously the sole child of the removed Field above) is now
+# the backup-SIM Select; force the tier off and swap its field slot for a
+# static notice so Casa single-SIM hardware never shows it as available.
+if ladder_card is not None:
+    text = ladder_card.read_text()
+    if 'Disabled on Casa CFW-3212 single-SIM hardware' not in text:
+        old_switch = '''        <Switch
+          checked={rung.enabled}
+          onCheckedChange={onToggle}
+          disabled={masterOff}
+          aria-label={t("watchdog.ladder.tierAria", { name })}
+          className={SWITCH_TARGET}
+        />
+'''
+        if old_switch not in text:
+            raise SystemExit("ladder-card.tsx tier enable Switch not found")
+        text = text.replace(
+            old_switch,
+            '''        <Switch
+          checked={rung.tier === 3 ? false : rung.enabled}
+          onCheckedChange={onToggle}
+          disabled={masterOff || rung.tier === 3}
+          aria-label={t("watchdog.ladder.tierAria", { name })}
+          className={SWITCH_TARGET}
+        />
+''',
+            1,
+        )
+
+        old_field = '''        {rung.tier === 3 && rung.enabled ? (
+          <div className={cn(RUNG.FIELD_SLOT, FIELD.ROW)}>
+            <label className={FIELD.LABEL} htmlFor={FIELD_ID.backupSim}>
+              {t("watchdog.ladder.tier3.slotLabel")}
+            </label>
+            <Select
+              value={form.backupSimSlot}
+              onValueChange={form.setBackupSimSlot}
+            >
+              <SelectTrigger
+                id={FIELD_ID.backupSim}
+                ref={registerField(FIELD_ID.backupSim)}
+                aria-invalid={form.errors.backupSim !== null}
+                aria-describedby={
+                  form.errors.backupSim
+                    ? `${FIELD_ID.backupSim}-hint ${FIELD_ID.backupSim}-error`
+                    : `${FIELD_ID.backupSim}-hint`
+                }
+                className={cn(
+                  FIELD.SHELL_ON_CONTAINER,
+                  FIELD.INVALID,
+                  FIELD.NARROW,
+                )}
+              >
+                <SelectValue
+                  placeholder={t("watchdog.ladder.tier3.slotPlaceholder")}
+                />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="1">
+                  {t("watchdog.ladder.tier3.slot", { slot: 1 })}
+                </SelectItem>
+                <SelectItem value="2">
+                  {t("watchdog.ladder.tier3.slot", { slot: 2 })}
+                </SelectItem>
+              </SelectContent>
+            </Select>
+            <p id={`${FIELD_ID.backupSim}-hint`} className={RUNG.FIELD_HINT}>
+              {t("watchdog.ladder.tier3.slotHint")}
+            </p>
+            {form.errors.backupSim ? (
+              <p id={`${FIELD_ID.backupSim}-error`} className={FIELD.ERROR}>
+                {t(form.errors.backupSim)}
+              </p>
+            ) : null}
+          </div>
+        ) : null}
+'''
+        if old_field not in text:
+            raise SystemExit("ladder-card.tsx tier3 backup SIM field block not found")
+        text = text.replace(
+            old_field,
+            '''        {rung.tier === 3 ? (
+          <div className={cn(RUNG.FIELD_SLOT, FIELD.ROW)}>
+            {/* Casa CFW-3212 is single-SIM hardware: Watchdog SIM failover
+                never exists as an option here, regardless of saved state. */}
+            <p className={RUNG.FIELD_HINT}>
+              Disabled on Casa CFW-3212 single-SIM hardware.
+            </p>
+          </div>
+        ) : null}
+''',
+            1,
+        )
+    ladder_card.write_text(text)
 
 text = profile_page.read_text()
 text = text.replace(
@@ -4397,10 +4706,17 @@ PY
         || fail "Could not force Watchdog CGI tier3 unavailable"
     grep -q 'never persist Watchdog SIM failover enabled' "$watchdog_cgi" \
         || fail "Could not force Watchdog CGI tier3 saves off"
-    grep -q 'Disabled on Casa CFW-3212 single-SIM hardware' "$watchdog_card" \
-        || fail "Could not replace Watchdog backup SIM UI"
-    if grep -q 'onCheckedChange={setTier3Enabled}' "$watchdog_card"; then
-        fail "Watchdog backup SIM toggle still present"
+    if [ -n "$watchdog_card" ]; then
+        grep -q 'Disabled on Casa CFW-3212 single-SIM hardware' "$watchdog_card" \
+            || fail "Could not replace Watchdog backup SIM UI"
+        if grep -q 'onCheckedChange={setTier3Enabled}' "$watchdog_card"; then
+            fail "Watchdog backup SIM toggle still present"
+        fi
+    else
+        grep -q 'Disabled on Casa CFW-3212 single-SIM hardware' "$ladder_card" \
+            || fail "Could not replace Watchdog backup SIM UI"
+        grep -q 'rung.tier === 3 ? false : rung.enabled' "$ladder_card" \
+            || fail "Watchdog backup SIM toggle still present"
     fi
     grep -q 'Apply matching profiles on boot and user SIM-switch actions' "$profile_page" \
         || fail "Could not update ICCID auto-apply UI copy"
