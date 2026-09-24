@@ -876,6 +876,80 @@ new = '''
     boot_ippt_dhcpv4dns="disabled"'''
 text = text.replace(old, new)
 
+# Upstream v0.1.14+ splits Group B into B1-B4 baskets plus a separate
+# DHCPV4DNS call. Keep the Casa mode-gated MIMO enables and RDB IPPT state.
+old = '''    # --- B1: CA info + MIMO/timing enables (idempotent ",1" writes) ---
+    result=$(qcmd 'AT+QCAINFO=1;+QNWCFG="lte_mimo_layers",1;+QNWCFG="nr5g_mimo_layers",1;+QNWCFG="lte_time_advance",1;+QNWCFG="nr5g_time_advance",1' 2>/dev/null)
+    if [ -n "$result" ]; then
+        parse_mimo "$result" "$result"
+    fi
+    sleep "$SIP_DELAY"
+
+    # --- B2: mode-appropriate MIMO read (lte_mimo_layers crashes in SA,
+    # nr5g_mimo_layers crashes in LTE/NSA — same gate as before) ---
+    if [ "$network_type" = "5G-SA" ]; then
+        result=$(qcmd 'AT+QNWCFG="nr5g_mimo_layers"' 2>/dev/null)
+        [ -n "$result" ] && parse_mimo "" "$result"
+    elif [ "$network_type" = "LTE" ] || [ "$network_type" = "5G-NSA" ]; then
+        result=$(qcmd 'AT+QNWCFG="lte_mimo_layers"' 2>/dev/null)
+        [ -n "$result" ] && parse_mimo "$result" ""
+    fi'''
+new = '''    # --- B1: CA info + timing enables (idempotent ",1" writes) ---
+    # Casa/RG520N-NA returns ERROR for lte_mimo_layers while camped on 5G-SA,
+    # so the MIMO enables move into the mode-gated B2 read below.
+    result=$(qcmd 'AT+QCAINFO=1;+QNWCFG="lte_time_advance",1;+QNWCFG="nr5g_time_advance",1' 2>/dev/null)
+    sleep "$SIP_DELAY"
+
+    # --- B2: mode-appropriate MIMO enable + read ---
+    if [ "$network_type" = "5G-SA" ]; then
+        result=$(qcmd 'AT+QNWCFG="nr5g_mimo_layers",1;+QNWCFG="nr5g_mimo_layers"' 2>/dev/null)
+        [ -n "$result" ] && parse_mimo "" "$result"
+    elif [ "$network_type" = "LTE" ] || [ "$network_type" = "5G-NSA" ]; then
+        result=$(qcmd 'AT+QNWCFG="lte_mimo_layers",1;+QNWCFG="lte_mimo_layers"' 2>/dev/null)
+        [ -n "$result" ] && parse_mimo "$result" ""
+    fi'''
+text = text.replace(old, new)
+
+casa_ippt_rdb_block = '''    # Casa CFW-3212 keeps IP Passthrough mapped to ip_handover/RDB state.
+    # Do not query upstream MPDN/QMAP/QCFG usbnet status here; it is
+    # unsupported on this device and creates noisy qcmd errors.
+    local casa_ippt_enable casa_ippt_mode casa_ippt_service_enable
+    casa_ippt_enable=$(rdb get link.profile.1.ip_handover.enable 2>/dev/null || true)
+    casa_ippt_mode=$(rdb get link.profile.1.ip_handover.mode 2>/dev/null || true)
+    casa_ippt_service_enable=$(rdb get service.ip_handover.enable 2>/dev/null || true)
+    boot_ippt_mode="disabled"
+    if [ "$casa_ippt_enable" = "1" ] && [ "$casa_ippt_service_enable" != "0" ]; then
+        case "$casa_ippt_mode" in
+            eth|enabled|1) boot_ippt_mode="eth" ;;
+        esac
+    fi
+    boot_ippt_mac=$(rdb get service.ip_handover.mac_address 2>/dev/null || true)
+    boot_ippt_nat="1"
+    boot_ippt_usbnet="1"
+    boot_ippt_dhcpv4dns="disabled"'''
+
+old = '''    # --- B3: IP Passthrough MPDN rule + NAT ---
+    result=$(qcmd 'AT+QMAP="MPDN_RULE";+QMAP="IPPT_NAT"' 2>/dev/null)
+    if [ -n "$result" ]; then
+        parse_ippt_mpdn_rule "$result"
+        parse_ippt_nat "$result"
+    fi
+    sleep "$SIP_DELAY"
+
+    # --- B4: IP Passthrough usbnet mode (own AT+QCFG subsystem, own call) ---
+    result=$(qcmd 'AT+QCFG="usbnet"' 2>/dev/null)
+    if [ -n "$result" ]; then
+        parse_ippt_usbnet "$result"
+    fi'''
+text = text.replace(old, casa_ippt_rdb_block)
+
+text = re.sub(
+    r'''    # =+\n    # DHCPv4 DNS mode — separate qcmd call, isolated from Group B\.\n(?:    #[^\n]*\n)*?    # =+\n    result=\$\(qcmd 'AT\+QMAP="DHCPV4DNS"' 2>/dev/null\)\n    if \[ -n "\$result" \]; then\n        parse_ippt_dhcpv4dns "\$result"\n    fi\n''',
+    '''    # Casa CFW-3212: DHCPv4 DNS mode comes from the RDB IPPT block above.\n''',
+    text,
+    count=1,
+)
+
 if disable_profile_auto_apply:
     old = '''# Active profile auto-apply at boot
     # =========================================================================
