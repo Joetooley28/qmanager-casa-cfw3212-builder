@@ -484,7 +484,7 @@ if [ "$REQUEST_METHOD" = "GET" ]; then
             has_assets: true,
             asset_size: (((([ .assets[] | select(.name == ("qmanager-cfw3212-" + $t + ".tar.gz")) ][0].size) // ([ .assets[] | select(.name == ("qmanager-cfw3212-" + ($t | split("-cfw3212.")[0]) + ".tar.gz")) ][0].size) // 0) / 1048576 * 10 | floor / 10 | tostring + " MB")),
             is_current: (.tag_name == $cv)
-        }]')
+        }] | .[:3]')
 
     download_url=""
     download_size=""

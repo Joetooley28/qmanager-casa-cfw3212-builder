@@ -26,6 +26,7 @@
 - The Watchdog's SIM failover tier stays disabled on the new Watchdog page because CFW-3212 has one SIM slot.
 - The **Video Optimizer** traffic mode is hidden on Casa for now while it is checked on this hardware.
 - Language packs download from the upstream QManager releases.
+- Software Update now lists only the three newest Casa versions, and the release notes on the router show just the notes for that release.
 - New upstream helper scripts are pointed at Casa's `/usrdata` locations, including the Entware tools they need.
 
 ## v0.1.12-cfw3212.22
