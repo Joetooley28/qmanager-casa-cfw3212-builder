@@ -1675,6 +1675,10 @@ info "Casa LAN DNS reconciler timer installed (30s)"
 # re-arms them from saved config on every install, so an upgrade keeps them.
 # Mirror that here: settings saved under older Casa builds (BusyBox crond era)
 # otherwise show "Armed" in the UI with no timer behind them.
+# Subshell with the Casa PATH: qm_config_get needs jq, and without /usrdata/bin
+# it silently returns the default "0", which would tear the timer down.
+(
+PATH="$BIN_DIR:$OPT_DIR/bin:$PATH"
 if command -v qm_config_get >/dev/null 2>&1 && [ -x "$BIN_DIR/qmanager_scheduled_reboot_arm" ]; then
     _sched_enabled=$(qm_config_get settings sched_reboot_enabled 0 2>/dev/null) || _sched_enabled=0
     if [ "$_sched_enabled" = "1" ]; then
@@ -1701,6 +1705,7 @@ if [ -x "$BIN_DIR/qmanager_tower_schedule_arm" ] && [ -f "$CONF_DIR/tower_lock.j
         "$BIN_DIR/qmanager_tower_schedule_arm" teardown >/dev/null 2>&1 || true
     fi
 fi
+)
 
 # Casa CFW-3212 note: keep the poller independent from qmanager-ping. The
 # installer starts both explicitly, and this prevents a future ping regression
