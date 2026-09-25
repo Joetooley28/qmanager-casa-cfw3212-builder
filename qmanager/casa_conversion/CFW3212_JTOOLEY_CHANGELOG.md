@@ -39,6 +39,7 @@
 - The **Time zone** setting in System Settings now actually changes the router clock. CFW-3212 only has its own short list of zones, so QManager picks the matching one (for example America/New_York uses US/Eastern) and applies it through the router's own time zone setting, which survives reboots. Scheduled Reboot, logs and alert times then use local time instead of UTC.
 - Updating QManager now keeps **Scheduled Reboot** and the Tower Lock schedule armed. They are re-created from your saved settings on every install, including schedules saved on older builds, which showed as Armed but never ran after the upgrade.
 - Uninstall now stops every QManager service it removes, including ones added in newer versions (SMS forwarding, SMS storage, schedules), so nothing keeps running until the next reboot.
+- Background services such as **SMS forwarding**, tower failover, the Tower Lock schedule and the backup-IMEI check can now find the tools they need on CFW-3212. Before, they could quietly treat their saved settings as off or empty.
 
 ## v0.1.12-cfw3212.22
 

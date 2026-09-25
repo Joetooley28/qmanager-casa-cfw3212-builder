@@ -1743,7 +1743,7 @@ ConditionPathExists=/etc/qmanager/imei_backup.json
 
 [Service]
 Type=oneshot
-ExecStartPre=/bin/sh -c 'enabled=$(jq -r "(.enabled) | if . == null then \"false\" else tostring end" /etc/qmanager/imei_backup.json 2>/dev/null); [ "$enabled" = "true" ]'
+ExecStartPre=/bin/sh -c 'enabled=$(/usrdata/bin/jq -r "(.enabled) | if . == null then \"false\" else tostring end" /etc/qmanager/imei_backup.json 2>/dev/null); [ "$enabled" = "true" ]'
 ExecStart=/usrdata/bin/qmanager_imei_check
 RemainAfterExit=no
 
@@ -1776,6 +1776,19 @@ WantedBy=multi-user.target
 EOF
 sed -i 's/\r$//' "$SYSTEMD_DIR/qmanager-lighttpd.service"
 info "qmanager-lighttpd.service installed (QManager web UI only)"
+
+# Upstream symlinks /opt/bin/jq into /usr/bin so every systemd service finds
+# jq; Casa's read-only rootfs cannot, and systemd's default PATH has no
+# /usrdata/bin. Give every QManager unit the Casa PATH from /etc/qmanager.env,
+# otherwise jq-driven daemons (sms-forward, tower-failover, tower schedules,
+# imei-check) silently read their config as disabled/empty.
+for f in "$SYSTEMD_DIR"/qmanager*.service "$SYSTEMD_DIR"/qmanager_*.service; do
+    [ -f "$f" ] || continue
+    grep -q '^EnvironmentFile=-*/etc/qmanager.env' "$f" && continue
+    grep -q '^\[Service\]' "$f" || continue
+    sed -i '/^\[Service\]/a EnvironmentFile=-/etc/qmanager.env' "$f"
+done
+info "QManager units load /etc/qmanager.env (Casa PATH for jq/qcmd)"
 
 # Enable services
 for svc in qmanager-lighttpd qmanager-firewall qmanager-setup qmanager-ping \
