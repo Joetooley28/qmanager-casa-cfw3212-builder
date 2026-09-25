@@ -37,6 +37,7 @@
 - New upstream helper scripts are pointed at Casa's `/usrdata` locations, including the Entware tools they need.
 - **Install msmtp** on the Alerts page (Email channel) works on Casa again. It downloads msmtp from Entware without `opkg`, which CFW-3212 does not have, keeps the router's own system libraries in place, and sets up msmtp so email alerts can actually send. The health check reports the msmtp version correctly.
 - The **Time zone** setting in System Settings now actually changes the router clock. CFW-3212 only has its own short list of zones, so QManager picks the matching one (for example America/New_York uses US/Eastern) and applies it through the router's own time zone setting, which survives reboots. Scheduled Reboot, logs and alert times then use local time instead of UTC.
+- Updating QManager now keeps **Scheduled Reboot** and the Tower Lock schedule armed. They are re-created from your saved settings on every install, including schedules saved on older builds, which showed as Armed but never ran after the upgrade.
 
 ## v0.1.12-cfw3212.22
 

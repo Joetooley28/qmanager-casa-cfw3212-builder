@@ -1670,6 +1670,38 @@ systemctl daemon-reload 2>/dev/null || true
 systemctl start qmanager-dns-reconcile.timer 2>/dev/null || true
 info "Casa LAN DNS reconciler timer installed (30s)"
 
+# --- Scheduled Reboot / Tower Lock schedule timers (config-driven re-arm) -----
+# Upstream v0.1.14+ generates these .timer units at save time and its installer
+# re-arms them from saved config on every install, so an upgrade keeps them.
+# Mirror that here: settings saved under older Casa builds (BusyBox crond era)
+# otherwise show "Armed" in the UI with no timer behind them.
+if command -v qm_config_get >/dev/null 2>&1 && [ -x "$BIN_DIR/qmanager_scheduled_reboot_arm" ]; then
+    _sched_enabled=$(qm_config_get settings sched_reboot_enabled 0 2>/dev/null) || _sched_enabled=0
+    if [ "$_sched_enabled" = "1" ]; then
+        _sched_time=$(qm_config_get settings sched_reboot_time "04:00" 2>/dev/null) || _sched_time="04:00"
+        _sched_days=$(qm_config_get settings sched_reboot_days "0,1,2,3,4,5,6" 2>/dev/null) || _sched_days="0,1,2,3,4,5,6"
+        "$BIN_DIR/qmanager_scheduled_reboot_arm" install "$_sched_time" "$_sched_days" >/dev/null 2>&1 \
+            && info "Scheduled reboot timer re-armed (${_sched_time}, days=${_sched_days})" \
+            || warn "Scheduled reboot timer re-arm failed (non-fatal)"
+    else
+        "$BIN_DIR/qmanager_scheduled_reboot_arm" teardown >/dev/null 2>&1 || true
+    fi
+fi
+
+if [ -x "$BIN_DIR/qmanager_tower_schedule_arm" ] && [ -f "$CONF_DIR/tower_lock.json" ]; then
+    _tower_enabled=$(jq -r '.schedule.enabled // false' "$CONF_DIR/tower_lock.json" 2>/dev/null) || _tower_enabled=false
+    if [ "$_tower_enabled" = "true" ]; then
+        _tower_start=$(jq -r '.schedule.start_time // "08:00"' "$CONF_DIR/tower_lock.json" 2>/dev/null) || _tower_start="08:00"
+        _tower_end=$(jq -r '.schedule.end_time // "22:00"' "$CONF_DIR/tower_lock.json" 2>/dev/null) || _tower_end="22:00"
+        _tower_days=$(jq -r '.schedule.days // [1,2,3,4,5] | join(",")' "$CONF_DIR/tower_lock.json" 2>/dev/null) || _tower_days="1,2,3,4,5"
+        "$BIN_DIR/qmanager_tower_schedule_arm" install "$_tower_start" "$_tower_end" "$_tower_days" >/dev/null 2>&1 \
+            && info "Tower lock schedule timers re-armed (apply ${_tower_start}, clear ${_tower_end}, days=${_tower_days})" \
+            || warn "Tower lock schedule timer re-arm failed (non-fatal)"
+    else
+        "$BIN_DIR/qmanager_tower_schedule_arm" teardown >/dev/null 2>&1 || true
+    fi
+fi
+
 # Casa CFW-3212 note: keep the poller independent from qmanager-ping. The
 # installer starts both explicitly, and this prevents a future ping regression
 # from being pulled back in just because the poller restarts.
