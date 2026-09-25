@@ -5720,6 +5720,63 @@ patch_radio_info_row_wrap_cfw3212() {
     fi
 }
 
+patch_casa_managed_reboot_cfw3212() {
+    # Every QManager reboot on Casa should go through Casa's RDB managed reset
+    # (records a reason, same path as the stock UI) rather than /sbin/reboot.
+    # run_reboot() is the funnel for cgi_reboot_response (IMEI and MBN changes)
+    # and the fallbacks in reboot.sh/update.sh/watchcat/scheduled reboot;
+    # qmanager_imei_check calls a bare `reboot` after restoring a backup IMEI.
+    local platform="$TARGET/scripts/usr/lib/qmanager/platform.sh"
+    local imei_check="$TARGET/scripts/usr/bin/qmanager_imei_check"
+    [ -f "$platform" ] || fail "Target missing platform.sh"
+    python3 - "$platform" "$imei_check" <<'PY'
+from pathlib import Path
+import sys
+
+platform, imei_check = Path(sys.argv[1]), Path(sys.argv[2])
+rdb_reset = """if command -v rdb_set >/dev/null 2>&1 && command -v rdb_get >/dev/null 2>&1 && rdb_get service.system.reset >/dev/null 2>&1; then
+        rdb_set service.system.reset_reason "{reason}"
+        rdb_set service.system.reset.delay 5
+        rdb_set service.system.reset 1
+"""
+
+text = platform.read_text()
+if "Casa CFW-3212: managed reset" not in text:
+    old = "run_reboot() {\n    $_SUDO /sbin/reboot \"$@\"\n}\n"
+    if text.count(old) != 1:
+        raise SystemExit("platform.sh run_reboot() not found")
+    new = ("run_reboot() {\n"
+           "    # Casa CFW-3212: managed reset through RDB, /sbin/reboot only as fallback.\n"
+           "    " + rdb_reset.format(reason="${QM_REBOOT_REASON:-QManager reboot}") +
+           "        return 0\n"
+           "    fi\n"
+           "    $_SUDO /sbin/reboot \"$@\"\n"
+           "}\n")
+    platform.write_text(text.replace(old, new, 1))
+
+if imei_check.exists():
+    text = imei_check.read_text()
+    if "QManager backup IMEI restore" not in text:
+        old = "    qlog_info \"Backup IMEI written — rebooting device\"\n    sleep 1\n    reboot\n"
+        if text.count(old) != 1:
+            raise SystemExit("qmanager_imei_check reboot block not found")
+        new = ("    qlog_info \"Backup IMEI written — rebooting device\"\n"
+               "    sleep 1\n"
+               "    # Casa CFW-3212: managed reset through RDB, bare reboot only as fallback.\n"
+               "    " + rdb_reset.format(reason="QManager backup IMEI restore") +
+               "    else\n"
+               "        reboot\n"
+               "    fi\n")
+        imei_check.write_text(text.replace(old, new, 1))
+PY
+    grep -q 'Casa CFW-3212: managed reset' "$platform" \
+        || fail "Could not route run_reboot through Casa RDB managed reset"
+    if [ -f "$imei_check" ]; then
+        grep -q 'QManager backup IMEI restore' "$imei_check" \
+            || fail "Could not route qmanager_imei_check reboot through Casa RDB managed reset"
+    fi
+}
+
 patch_casa_cgcontrdp_dualstack_cfw3212() {
     # Casa CFW-3212 (RG520N-NA) answers AT+CGCONTRDP for a dual-stack context
     # on ONE line, not the 3GPP layout upstream parses:
@@ -8079,6 +8136,7 @@ apply_casa_overlays() {
     patch_casa_custom_dns_cfw3212
     patch_casa_cgcontrdp_dualstack_cfw3212
     patch_casa_single_sim_slot_cfw3212
+    patch_casa_managed_reboot_cfw3212
     patch_radio_info_row_wrap_cfw3212
     patch_casa_dns_status_merge_cfw3212
     patch_casa_dns_badges_cfw3212
