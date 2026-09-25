@@ -6223,7 +6223,8 @@ write_msmtp_wrapper() {
     mkdir -p /usrdata/bin
     cat > "$MSMTP_WRAPPER" <<'EOF'
 #!/bin/sh
-# Entware ELFs name /opt/lib/ld-linux.so.3 as interpreter; Casa has no /opt.
+# Entware ELFs hardcode the Entware-prefix loader as interpreter and Casa has
+# no /opt, so run msmtp through the bundled loader explicitly.
 exec /usrdata/opt/lib/ld-linux.so.3 --library-path /usrdata/opt/lib /usrdata/opt/bin/msmtp "$@"
 EOF
     chmod 755 "$MSMTP_WRAPPER"
