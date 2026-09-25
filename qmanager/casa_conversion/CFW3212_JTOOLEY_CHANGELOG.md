@@ -35,6 +35,7 @@
 - Software Update now lists only the three newest Casa versions, and the release notes on the router show just the notes for that release.
 - LAN DNS fallback is steadier: the router only switches LAN DNS to public DNS when carrier DNS keeps failing (two checks in a row) while public DNS still answers, which is the case the fallback exists for. During an outage, reboot or reconnect it no longer switches back and forth (each switch restarted dnsmasq), and it returns to carrier DNS as soon as that answers again. QManager no longer saves a `dnsmasq.conf` copy on every automatic DNS switch, and installing this update removes the copies older builds left behind (some routers had hundreds, eating into the small config storage). Saving Custom DNS now applies the right fallback immediately.
 - New upstream helper scripts are pointed at Casa's `/usrdata` locations, including the Entware tools they need.
+- **Install msmtp** on the Alerts page (Email channel) works on Casa again. It downloads msmtp from Entware without `opkg`, which CFW-3212 does not have, keeps the router's own system libraries in place, and sets up msmtp so email alerts can actually send. The health check reports the msmtp version correctly.
 
 ## v0.1.12-cfw3212.22
 
