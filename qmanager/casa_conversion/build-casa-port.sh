@@ -5640,6 +5640,78 @@ PY
         || fail "Could not apply Tiny Tailscale install button label"
 }
 
+patch_casa_single_sim_slot_cfw3212() {
+    # Casa CFW-3212 has one SIM slot. Cellular Settings' SIM Slot control would
+    # switch the modem to an empty slot 2 (AT+QUIMSLOT) and drop the data
+    # connection. The CGI ignores slot changes, and the v0.1.14+ settings card
+    # no longer offers the control.
+    local cgi="$TARGET/scripts/www/cgi-bin/quecmanager/cellular/settings.sh"
+    local card="$TARGET/components/cellular/settings/cellular-settings-card.tsx"
+    [ -f "$cgi" ] || fail "Target missing cellular/settings.sh"
+    python3 - "$cgi" "$card" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+cgi, card = Path(sys.argv[1]), Path(sys.argv[2])
+
+text = cgi.read_text()
+marker = "Casa CFW-3212: single SIM slot; never switch slots"
+if marker not in text:
+    anchor = """    SIM_SLOT=$(printf '%s' "$POST_DATA" | jq -r 'if has("sim_slot") then (.sim_slot | tostring) else "unset" end')\n"""
+    if text.count(anchor) != 1:
+        raise SystemExit("settings.sh SIM_SLOT extraction anchor not found")
+    text = text.replace(anchor, anchor + f"""    # {marker}.
+    if [ "$SIM_SLOT" != "unset" ]; then
+        qlog_info "Casa: ignoring sim_slot=$SIM_SLOT (single-SIM hardware)"
+        SIM_SLOT="unset"
+    fi
+""", 1)
+    cgi.write_text(text)
+
+# v0.1.14+ card only (declarative simRows); older layouts rely on the CGI guard.
+if card.exists() and "const simRows: RowDef[] = [" in card.read_text():
+    text = card.read_text()
+    if "Casa CFW-3212: no SIM Slot row" not in text:
+        text, n = re.subn(
+            r'(  const simRows: RowDef\[\] = \[\n)    \{\n      key: "sim_slot",\n.*?\n    \},\n',
+            r'\1    // Casa CFW-3212: no SIM Slot row (single-SIM hardware).\n',
+            text,
+            count=1,
+            flags=re.S,
+        )
+        if n != 1:
+            raise SystemExit("cellular-settings-card.tsx sim_slot row not found")
+        card.write_text(text)
+PY
+    grep -q 'Casa CFW-3212: single SIM slot; never switch slots' "$cgi" \
+        || fail "Could not apply Casa single-SIM slot guard to settings.sh"
+    if [ -f "$card" ] && grep -q 'const simRows: RowDef\[\] = \[' "$card"; then
+        grep -q 'Casa CFW-3212: no SIM Slot row' "$card" \
+            || fail "Could not remove SIM Slot row from cellular settings card"
+    fi
+}
+
+patch_radio_info_row_wrap_cfw3212() {
+    # Cosmetic, upstream v0.1.14+ layout bug: Cellular Information rows keep the
+    # label unshrinkable and the value group unwrappable, so a wide value (a
+    # 24-bit 5G TAC plus its hex pill) spills left over the label. Let the value
+    # group wrap instead. Warn-only if upstream changes the markup.
+    local card="$TARGET/components/cellular/radio/cellular-information-card.tsx"
+    [ -f "$card" ] || return 0
+    local old='<div className="flex min-w-0 items-center justify-end gap-2">'
+    local new='<div className="flex min-w-0 flex-wrap items-center justify-end gap-x-2 gap-y-1">'
+    if grep -qF "$new" "$card"; then
+        return 0
+    fi
+    if grep -qF "$old" "$card"; then
+        sed -i "s|$old|$new|" "$card"
+        log "Cellular Information rows: value group may wrap (TAC overlap fix)"
+    else
+        warn "Cellular Information Row markup changed upstream; TAC overlap fix not applied"
+    fi
+}
+
 patch_casa_cgcontrdp_dualstack_cfw3212() {
     # Casa CFW-3212 (RG520N-NA) answers AT+CGCONTRDP for a dual-stack context
     # on ONE line, not the 3GPP layout upstream parses:
@@ -7946,6 +8018,8 @@ apply_casa_overlays() {
     patch_ai62_cookie_cors_config_hardening_cfw3212
     patch_casa_custom_dns_cfw3212
     patch_casa_cgcontrdp_dualstack_cfw3212
+    patch_casa_single_sim_slot_cfw3212
+    patch_radio_info_row_wrap_cfw3212
     patch_casa_dns_status_merge_cfw3212
     patch_casa_dns_badges_cfw3212
     patch_active_bands_multi_expand_cfw3212

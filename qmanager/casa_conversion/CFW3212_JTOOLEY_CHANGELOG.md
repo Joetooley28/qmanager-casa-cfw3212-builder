@@ -25,6 +25,8 @@
 - **Scheduled Reboot** now uses upstream's systemd timers instead of BusyBox `crond`, and still reboots through the Casa managed reboot path so the reason is recorded.
 - The Watchdog's SIM failover tier stays disabled on the new Watchdog page because CFW-3212 has one SIM slot.
 - The **Video Optimizer** traffic mode is hidden on Casa for now while it is checked on this hardware.
+- Cellular Settings no longer offers a SIM Slot switch, since CFW-3212 has one SIM slot (switching to the empty slot would drop the connection).
+- Connection details now show the correct carrier DNS servers. The CFW-3212 modem reports IPv4 and IPv6 details in a different layout, which made the page show the gateway as Primary DNS and a run-together string as Secondary DNS.
 - Language packs download from the upstream QManager releases.
 - Software Update now lists only the three newest Casa versions, and the release notes on the router show just the notes for that release.
 - LAN DNS fallback is steadier: the router only switches LAN DNS to public DNS when carrier DNS keeps failing (two checks in a row) while public DNS still answers, which is the case the fallback exists for. During an outage, reboot or reconnect it no longer switches back and forth (each switch restarted dnsmasq), and it returns to carrier DNS as soon as that answers again. QManager no longer saves a `dnsmasq.conf` copy on every automatic DNS switch, and installing this update removes the copies older builds left behind (some routers had hundreds, eating into the small config storage). Saving Custom DNS now applies the right fallback immediately.
