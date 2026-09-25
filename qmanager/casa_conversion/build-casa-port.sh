@@ -5699,6 +5699,24 @@ text = text.replace(
     "jq -r '.enabled // empty'",
     "jq -r '.enabled | if . == null then \"\" else tostring end'",
 )
+# The Casa LAN DNS reconciler owns the public-fallback block in the same
+# dnsmasq.conf. Re-run it right after a Custom DNS save so turning Custom DNS
+# off while carrier DNS is down restores the fallback immediately (and turning
+# it on drops the fallback servers) instead of waiting for the 30s timer.
+reconcile_marker = "Casa: re-run LAN DNS reconciler after Custom DNS change"
+if reconcile_marker not in text:
+    anchor = '        qlog_info "custom DNS applied successfully"\n'
+    if anchor not in text:
+        raise SystemExit("custom DNS applied-successfully anchor not found in custom_dns.sh")
+    text = text.replace(
+        anchor,
+        f"        # {reconcile_marker}\n"
+        "        if [ -x /usrdata/bin/qmanager_dns_reconcile ]; then\n"
+        "            /usrdata/bin/qmanager_dns_reconcile --once >/dev/null 2>&1 || true\n"
+        "        fi\n"
+        + anchor,
+        1,
+    )
 path.write_text(text)
 PY
 
@@ -5712,6 +5730,8 @@ PY
         || fail "Could not apply Casa Custom DNS enabled boolean fix"
     grep -q 'systemctl restart dnsmasq_service@0.service' "$dns_cgi" \
         || fail "Could not apply Casa Custom DNS reload-fix patch"
+    grep -q 'Casa: re-run LAN DNS reconciler after Custom DNS change' "$dns_cgi" \
+        || fail "Could not add LAN DNS reconcile after Custom DNS save"
 }
 
 patch_email_alerts_casa_msmtp() {

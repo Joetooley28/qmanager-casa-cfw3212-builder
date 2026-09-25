@@ -672,11 +672,18 @@ set -u
 DNSMASQ_CONF="/etc/data/dnsmasq.conf"
 STATE_FILE="/tmp/qmanager_dns_state.json"
 TMP_CONF="/tmp/qmanager-dns-reconcile.$$"
+SNAPSHOT_CONF="/tmp/qmanager-dns-reconcile.$$.orig"
 BEGIN="# QMANAGER-DNS-RECOVERY-BEGIN"
 END="# QMANAGER-DNS-RECOVERY-END"
 CUSTOM_BEGIN="# QMANAGER-CUSTOM-DNS-BEGIN v1"
 PROBE_NAME="cp.cloudflare.com"
 PROBE_TIMEOUT=3
+FAIL_COUNT_FILE="/tmp/qmanager_dns_carrier_fails"
+# Consecutive failed carrier probes (one per ~30s timer tick) before switching
+# LAN DNS to the public fallback. One slow probe must not cost a flash write and
+# a dnsmasq restart (which also blips DHCP); a carrier answer switches back at once.
+FALLBACK_AFTER_FAILS=2
+BACKUP_KEEP=3
 
 log() { logger -t qmanager-dns-reconcile "$*" 2>/dev/null || true; }
 rdb_read() { rdb get "$1" 2>/dev/null || true; }
@@ -700,10 +707,15 @@ carrier_nameservers() {
     {
         rdb_read link.policy.1.dns1
         rdb_read link.policy.1.dns2
+        rdb_read link.policy.1.ipv6_dns1
+        rdb_read link.policy.1.ipv6_dns2
+        # Stock Casa stores this as a comma-separated list (user DNS 1/2, then
+        # dns1/dns2/ipv6_dns1/ipv6_dns2 for policies 1-6).
         rdb_read service.dns.prev_server
         sed -n 's/^nameserver[[:space:]][[:space:]]*//p' /run/resolv.conf 2>/dev/null
         sed -n 's/^nameserver[[:space:]][[:space:]]*//p' /etc/resolv.conf 2>/dev/null
-    } | tr ' ' '\n' | grep -vE '^$|^192\.0\.0\.[12]$' | sort -u
+    } | tr ' ,' '\n\n' \
+      | grep -vE '^$|^0\.0\.0\.0$|^::$|^192\.0\.0\.[12]$|^127\.|^::1$' | sort -u
 }
 
 # True if at least one carrier nameserver actually answers a real query.
@@ -741,7 +753,16 @@ commit_conf() {
             rm -f "$TMP_CONF"; return 1
         }
     fi
+    # Custom DNS (CGI) writes the same file; if it changed since we read it,
+    # skip this round rather than overwrite it. The next tick recomputes.
+    if ! cmp -s "$DNSMASQ_CONF" "$SNAPSHOT_CONF"; then
+        log "dnsmasq.conf changed during reconcile; retrying next tick"
+        rm -f "$TMP_CONF"; return 1
+    fi
     cp "$DNSMASQ_CONF" "$DNSMASQ_CONF.bak-qmanager-dns-$(date +%Y%m%d%H%M%S)" 2>/dev/null || true
+    # Keep only the newest backups; older builds never pruned these.
+    ls -1t "$DNSMASQ_CONF".bak-qmanager-dns-* 2>/dev/null \
+        | tail -n +$((BACKUP_KEEP + 1)) | while read -r old; do rm -f "$old"; done
     cat "$TMP_CONF" > "$DNSMASQ_CONF" || { rm -f "$TMP_CONF"; return 1; }
     rm -f "$TMP_CONF"
     chown radio:radio "$DNSMASQ_CONF" 2>/dev/null || true
@@ -753,7 +774,8 @@ commit_conf() {
 ensure_no_recovery_block() {
     recovery_block_present || return 0
     [ -f "$DNSMASQ_CONF" ] || return 0
-    strip_recovery_block "$DNSMASQ_CONF" "$TMP_CONF" || return 1
+    cp "$DNSMASQ_CONF" "$SNAPSHOT_CONF" 2>/dev/null || return 1
+    strip_recovery_block "$SNAPSHOT_CONF" "$TMP_CONF" || return 1
     commit_conf || return 1
     log "removed DNS recovery block (carrier/custom authoritative)"
 }
@@ -762,7 +784,8 @@ ensure_no_recovery_block() {
 ensure_recovery_block() {
     [ -f "$DNSMASQ_CONF" ] || { log "missing $DNSMASQ_CONF"; return 1; }
     recovery_block_present && return 0
-    strip_recovery_block "$DNSMASQ_CONF" "$TMP_CONF" || return 1
+    cp "$DNSMASQ_CONF" "$SNAPSHOT_CONF" 2>/dev/null || return 1
+    strip_recovery_block "$SNAPSHOT_CONF" "$TMP_CONF" || return 1
     {
         printf '%s\n' "$BEGIN"
         printf '%s\n' "no-resolv"
@@ -788,19 +811,33 @@ main() {
     ippt=false; ippt_enabled && ippt=true
     reach=false; carrier_reachable && reach=true
 
+    fails=0
+    if [ "$reach" = "true" ]; then
+        rm -f "$FAIL_COUNT_FILE" 2>/dev/null || true
+    else
+        fails="$(cat "$FAIL_COUNT_FILE" 2>/dev/null || echo 0)"
+        case "$fails" in ''|*[!0-9]*) fails=0 ;; esac
+        fails=$((fails + 1))
+        echo "$fails" > "$FAIL_COUNT_FILE" 2>/dev/null || true
+    fi
+
     if custom_dns_active; then
         source="custom"
         ensure_no_recovery_block || true
     elif [ "$reach" = "true" ]; then
         source="carrier"
         ensure_no_recovery_block || true
-    else
+    elif [ "$fails" -ge "$FALLBACK_AFTER_FAILS" ] || recovery_block_present; then
         source="public_fallback"
         ensure_recovery_block || true
+    else
+        # First failed probe: leave dnsmasq alone and confirm on the next tick.
+        source="carrier"
+        log "carrier DNS probe failed ($fails/$FALLBACK_AFTER_FAILS); waiting before fallback"
     fi
 
     write_state "$source" "$reach" "$ippt"
-    rm -f "$TMP_CONF" 2>/dev/null || true
+    rm -f "$TMP_CONF" "$SNAPSHOT_CONF" 2>/dev/null || true
 }
 
 # --once is the normal mode. --if-poisoned is accepted for backward-compat with
