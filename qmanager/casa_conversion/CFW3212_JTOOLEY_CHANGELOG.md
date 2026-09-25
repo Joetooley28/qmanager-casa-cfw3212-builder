@@ -24,6 +24,7 @@
 - Software Update on the redesigned page keeps the Casa flow: installing restarts QManager services and then shows a **Reboot required** banner with a **Reboot now** button, and release notes still switch between Joetooley and upstream notes. Updates still come only from the Casa package repo.
 - **Scheduled Reboot** now uses upstream's systemd timers instead of BusyBox `crond`, and still reboots through the Casa managed reboot path so the reason is recorded.
 - The Watchdog's SIM failover tier stays disabled on the new Watchdog page because CFW-3212 has one SIM slot.
+- The Watchdog's **Restart the radio** step is disabled on CFW-3212. The router's own connection manager controls the radio, so recovery goes from a reconnect through that manager straight to a managed reboot. The **Re-register** step is now labelled for what it does on this router: a reconnect through the connection manager.
 - The **Video Optimizer** traffic mode is hidden on Casa for now while it is checked on this hardware.
 - Uses upstream's new connectivity monitor (ping daemon) instead of the older Casa build, so Cellular Information can show whether traffic is flowing over IPv4 or IPv6. Existing ping settings are migrated to the new four-target format automatically.
 - The IP Passthrough status now shows real values on Casa: the device passthrough is locked to, whether it sits behind an extra NAT (placeholder mode) or holds the carrier IP directly, and that the router answers its DNS.

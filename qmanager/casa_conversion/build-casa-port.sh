@@ -5039,6 +5039,138 @@ PY
         || fail "Could not update ICCID auto-apply UI copy"
 }
 
+patch_casa_watchcat_tier2_off_cfw3212() {
+    # Casa's connection manager (wmmd) owns the radio and the data session.
+    # Watchdog Tier 2 toggles the radio behind it (AT+CFUN=0 then =1): the
+    # manager sees the modem drop and may run its own recovery at the same
+    # time, and a failed CFUN=1 leaves the radio off until Tier 4. Tier 1
+    # already reconnects through Casa RDB and Tier 4 is the managed reset, so
+    # Tier 2 is forced off on Casa (same pattern as the single-SIM Tier 3).
+    # Also relabel Tier 1 to what it actually runs on Casa.
+    local watchcat="$TARGET/scripts/usr/bin/qmanager_watchcat"
+    local watchdog_cgi="$TARGET/scripts/www/cgi-bin/quecmanager/monitoring/watchdog.sh"
+    local ladder_card="$TARGET/components/monitoring/watchdog/ladder-card.tsx"
+    local derive="$TARGET/components/monitoring/watchdog/derive.ts"
+
+    # v0.1.14+ only (watchdog ladder UI). Released v0.1.12 builds keep Tier 2.
+    if ! upstream_has_v14_software_update; then
+        log "Watchdog Tier 2 Casa patch skipped (pre-v0.1.14 upstream)"
+        return 0
+    fi
+    [ -f "$watchcat" ] || fail "Target missing qmanager_watchcat (Tier 2 Casa patch)"
+    [ -f "$watchdog_cgi" ] || fail "Target missing monitoring/watchdog.sh (Tier 2 Casa patch)"
+    [ -f "$ladder_card" ] || fail "Target missing watchdog ladder-card.tsx (Tier 2 Casa patch)"
+    [ -f "$derive" ] || fail "Target missing watchdog derive.ts (Tier 2 Casa patch)"
+
+    python3 - "$watchcat" "$watchdog_cgi" "$ladder_card" "$derive" <<'PY'
+from pathlib import Path
+import sys
+
+watchcat, cgi = Path(sys.argv[1]), Path(sys.argv[2])
+ladder = Path(sys.argv[3]) if sys.argv[3] else None
+derive = Path(sys.argv[4]) if sys.argv[4] else None
+
+def swap(text, old, new, marker, what):
+    if marker in text:
+        return text
+    if old not in text:
+        raise SystemExit(f"{what} not found")
+    return text.replace(old, new, 1)
+
+text = watchcat.read_text()
+text = swap(text,
+    '''    val=$(qm_config_get watchcat tier2_enabled "")
+    [ -n "$val" ] && CFG_TIER2_ENABLED="$val"
+''',
+    '''    val=$(qm_config_get watchcat tier2_enabled "")
+    [ -n "$val" ] && CFG_TIER2_ENABLED="$val"
+    # Casa CFW-3212: the radio belongs to Casa's connection manager; never
+    # toggle it behind it (Tier 1 Casa reconnect, then Tier 4 managed reset).
+    CFG_TIER2_ENABLED=0
+''',
+    "never\n    # toggle it behind it", "watchcat tier2 config block")
+text = text.replace(
+    "#   Tier 1: Network deregister/reregister (AT+COPS=2/0)\n",
+    "#   Tier 1: Casa RDB reconnect (AT+COPS=2/0 fallback)\n", 1)
+text = text.replace(
+    "#   Tier 2: Radio toggle (AT+CFUN=0/1) — skipped if tower lock active\n",
+    "#   Tier 2: Radio toggle — disabled on Casa CFW-3212 (radio owned by Casa connection manager)\n", 1)
+text = text.replace(
+    'qlog_info "TIER 1: Re-register to network (AT+COPS)"',
+    'qlog_info "TIER 1: Reconnect via Casa connection manager (AT+COPS fallback)"', 1)
+watchcat.write_text(text)
+
+text = cgi.read_text()
+text = swap(text,
+    "    tier2=$(qm_config_get watchcat tier2_enabled 1)\n",
+    "    tier2=0  # Casa CFW-3212: radio owned by Casa connection manager; Tier 2 unavailable.\n",
+    "tier2=0  # Casa CFW-3212", "watchdog CGI tier2 read")
+text = swap(text,
+    '''        if [ -n "$f_tier2" ]; then
+            case "$f_tier2" in true) qm_config_set watchcat tier2_enabled 1 ;; false) qm_config_set watchcat tier2_enabled 0 ;; esac
+        fi
+''',
+    '''        # Casa CFW-3212: never persist Watchdog Tier 2 (radio toggle) enabled.
+        qm_config_set watchcat tier2_enabled 0
+''',
+    "never persist Watchdog Tier 2", "watchdog CGI tier2 save")
+cgi.write_text(text)
+
+if ladder is not None:
+    text = ladder.read_text()
+    text = swap(text,
+        '''          checked={rung.tier === 3 ? false : rung.enabled}
+''',
+        '''          checked={rung.tier === 2 || rung.tier === 3 ? false : rung.enabled}
+''',
+        "rung.tier === 2 || rung.tier === 3 ? false", "ladder tier switch checked (run after single-SIM patch)")
+    text = swap(text,
+        '''          disabled={masterOff || rung.tier === 3}
+''',
+        '''          disabled={masterOff || rung.tier === 2 || rung.tier === 3}
+''',
+        "masterOff || rung.tier === 2", "ladder tier switch disabled")
+    text = swap(text,
+        '''        {rung.tier === 3 ? (
+          <div className={cn(RUNG.FIELD_SLOT, FIELD.ROW)}>
+''',
+        '''        {rung.tier === 2 ? (
+          <div className={cn(RUNG.FIELD_SLOT, FIELD.ROW)}>
+            <p className={RUNG.FIELD_HINT}>
+              Disabled on Casa CFW-3212: the router&apos;s connection manager
+              owns the radio. Recovery goes from the Casa reconnect straight
+              to the managed reboot.
+            </p>
+          </div>
+        ) : null}
+
+        {rung.tier === 3 ? (
+          <div className={cn(RUNG.FIELD_SLOT, FIELD.ROW)}>
+''',
+        "the router&apos;s connection manager", "ladder tier3 notice anchor")
+    ladder.write_text(text)
+
+if derive is not None:
+    text = derive.read_text()
+    text = swap(text,
+        '''  1: "AT+COPS=2 → AT+COPS=0",
+''',
+        '''  1: "Casa reconnect (RDB link.profile.1)",
+''',
+        "Casa reconnect (RDB", "watchdog TIER_COMMAND tier 1")
+    derive.write_text(text)
+PY
+
+    grep -q 'CFG_TIER2_ENABLED=0' "$watchcat" \
+        || fail "Could not force Watchdog Tier 2 off in qmanager_watchcat"
+    grep -q 'never persist Watchdog Tier 2' "$watchdog_cgi" \
+        || fail "Could not force Watchdog CGI Tier 2 saves off"
+    if [ -n "$ladder_card" ]; then
+        grep -q 'masterOff || rung.tier === 2' "$ladder_card" \
+            || fail "Could not disable Watchdog Tier 2 switch in ladder card"
+    fi
+}
+
 patch_casa_watchcat_ping_health_cfw3212() {
     # Keep the watchdog honest when the ping daemon is missing/stale. Recovery
     # tiers act on modem connectivity, so a dead ping daemon should not trigger
@@ -6755,9 +6887,16 @@ patch_ping_profile_service_toggle_cfw3212() {
     local cgi="$TARGET/scripts/www/cgi-bin/quecmanager/settings/ping_profile.sh"
     local hook="$TARGET/hooks/use-ping-profile.ts"
     local card="$TARGET/components/system-settings/connection-quality/connectivity-sensitivity-card.tsx"
-    [ -f "$cgi" ] || return 0
-    [ -f "$hook" ] || return 0
-    [ -f "$card" ] || return 0
+    # Retired on v0.1.14+ (user decision 2026-09-25): this switch belonged to
+    # the Rust-ping era; upstream now ships the shell ping daemon and replaced
+    # the sensitivity card with the Connection Quality page. Skip on purpose.
+    if [ ! -f "$card" ] && [ -f "$TARGET/components/system-settings/connection-quality/connection-quality.tsx" ]; then
+        log "Casa ping-service switch retired on v0.1.14+ (upstream Connection Quality page)"
+        return 0
+    fi
+    [ -f "$cgi" ] || fail "Target missing settings/ping_profile.sh (ping-service switch)"
+    [ -f "$hook" ] || fail "Target missing hooks/use-ping-profile.ts (ping-service switch)"
+    [ -f "$card" ] || fail "Target missing connectivity-sensitivity-card.tsx (ping-service switch)"
 
     python3 - "$cgi" "$hook" "$card" <<'PY'
 from pathlib import Path
@@ -8411,6 +8550,7 @@ apply_casa_overlays() {
     patch_casa_watchcat_tiers
     patch_casa_watchcat_single_sim_cfw3212
     patch_casa_watchdog_ui_single_sim_cfw3212
+    patch_casa_watchcat_tier2_off_cfw3212
     patch_casa_watchcat_ping_health_cfw3212
     merge_template_cfw3212 "components/nav-user.tsx"
     merge_template_cfw3212 "components/reboot/reboot-countdown.tsx"
