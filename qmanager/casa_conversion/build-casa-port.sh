@@ -5640,6 +5640,60 @@ PY
         || fail "Could not apply Tiny Tailscale install button label"
 }
 
+patch_casa_cgcontrdp_dualstack_cfw3212() {
+    # Casa CFW-3212 (RG520N-NA) answers AT+CGCONTRDP for a dual-stack context
+    # on ONE line, not the 3GPP layout upstream parses:
+    #   1,0,"apn","<v4>","<v6>","<gw fe80::>","<dns1 v4>" "<dns1 v6>","<dns2 v4>" "<dns2 v6>"
+    # Upstream reads fixed comma positions (addr+mask, gw, dns1, dns2), so it
+    # showed the IPv6 gateway as Primary DNS and a glued v4+v6 pair as
+    # Secondary DNS. Detect this layout and take the IPv4 token of each pair.
+    local lib="$TARGET/scripts/usr/lib/qmanager/cgi_at.sh"
+    [ -f "$lib" ] || fail "Target missing cgi_at.sh"
+    if ! grep -q '^parse_cgcontrdp()' "$lib"; then
+        log "parse_cgcontrdp not in cgi_at.sh (older upstream layout); skipping Casa dual-stack patch"
+        return 0
+    fi
+    python3 - "$lib" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+if "casa_pick_dns" in text:
+    sys.exit(0)
+
+anchor = "            gw = f[5]; d1 = f[6]; d2 = f[7]\n"
+if text.count(anchor) != 1:
+    raise SystemExit("parse_cgcontrdp field-position anchor not found in cgi_at.sh")
+text = text.replace(anchor, anchor + """            # Casa CFW-3212 (RG520N-NA) dual-stack layout: IPv6 address as its
+            # own field after the IPv4 address, then the (IPv6) gateway, then
+            # each DNS field is a space-separated "v4 v6" pair.
+            m = split(f[5], _f5, " ")
+            k = split(_f5[1], _o5, "[.]")
+            if (n >= 8 && f[4] !~ / / && addr !~ /:/ && (k == 16 || _f5[1] ~ /:/) && _f5[1] !~ /^(254[.]128[.]|fe80)/) {
+                if (v6 == "") v6 = _f5[1]
+                gw = f[6]; d1 = f[7]; d2 = f[8]
+                if (split(gw, _g, "[.]") != 4) gw = ""
+            }
+            d1 = casa_pick_dns(d1); d2 = casa_pick_dns(d2)
+""", 1)
+
+end_anchor = """        END { printf "%s\\t%s\\t%s\\t%s\\t%s\\n", v4, v4gw, dns1, dns2, v6 }'"""
+if text.count(end_anchor) != 1:
+    raise SystemExit("parse_cgcontrdp END anchor not found in cgi_at.sh")
+text = text.replace(end_anchor, """        END { printf "%s\\t%s\\t%s\\t%s\\t%s\\n", v4, v4gw, dns1, dns2, v6 }
+        function casa_pick_dns(s,    t, c, j, o) {
+            # Casa "v4 v6" DNS pair: prefer the IPv4 token.
+            c = split(s, t, " ")
+            for (j = 1; j <= c; j++) if (split(t[j], o, "[.]") == 4) return t[j]
+            return t[1]
+        }'""", 1)
+path.write_text(text)
+PY
+    grep -q 'casa_pick_dns' "$lib" \
+        || fail "Could not apply Casa CGCONTRDP dual-stack parser patch"
+}
+
 patch_casa_custom_dns_cfw3212() {
     # Upstream QManager v0.1.11+ Custom DNS feature gates the UI on:
     #   1. get_dns_mode()           — expects <DNSMode> in mobileap_cfg.xml
@@ -7891,6 +7945,7 @@ apply_casa_overlays() {
     patch_ai62_flash_and_cgi_hardening_cfw3212
     patch_ai62_cookie_cors_config_hardening_cfw3212
     patch_casa_custom_dns_cfw3212
+    patch_casa_cgcontrdp_dualstack_cfw3212
     patch_casa_dns_status_merge_cfw3212
     patch_casa_dns_badges_cfw3212
     patch_active_bands_multi_expand_cfw3212
