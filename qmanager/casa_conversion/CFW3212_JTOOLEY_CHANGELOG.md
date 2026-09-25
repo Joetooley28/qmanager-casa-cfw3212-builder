@@ -27,7 +27,7 @@
 - The **Video Optimizer** traffic mode is hidden on Casa for now while it is checked on this hardware.
 - Language packs download from the upstream QManager releases.
 - Software Update now lists only the three newest Casa versions, and the release notes on the router show just the notes for that release.
-- LAN DNS fallback is steadier: a single slow carrier DNS check no longer switches the router to public DNS (and restarts dnsmasq); it now takes two failed checks in a row, and switches back as soon as carrier DNS answers. Old `dnsmasq.conf` backups are now capped at three instead of piling up on flash, and saving Custom DNS applies the right fallback immediately.
+- LAN DNS fallback is steadier: a single slow carrier DNS check no longer switches the router to public DNS (and restarts dnsmasq); it now takes two failed checks in a row, and switches back as soon as carrier DNS answers. QManager no longer saves a `dnsmasq.conf` copy on every automatic DNS switch, and installing this update removes the copies older builds left behind (some routers had hundreds, eating into the small config storage). Saving Custom DNS now applies the right fallback immediately.
 - New upstream helper scripts are pointed at Casa's `/usrdata` locations, including the Entware tools they need.
 
 ## v0.1.12-cfw3212.22

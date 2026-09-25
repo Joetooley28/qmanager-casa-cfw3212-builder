@@ -683,7 +683,6 @@ FAIL_COUNT_FILE="/tmp/qmanager_dns_carrier_fails"
 # LAN DNS to the public fallback. One slow probe must not cost a flash write and
 # a dnsmasq restart (which also blips DHCP); a carrier answer switches back at once.
 FALLBACK_AFTER_FAILS=2
-BACKUP_KEEP=3
 
 log() { logger -t qmanager-dns-reconcile "$*" 2>/dev/null || true; }
 rdb_read() { rdb get "$1" 2>/dev/null || true; }
@@ -759,10 +758,8 @@ commit_conf() {
         log "dnsmasq.conf changed during reconcile; retrying next tick"
         rm -f "$TMP_CONF"; return 1
     fi
-    cp "$DNSMASQ_CONF" "$DNSMASQ_CONF.bak-qmanager-dns-$(date +%Y%m%d%H%M%S)" 2>/dev/null || true
-    # Keep only the newest backups; older builds never pruned these.
-    ls -1t "$DNSMASQ_CONF".bak-qmanager-dns-* 2>/dev/null \
-        | tail -n +$((BACKUP_KEEP + 1)) | while read -r old; do rm -f "$old"; done
+    # No backup copy: this only adds/removes the marked recovery block, which
+    # is fully reconstructible, and uninstall strips blocks by marker.
     cat "$TMP_CONF" > "$DNSMASQ_CONF" || { rm -f "$TMP_CONF"; return 1; }
     rm -f "$TMP_CONF"
     chown radio:radio "$DNSMASQ_CONF" 2>/dev/null || true
@@ -894,6 +891,15 @@ if [ -d "$SRC_SCRIPTS/usr/bin" ]; then
         copy_if_changed "$f" "$BIN_DIR/$fname" 755 || true
     done
     info "$(ls "$SRC_SCRIPTS/usr/bin" | wc -l) daemons installed to $BIN_DIR"
+fi
+
+# Older builds saved a dnsmasq.conf copy on every automatic DNS fallback switch
+# and never removed them (hundreds of files on some routers, filling the small
+# /etc overlay). Nothing reads them; uninstall already deletes them.
+_dns_bak_count=$(ls -1 /etc/data/dnsmasq.conf.bak-qmanager-dns-* 2>/dev/null | wc -l)
+if [ "$_dns_bak_count" -gt 0 ]; then
+    rm -f /etc/data/dnsmasq.conf.bak-qmanager-dns-* 2>/dev/null || true
+    info "Removed $_dns_bak_count stale dnsmasq.conf backups from older QManager builds"
 fi
 
 if [ -x "$BIN_DIR/qmanager_dns_reconcile" ]; then
