@@ -496,6 +496,32 @@ PY
         || fail "Software Update v14: release notes missing Joetooley source"
 }
 
+patch_package_script_builds_frontend_cfw3212() {
+    # Upstream v0.1.14+ changed `bun run package` from "tests && next build &&
+    # build.sh" to "icons:check && build.sh", so it no longer builds out/. The
+    # Casa workflow and local builds call `bun run package` alone; keep that a
+    # complete build by running next build first when upstream's script lacks it.
+    local pkg="$TARGET/package.json"
+    [ -f "$pkg" ] || fail "Target missing package.json"
+    python3 - "$pkg" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+data = json.loads(path.read_text())
+scripts = data.get("scripts", {})
+package = scripts.get("package", "")
+if not package:
+    raise SystemExit("package.json has no package script")
+if "next build" not in package:
+    scripts["package"] = "bun --bun next build && " + package
+    path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+PY
+    python3 -c 'import json,sys; s=json.load(open(sys.argv[1]))["scripts"]["package"]; sys.exit(0 if "next build" in s else 1)' "$pkg" \
+        || fail "package script does not build the frontend (out/)"
+}
+
 patch_build_script() {
     local build="$TARGET/build.sh"
     [ -f "$build" ] || fail "Target missing build.sh"
@@ -7814,6 +7840,7 @@ apply_casa_overlays() {
     log "Applying Casa CFW-3212 overlays from $REF_DIR"
 
     patch_build_script
+    patch_package_script_builds_frontend_cfw3212
 
     copy_template_or_fallback "install_cfw3212.sh" "$TEMPLATE_DIR/install_cfw3212.sh"
     patch_installer_version_cfw3212
