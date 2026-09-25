@@ -22,6 +22,15 @@ SERVICES="qmanager-lighttpd lighttpd \
     qmanager-tower-failover qmanager-traffic qmanager-console \
     qmanager-discord qmanager-ethernet qmanager-cfun-fix \
     qmanager_tailscale_install"
+# Upstream keeps adding units (v0.1.16: sms-forward, sms-storage, dpi,
+# scenario/tower schedules, scheduled-reboot, auto-update, ...). Stop every
+# installed qmanager unit too, not just the names above, so no daemon keeps
+# running after its unit file is deleted below.
+for f in /etc/systemd/system/qmanager*.service /etc/systemd/system/qmanager_*.service; do
+    [ -f "$f" ] || continue
+    u="$(basename "$f" .service)"
+    case " $SERVICES " in *" $u "*) ;; *) SERVICES="$SERVICES $u" ;; esac
+done
 
 step "Stopping QManager services"
 systemctl stop --no-block $SERVICES 2>/dev/null \
