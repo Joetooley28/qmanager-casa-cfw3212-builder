@@ -1508,6 +1508,18 @@ PATH=/usrdata/bin:/usrdata/opt/bin:/usrdata/opt/sbin:/usr/bin:/bin:/sbin
 EOF
 info "environment written (PATH includes /usrdata/bin and /usrdata/opt/bin)"
 
+# Upstream v0.1.14+ root daemons (poller, ping, watchcat, discord) load
+# EnvironmentFile=-/etc/qmanager.env instead: /etc/qmanager is www-data-owned,
+# so a root daemon's environment must not live there. Without it they run with
+# the bare systemd PATH and cannot find qcmd/jq in /usrdata/bin.
+cat > /etc/qmanager.env << EOF
+QLOG_LEVEL=INFO
+PATH=/usrdata/bin:/usrdata/opt/bin:/usrdata/opt/sbin:/usr/bin:/bin:/sbin
+EOF
+chown root:root /etc/qmanager.env 2>/dev/null || true
+chmod 644 /etc/qmanager.env
+info "/etc/qmanager.env written (root-owned PATH for QManager root daemons)"
+
 # Sudoers
 for sudoers_path in /usrdata/opt/etc/sudoers /etc/sudoers; do
     [ -f "$sudoers_path" ] || continue

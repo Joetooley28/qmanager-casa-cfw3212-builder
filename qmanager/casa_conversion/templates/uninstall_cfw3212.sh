@@ -62,6 +62,11 @@ step "Removing stale QManager unit files"
 # The DNS reconciler runs from a systemd timer; the qmanager*.service sweeps
 # miss the .timer unit and its timers.target.wants link.
 systemctl stop qmanager-dns-reconcile.timer 2>/dev/null || true
+# Upstream v0.1.14+ also arms runtime timers (scheduled reboot, tower/scenario
+# schedules, auto-update); stop them before their unit files disappear.
+for t in /etc/systemd/system/qmanager*.timer; do
+    [ -f "$t" ] && systemctl stop "$(basename "$t")" 2>/dev/null || true
+done
 rm -f /etc/systemd/system/qmanager-dns-reconcile.timer \
     /etc/systemd/system/timers.target.wants/qmanager-dns-reconcile.timer
 find /etc/systemd/system /etc/systemd/system/multi-user.target.wants \
@@ -74,6 +79,7 @@ systemctl daemon-reload 2>/dev/null || true
 info "systemd reloaded"
 
 step "Removing QManager files"
+rm -f /etc/qmanager.env 2>/dev/null || true
 rm -rf /usrdata/qmanager
 rm -f /usrdata/bin/qmanager_* \
     /usrdata/bin/qcmd \
