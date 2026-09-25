@@ -957,29 +957,6 @@ if [ -f "$BIN_DIR/qmanager_ping" ] && head -c 2 "$BIN_DIR/qmanager_ping" | grep 
     step "Installing upstream shell ping daemon"
     rm -f "$BIN_DIR/qmanager_ping_rust" "$BIN_DIR/qmanager_ping_shell"
     chmod 755 "$BIN_DIR/qmanager_ping"
-    # Same migration upstream's installer runs: move the old two-URL config to
-    # the four-slot ICMP probe chain the shell daemon (and its UI) expects.
-    PING_CFG="$CONF_DIR/ping_profile.json"
-    if [ -f "$PING_CFG" ] && command -v jq >/dev/null 2>&1 \
-        && [ "$(jq -r '(.target_host_1 // "") != ""' "$PING_CFG" 2>/dev/null)" != "true" ]; then
-        if jq --arg h1 "cloudflare.com" --arg h2 "google.com" --arg i1 "1.1.1.1" --arg i2 "8.8.8.8" \
-            'def nz: select(. != null and . != "");
-             .target_host_1 = ((.target_host_1 | nz) // $h1)
-             | .target_host_2 = ((.target_host_2 | nz) // $h2)
-             | .target_ip_1 = ((.target_ip_1 | nz) // (.target_ipv4 | nz) // $i1)
-             | .target_ip_2 = ((.target_ip_2 | nz) // $i2)
-             | del(.target_ipv4) | del(.target_ipv6) | del(.intercept_secs)
-             | del(.target_1) | del(.target_2)' \
-            "$PING_CFG" > "$PING_CFG.tmp" 2>/dev/null; then
-            mv "$PING_CFG.tmp" "$PING_CFG"
-            chmod 644 "$PING_CFG"
-            chown www-data:www-data "$PING_CFG" 2>/dev/null || true
-            info "ping_profile.json migrated to the four-slot ICMP probe chain"
-        else
-            rm -f "$PING_CFG.tmp"
-            warn "ping_profile.json migration failed; shell daemon will use default targets"
-        fi
-    fi
     info "Upstream shell qmanager_ping installed"
 else
 step "Installing Casa ping daemon wrapper and fallback"
@@ -1332,6 +1309,37 @@ fi
 if [ -x "$OPT_DIR/bin/jq" ]; then
     create_entware_wrapper "jq" "$OPT_DIR/bin/jq"
     info "jq loader wrapper installed"
+fi
+
+# Runs here, after jq exists: the upstream shell ping daemon (v0.1.14+) was
+# installed earlier, but its config migration needs jq.
+if [ -f "$BIN_DIR/qmanager_ping" ] && head -c 2 "$BIN_DIR/qmanager_ping" | grep -q '^#!' \
+    && ! grep -q 'SHELL_FALLBACK=' "$BIN_DIR/qmanager_ping"; then
+QM_JQ="$(command -v jq 2>/dev/null || true)"
+[ -z "$QM_JQ" ] && [ -x "$BIN_DIR/jq" ] && QM_JQ="$BIN_DIR/jq"
+# Same migration upstream's installer runs: move the old two-URL config to
+# the four-slot ICMP probe chain the shell daemon (and its UI) expects.
+PING_CFG="$CONF_DIR/ping_profile.json"
+if [ -f "$PING_CFG" ] && [ -n "$QM_JQ" ] \
+    && [ "$("$QM_JQ" -r '(.target_host_1 // "") != ""' "$PING_CFG" 2>/dev/null)" != "true" ]; then
+    if "$QM_JQ" --arg h1 "cloudflare.com" --arg h2 "google.com" --arg i1 "1.1.1.1" --arg i2 "8.8.8.8" \
+        'def nz: select(. != null and . != "");
+         .target_host_1 = ((.target_host_1 | nz) // $h1)
+         | .target_host_2 = ((.target_host_2 | nz) // $h2)
+         | .target_ip_1 = ((.target_ip_1 | nz) // (.target_ipv4 | nz) // $i1)
+         | .target_ip_2 = ((.target_ip_2 | nz) // $i2)
+         | del(.target_ipv4) | del(.target_ipv6) | del(.intercept_secs)
+         | del(.target_1) | del(.target_2)' \
+        "$PING_CFG" > "$PING_CFG.tmp" 2>/dev/null; then
+        mv "$PING_CFG.tmp" "$PING_CFG"
+        chmod 644 "$PING_CFG"
+        chown www-data:www-data "$PING_CFG" 2>/dev/null || true
+        info "ping_profile.json migrated to the four-slot ICMP probe chain"
+    else
+        rm -f "$PING_CFG.tmp"
+        warn "ping_profile.json migration failed; shell daemon will use default targets"
+    fi
+fi
 fi
 
 # sudo: do NOT create a loader wrapper. The bundled sudo is pre-patched so its
