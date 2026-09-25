@@ -665,6 +665,12 @@ cat > "$SRC_SCRIPTS/usr/bin/qmanager_dns_reconcile" << 'EOF'
 #
 # Decision priority:  QManager Custom DNS  >  Carrier (if it answers)  >  Public
 #
+# The public fallback exists for one failure: the link works but Casa's DNS is
+# broken/poisoned (e.g. only the IPPT placeholder 192.0.0.1). It is installed
+# only when carrier DNS fails AND public DNS answers. When both fail the link is
+# simply down (boot, reconnect, no signal) and switching would only churn
+# dnsmasq, so the current config is left alone.
+#
 # Flash-safe: only rewrites /etc/data/dnsmasq.conf + restarts dnsmasq when the
 # recovery-block presence must change. Steady state performs zero flash writes.
 set -u
@@ -722,6 +728,19 @@ carrier_reachable() {
     ns_list="$(carrier_nameservers)"
     [ -n "$ns_list" ] || return 1
     for ns in $ns_list; do
+        if timeout "$PROBE_TIMEOUT" nslookup "$PROBE_NAME" "$ns" 2>/dev/null \
+            | grep -q '^Name:'; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+PUBLIC_RESOLVERS="1.1.1.1 8.8.8.8"
+
+# True if a public resolver answers directly (i.e. the data link itself works).
+public_reachable() {
+    for ns in $PUBLIC_RESOLVERS; do
         if timeout "$PROBE_TIMEOUT" nslookup "$PROBE_NAME" "$ns" 2>/dev/null \
             | grep -q '^Name:'; then
             return 0
@@ -824,13 +843,21 @@ main() {
     elif [ "$reach" = "true" ]; then
         source="carrier"
         ensure_no_recovery_block || true
-    elif [ "$fails" -ge "$FALLBACK_AFTER_FAILS" ] || recovery_block_present; then
+    elif recovery_block_present; then
+        # Already on the fallback; keep it until carrier DNS answers again.
         source="public_fallback"
-        ensure_recovery_block || true
-    else
+    elif [ "$fails" -lt "$FALLBACK_AFTER_FAILS" ]; then
         # First failed probe: leave dnsmasq alone and confirm on the next tick.
         source="carrier"
         log "carrier DNS probe failed ($fails/$FALLBACK_AFTER_FAILS); waiting before fallback"
+    elif public_reachable; then
+        # Link works but carrier DNS does not: this is what the fallback is for.
+        source="public_fallback"
+        ensure_recovery_block || true
+    else
+        # Nothing answers: the link is down. Public DNS would not help either.
+        source="carrier"
+        log "carrier and public DNS both unreachable; link down, leaving dnsmasq unchanged"
     fi
 
     write_state "$source" "$reach" "$ippt"
