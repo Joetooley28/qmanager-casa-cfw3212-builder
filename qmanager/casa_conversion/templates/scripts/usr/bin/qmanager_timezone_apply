@@ -1,0 +1,129 @@
+#!/bin/sh
+# qmanager_timezone_apply — Casa CFW-3212 version.
+#
+# Casa owns the time zone: RDB system.config.tz (persistent) names a file under
+# /usr/zoneinfo, and Casa's timezone template points /etc/localtime at it via
+# /usr/local/cdcs/overlay/etc-localtime. Casa ships only ~90 zones there (no
+# /usr/share/zoneinfo, no Entware tzdata), so the requested IANA zone is mapped
+# onto a Casa zone with the same rules:
+#   1. same name, 2. same POSIX TZ footer, 3. same UTC offset in January and July.
+#
+# Called via: sudo -n /usrdata/bin/qmanager_timezone_apply <zonename> [posix_tz]
+ZONEDIR="/usr/zoneinfo"
+CASA_LOCALTIME="/usr/local/cdcs/overlay/etc-localtime"
+zn="$1"
+posix="${2:-}"
+
+fail() {
+    printf '{"success":false,"error":"%s","detail":"%s"}\n' "$1" "$2"
+    exit 1
+}
+
+[ -z "$zn" ] && fail "empty_zonename" "Zonename is required"
+case "$zn" in
+    *..*) fail "path_traversal" "Zonename must not contain .." ;;
+esac
+case "$zn" in
+    [A-Za-z]*) ;;
+    *) fail "invalid_charset" "Zonename must start with a letter" ;;
+esac
+case "$zn" in
+    *[!A-Za-z0-9._+/-]*) fail "invalid_charset" "Zonename contains disallowed characters" ;;
+esac
+case "$posix" in
+    *[!A-Za-z0-9\<\>+,./:-]*) fail "invalid_charset" "POSIX TZ contains disallowed characters" ;;
+esac
+[ "$zn" = "UTC" ] && zn="Etc/UTC"
+command -v rdb >/dev/null 2>&1 || fail "no_rdb" "Casa rdb tool not found"
+
+zone_footer() {
+    tail -n 1 "$ZONEDIR/$1" 2>/dev/null
+}
+
+# Optional $1 = region prefix (e.g. "Europe/") listed first; then US/*
+# (America/New_York -> US/Eastern, not America/Indiana/Marengo); Etc/* last.
+# Zone names can contain spaces (Casa ships "Asia/New Delhi").
+list_zones() {
+    ( cd "$ZONEDIR" && find . -type f ) | sed 's|^\./||' \
+        | awk -v region="${1:-}" '{
+            p = 2
+            if (region != "" && index($0, region) == 1) p = 0
+            else if ($0 ~ /^US\//) p = 1
+            else if ($0 ~ /^Etc\//) p = 3
+            print p "\t" $0
+        }' \
+        | sort | cut -f2-
+}
+
+casa=""
+[ -f "$ZONEDIR/$zn" ] && casa="$zn"
+
+if [ -z "$casa" ] && [ -n "$posix" ]; then
+    casa=$(list_zones | while IFS= read -r z; do
+        [ "$(zone_footer "$z")" = "$posix" ] && { printf '%s' "$z"; break; }
+    done)
+fi
+
+if [ -z "$casa" ] && [ -n "$posix" ]; then
+    # Candidates must share DST-ness and the January/July offsets; among those,
+    # prefer one whose offset also matches on the 1st of every month (same
+    # transition dates, e.g. Europe/Dublin -> Europe/London, not Casablanca).
+    year=$(date +%Y)
+    samples=""
+    for m in 01 02 03 04 05 06 07 08 09 10 11 12; do
+        samples="$samples $(date -u -d "$year-$m-01 12:00:00" +%s 2>/dev/null)"
+    done
+    jan=$(date -u -d "$year-01-15 12:00:00" +%s 2>/dev/null)
+    jul=$(date -u -d "$year-07-15 12:00:00" +%s 2>/dev/null)
+    want_jan=$(TZ="$posix" date -d "@$jan" +%z 2>/dev/null)
+    want_jul=$(TZ="$posix" date -d "@$jul" +%z 2>/dev/null)
+    want_all=""
+    for s in $samples; do want_all="$want_all$(TZ="$posix" date -d "@$s" +%z 2>/dev/null)"; done
+    want_dst=0
+    case "$posix" in *,*) want_dst=1 ;; esac
+    if [ -n "$want_jan" ] && [ -n "$want_jul" ]; then
+        region=""
+        case "$zn" in */*) region="${zn%%/*}/" ;; esac
+        casa=$(list_zones "$region" | while IFS= read -r z; do
+            has_dst=0
+            case "$(zone_footer "$z")" in *,*) has_dst=1 ;; esac
+            [ "$has_dst" = "$want_dst" ] || continue
+            [ "$(TZ="$ZONEDIR/$z" date -d "@$jan" +%z 2>/dev/null)" = "$want_jan" ] || continue
+            [ "$(TZ="$ZONEDIR/$z" date -d "@$jul" +%z 2>/dev/null)" = "$want_jul" ] || continue
+            got_all=""
+            for s in $samples; do got_all="$got_all$(TZ="$ZONEDIR/$z" date -d "@$s" +%z 2>/dev/null)"; done
+            if [ "$got_all" = "$want_all" ]; then
+                printf 'full\t%s\n' "$z"
+                break
+            fi
+            printf 'part\t%s\n' "$z"
+        done | awk -F '\t' '$1 == "full" { print $2; found = 1; exit } !first { first = $2 } END { if (!found && first != "") print first }')
+    fi
+fi
+
+[ -z "$casa" ] && fail "zone_not_supported" "No Casa time zone matches $zn"
+[ "$(head -c 4 "$ZONEDIR/$casa" 2>/dev/null)" = "TZif" ] || fail "invalid_tzif" "$ZONEDIR/$casa is not a TZif file"
+
+if [ "$(rdb get system.config.tz 2>/dev/null)" != "$casa" ]; then
+    rdb set system.config.tz "$casa" >/dev/null 2>&1 || fail "rdb_set_failed" "Could not set system.config.tz"
+fi
+
+# Casa's timezone template re-links etc-localtime when the RDB value changes.
+i=0
+while [ "$(readlink "$CASA_LOCALTIME" 2>/dev/null)" != "$ZONEDIR/$casa" ] && [ "$i" -lt 10 ]; do
+    sleep 1
+    i=$((i + 1))
+done
+if [ "$(readlink "$CASA_LOCALTIME" 2>/dev/null)" != "$ZONEDIR/$casa" ]; then
+    ln -sf "$ZONEDIR/$casa" "$CASA_LOCALTIME" 2>/dev/null \
+        || fail "link_failed" "Could not point etc-localtime at $casa"
+fi
+
+# systemd (PID 1) watches the /etc/localtime link itself, not what it points
+# to. Re-creating it makes systemd reschedule timers (Scheduled Reboot) in the
+# new local time without a reboot, and restores Casa's link if it was replaced.
+ln -sfn "$CASA_LOCALTIME" /etc/localtime 2>/dev/null \
+    || fail "link_failed" "Could not re-link /etc/localtime"
+
+printf '{"success":true,"zonename":"%s","casa_zone":"%s"}\n' "$zn" "$casa"
+exit 0

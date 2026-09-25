@@ -6075,6 +6075,64 @@ PY
         || fail "Could not add LAN DNS reconcile after Custom DNS save"
 }
 
+patch_casa_timezone_apply_cfw3212() {
+    # Casa keeps the time zone in RDB system.config.tz (a name under the ~90-zone
+    # /usr/zoneinfo) and links /etc/localtime to it. Upstream's helper copies from
+    # /usr/share/zoneinfo or Entware tzdata, neither of which exists on Casa, so
+    # every save failed and the clock stayed UTC. Replace the helper with the Casa
+    # version (maps the IANA zone onto a Casa zone, sets the RDB key) and pass it
+    # the POSIX TZ string it matches on.
+    local helper="$TARGET/scripts/usr/bin/qmanager_timezone_apply"
+    local lib="$TARGET/scripts/usr/lib/qmanager/system_config.sh"
+    local template="$TEMPLATE_DIR/scripts/usr/bin/qmanager_timezone_apply"
+
+    [ -f "$helper" ] || return 0   # pre-v0.1.14 upstreams have no timezone helper
+    [ -f "$template" ] || fail "Missing Casa timezone helper template: $template"
+    [ -f "$lib" ] || fail "Target missing system_config.sh (timezone helper caller)"
+
+    cp "$template" "$helper"
+    chmod 755 "$helper"
+
+    python3 - "$lib" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+
+call = re.compile(r'(sudo -n \S*/qmanager_timezone_apply) "\$zn" >')
+if 'qmanager_timezone_apply "$zn" "$tz" >' not in text:
+    text, n = call.subn(r'\1 "$zn" "$tz" >', text, count=1)
+    if n != 1:
+        raise SystemExit("sys_set_timezone helper call not found")
+
+old = '''    if [ -n "$tzdir" ]; then
+        expected_offset=$(TZDIR="$tzdir" TZ="$configured_zn" date +%z 2>/dev/null)
+    else
+        expected_offset=""
+    fi'''
+new = '''    if [ -n "$tzdir" ]; then
+        expected_offset=$(TZDIR="$tzdir" TZ="$configured_zn" date +%z 2>/dev/null)
+    else
+        # Casa CFW-3212 has no IANA zoneinfo tree; derive the expected offset
+        # from the saved POSIX TZ string instead.
+        expected_offset=$(TZ="$(sys_get_timezone)" date +%z 2>/dev/null)
+    fi'''
+if old in text:
+    text = text.replace(old, new, 1)
+elif new not in text:
+    raise SystemExit("sys_get_effective_tz expected-offset block not found")
+
+path.write_text(text)
+PY
+
+    grep -q 'qmanager_timezone_apply "$zn" "$tz" >' "$lib" \
+        || fail "Could not pass POSIX TZ to the Casa timezone helper"
+    grep -q 'CASA_LOCALTIME=' "$helper" \
+        || fail "Casa timezone helper was not installed"
+}
+
 patch_email_alerts_casa_msmtp() {
     # v0.1.16 merged monitoring/email_alerts.sh into the unified monitoring/alerts.sh
     # (install action renamed install_msmtp, no uninstall action). Older tags keep
@@ -8367,6 +8425,7 @@ apply_casa_overlays() {
     patch_casa_ippt_disable_clears_service_cfw3212
     patch_casa_band_locking_persist_cfw3212
     patch_email_alerts_casa_msmtp
+    patch_casa_timezone_apply_cfw3212
     patch_ping_profile_service_toggle_cfw3212
     patch_casa_hide_video_optimizer_cfw3212
     patch_speedtest_latency_iqm_guard_cfw3212
