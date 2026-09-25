@@ -534,8 +534,9 @@ PROFILE_TRIGGER_RDB="link.policy.${PROFILE_ID}.trigger_connect"
 SERVICE_ENABLE_RDB="service.ip_handover.enable"
 SERVICE_LAST_IP_RDB="service.ip_handover.last_wwan_ip"
 FIXED_USB_MODE="0"
-FIXED_IPPT_NAT="0"
-FIXED_DNS_PROXY="disabled"
+# Casa DHCP always hands the passthrough device the box's dnsmasq (option 6),
+# so the modem does answer DNS for it.
+CASA_DNS_PROXY="enabled"
 
 read_enabled() {
     val="$(rdb get "$PROFILE_ENABLE_RDB" 2>/dev/null)"
@@ -560,12 +561,24 @@ emit_state() {
         passthrough_mode="disabled"
     fi
     last_ip="$(rdb get "$SERVICE_LAST_IP_RDB" 2>/dev/null)"
+    # Report what Casa actually does rather than fixed placeholders:
+    # - target: the device MAC Casa learned for the handover (empty = automatic)
+    # - NAT: on when the session is in the 192.0.0.x placeholder mode (extra
+    #   NAT hop), off when the device holds the real carrier IPv4
+    target_mac=""
+    ipt_nat="0"
+    if [ "$enabled" = "1" ]; then
+        target_mac="$(rdb get service.ip_handover.mac_address 2>/dev/null | tr 'a-f' 'A-F')"
+        case "$(rdb get link.policy.1.iplocal 2>/dev/null)" in
+            192.0.0.*) ipt_nat="1" ;;
+        esac
+    fi
     jq -n \
       --arg passthrough_mode "$passthrough_mode" \
-      --arg mac "" \
-      --arg nat "$FIXED_IPPT_NAT" \
+      --arg mac "$target_mac" \
+      --arg nat "$ipt_nat" \
       --arg usb "$FIXED_USB_MODE" \
-      --arg dns "$FIXED_DNS_PROXY" \
+      --arg dns "$CASA_DNS_PROXY" \
       '{
           success: true,
           passthrough_mode: $passthrough_mode,
@@ -937,6 +950,38 @@ fi
 # Preserve the upstream Rust qmanager_ping as the primary implementation, but
 # install a Casa shell fallback. If Rust exits nonzero during early boot, the
 # wrapper falls back instead of letting systemd restart-loop the router.
+if [ -f "$BIN_DIR/qmanager_ping" ] && head -c 2 "$BIN_DIR/qmanager_ping" | grep -q '^#!' \
+    && ! grep -q 'SHELL_FALLBACK=' "$BIN_DIR/qmanager_ping"; then
+    # Upstream v0.1.14+ ships qmanager_ping as a shell daemon: run it directly
+    # and retire the Casa Rust/fallback pair from older installs.
+    step "Installing upstream shell ping daemon"
+    rm -f "$BIN_DIR/qmanager_ping_rust" "$BIN_DIR/qmanager_ping_shell"
+    chmod 755 "$BIN_DIR/qmanager_ping"
+    # Same migration upstream's installer runs: move the old two-URL config to
+    # the four-slot ICMP probe chain the shell daemon (and its UI) expects.
+    PING_CFG="$CONF_DIR/ping_profile.json"
+    if [ -f "$PING_CFG" ] && command -v jq >/dev/null 2>&1 \
+        && [ "$(jq -r '(.target_host_1 // "") != ""' "$PING_CFG" 2>/dev/null)" != "true" ]; then
+        if jq --arg h1 "cloudflare.com" --arg h2 "google.com" --arg i1 "1.1.1.1" --arg i2 "8.8.8.8" \
+            'def nz: select(. != null and . != "");
+             .target_host_1 = ((.target_host_1 | nz) // $h1)
+             | .target_host_2 = ((.target_host_2 | nz) // $h2)
+             | .target_ip_1 = ((.target_ip_1 | nz) // (.target_ipv4 | nz) // $i1)
+             | .target_ip_2 = ((.target_ip_2 | nz) // $i2)
+             | del(.target_ipv4) | del(.target_ipv6) | del(.intercept_secs)
+             | del(.target_1) | del(.target_2)' \
+            "$PING_CFG" > "$PING_CFG.tmp" 2>/dev/null; then
+            mv "$PING_CFG.tmp" "$PING_CFG"
+            chmod 644 "$PING_CFG"
+            chown www-data:www-data "$PING_CFG" 2>/dev/null || true
+            info "ping_profile.json migrated to the four-slot ICMP probe chain"
+        else
+            rm -f "$PING_CFG.tmp"
+            warn "ping_profile.json migration failed; shell daemon will use default targets"
+        fi
+    fi
+    info "Upstream shell qmanager_ping installed"
+else
 step "Installing Casa ping daemon wrapper and fallback"
 if [ -f "$BIN_DIR/qmanager_ping" ]; then
     mv "$BIN_DIR/qmanager_ping" "$BIN_DIR/qmanager_ping_rust"
@@ -1222,6 +1267,7 @@ exec "$SHELL_FALLBACK"
 EOF
 chmod 755 "$BIN_DIR/qmanager_ping"
 info "Casa qmanager_ping wrapper installed (Rust primary, shell fallback)"
+fi
 
 # --- Entware bootstrap (all under /usrdata/opt) ------------------------------
 

@@ -1839,6 +1839,14 @@ pin_casa_stable_ping_rust() {
     [ -f "$ref_ping" ] || fail "Casa reference missing stable qmanager_ping: $ref_ping"
     [ -f "$target_ping" ] || fail "Target missing qmanager_ping: $target_ping"
 
+    # Upstream v0.1.14+ ships qmanager_ping as a POSIX shell daemon (ICMP probe
+    # chain; reports last_family for "Carrying traffic on"). Its ping parsing
+    # was verified against Casa's ping, so keep it instead of the Casa Rust pin.
+    if head -c 2 "$target_ping" | grep -q '^#!'; then
+        log "Keeping upstream shell qmanager_ping (upstream no longer ships the Rust daemon)"
+        return 0
+    fi
+
     local ref_size
     ref_size=$(wc -c < "$ref_ping" | tr -d ' ')
     [ "$ref_size" -gt 100000 ] \
@@ -6498,7 +6506,7 @@ if 'set_service_enabled' not in text:
         systemctl is-enabled "$SERVICE_NAME" >/dev/null 2>&1 && service_enabled=true
         systemctl is-active "$SERVICE_NAME" >/dev/null 2>&1 && service_active=true
         runtime="unknown"
-        if pgrep -f "/usrdata/bin/qmanager_ping_rust" >/dev/null 2>&1; then runtime="rust"; elif pgrep -f "/usrdata/bin/qmanager_ping_shell" >/dev/null 2>&1; then runtime="shell"; elif [ "$service_active" = "false" ]; then runtime="stopped"; fi
+        if pgrep -f "/usrdata/bin/qmanager_ping_rust" >/dev/null 2>&1; then runtime="rust"; elif pgrep -f "/usrdata/bin/qmanager_ping_shell" >/dev/null 2>&1; then runtime="shell"; elif pgrep -f "/usrdata/bin/qmanager_ping" >/dev/null 2>&1; then runtime="shell"; elif [ "$service_active" = "false" ]; then runtime="stopped"; fi
         jq -n --argjson service_enabled "$service_enabled" --argjson service_active "$service_active" --arg runtime "$runtime" '{success:true, service_enabled:$service_enabled, service_active:$service_active, runtime:$runtime}'
         exit 0
     fi

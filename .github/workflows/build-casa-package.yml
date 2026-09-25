@@ -518,7 +518,10 @@ jobs:
           tar -xzf qmanager-build/qmanager.tar.gz -C "$tmp_check" qmanager_install/scripts/usr/bin/qmanager_ping
           actual_ping_sha="$(sha256sum "$tmp_check/qmanager_install/scripts/usr/bin/qmanager_ping" | awk '{print $1}')"
           expected_ping_sha="$(sha256sum "$GITHUB_WORKSPACE/qmanager/casa_conversion/vendor/scripts/usr/bin/qmanager_ping" | awk '{print $1}')"
-          if [ "$actual_ping_sha" != "$expected_ping_sha" ]; then
+          if head -c 2 "$tmp_check/qmanager_install/scripts/usr/bin/qmanager_ping" | grep -q '^#!'; then
+            # Upstream v0.1.14+ ships a shell ping daemon; the Rust pin does not apply.
+            echo "Packaged qmanager_ping is upstream's shell daemon; skipping Rust pin check."
+          elif [ "$actual_ping_sha" != "$expected_ping_sha" ]; then
             echo "Packaged qmanager_ping SHA mismatch: expected $expected_ping_sha, got $actual_ping_sha" >&2
             exit 1
           fi
