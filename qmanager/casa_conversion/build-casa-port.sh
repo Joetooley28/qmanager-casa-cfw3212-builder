@@ -5764,6 +5764,58 @@ path.write_text(text)
 PY
     grep -q 'casa_pick_dns' "$lib" \
         || fail "Could not apply Casa CGCONTRDP dual-stack parser patch"
+
+    # The poller has its own copy in parse_at.sh that cuts fields 6/7 and
+    # deletes spaces, gluing each "v4 v6" pair. Same layout handling there.
+    local plib="$TARGET/scripts/usr/lib/qmanager/parse_at.sh"
+    [ -f "$plib" ] || return 0
+    python3 - "$plib" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+if "Casa CFW-3212 (RG520N-NA) dual-stack CGCONTRDP" in text:
+    sys.exit(0)
+old = """    t2_primary_dns=$(printf '%s' "$csv" | cut -d',' -f6 | tr -d '"' | tr -d ' ')
+"""
+old2 = """    t2_secondary_dns=$(printf '%s' "$csv" | cut -d',' -f7 | tr -d '"' | tr -d ' ')
+"""
+if text.count(old) != 1 or text.count(old2) != 1:
+    raise SystemExit("parse_at.sh parse_cgcontrdp DNS cut lines not found")
+new = """    # Casa CFW-3212 (RG520N-NA) dual-stack CGCONTRDP: v4 and v6 addresses as
+    # separate fields, then the gateway, then each DNS field is a space-
+    # separated "v4 v6" pair. Spec layout: addr+mask, gw, dns1, dns2.
+    local _casa_dns
+    _casa_dns=$(printf '%s\\n' "$csv" | awk '
+        {
+            n = split($0, f, ",")
+            for (i = 1; i <= n; i++) {
+                gsub(/"/, "", f[i])
+                gsub(/^[ \\t]+|[ \\t]+$/, "", f[i])
+            }
+            d1 = f[6]; d2 = f[7]
+            split(f[5], a5, " ")
+            k = split(a5[1], o5, "[.]")
+            if (n >= 8 && f[4] !~ / / && f[4] !~ /:/ && (k == 16 || a5[1] ~ /:/) && a5[1] !~ /^(254[.]128[.]|fe80)/) {
+                d1 = f[7]; d2 = f[8]
+            }
+            printf "%s\\t%s\\n", pick(d1), pick(d2)
+        }
+        function pick(s,    t, c, j, o) {
+            c = split(s, t, " ")
+            for (j = 1; j <= c; j++) if (split(t[j], o, "[.]") == 4) return t[j]
+            return t[1]
+        }')
+    t2_primary_dns=$(printf '%s' "$_casa_dns" | cut -f1)
+"""
+text = text.replace(old, new, 1)
+text = text.replace(old2, """    t2_secondary_dns=$(printf '%s' "$_casa_dns" | cut -f2)
+""", 1)
+path.write_text(text)
+PY
+    grep -q 'Casa CFW-3212 (RG520N-NA) dual-stack CGCONTRDP' "$plib" \
+        || fail "Could not apply Casa CGCONTRDP dual-stack patch to parse_at.sh"
 }
 
 patch_casa_custom_dns_cfw3212() {
