@@ -27,6 +27,8 @@
 - The **Video Optimizer** traffic mode is hidden on Casa for now while it is checked on this hardware.
 - Uses upstream's new connectivity monitor (ping daemon) instead of the older Casa build, so Cellular Information can show whether traffic is flowing over IPv4 or IPv6. Existing ping settings are migrated to the new four-target format automatically.
 - The IP Passthrough status now shows real values on Casa: the device passthrough is locked to, whether it sits behind an extra NAT (placeholder mode) or holds the carrier IP directly, and that the router answers its DNS.
+- APN changes from SIM Profiles and the APN page now go through the CFW-3212's own connection manager instead of writing to the modem and forcing a raw detach/re-attach. Deactivating a profile restores the APN the router had before, instead of blanking it. Credentials saved on the APN page are kept in the router's profile so they are not lost on reconnect.
+- Reboots triggered by IMEI changes, MBN selection and the backup-IMEI check now use the router's managed reboot, like the Reboot button.
 - Cellular Settings no longer offers a SIM Slot switch, since CFW-3212 has one SIM slot (switching to the empty slot would drop the connection).
 - Connection details now show the correct carrier DNS servers. The CFW-3212 modem reports IPv4 and IPv6 details in a different layout, which made the page show the gateway as Primary DNS and a run-together string as Secondary DNS.
 - Language packs download from the upstream QManager releases.

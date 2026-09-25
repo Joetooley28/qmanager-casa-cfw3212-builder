@@ -5720,6 +5720,78 @@ patch_radio_info_row_wrap_cfw3212() {
     fi
 }
 
+patch_casa_apn_apply_cfw3212() {
+    # Upstream v0.1.14+ applies/reverts profile and APN-page APNs with a raw
+    # AT+CGDCONT write plus AT+COPS=2/0 re-attach (apn_apply.sh). On Casa that
+    # bypasses the connection manager: deactivating a profile wrote an empty
+    # APN, left link.profile.1.apn and the modem disagreeing, and took ~6 min
+    # to recover on Box 2. Route CID 1 through Casa's RDB profile instead
+    # (templates/casa_apn_apply.sh); other CIDs keep upstream's bracket.
+    local lib="$TARGET/scripts/usr/lib/qmanager/apn_apply.sh"
+    local casa="$TEMPLATE_DIR/casa_apn_apply.sh"
+    if [ ! -f "$lib" ]; then
+        log "apn_apply.sh not present (pre-v0.1.14 upstream); skipping Casa APN path"
+        return 0
+    fi
+    [ -f "$casa" ] || fail "Template missing: casa_apn_apply.sh"
+    if ! grep -q '^_upstream_apn_apply_write() {' "$lib"; then
+        [ "$(grep -c '^apn_apply_write() {' "$lib")" = "1" ] \
+            || fail "apn_apply.sh apn_apply_write() definition not found"
+        sed -i 's/^apn_apply_write() {/_upstream_apn_apply_write() {/' "$lib"
+        cat "$casa" >> "$lib"
+    fi
+    grep -q '^_upstream_apn_apply_write() {' "$lib" && grep -q '^apn_apply_write() {' "$lib" \
+        && grep -q 'Casa CFW-3212: apn_apply_write through Casa' "$lib" \
+        || fail "Could not install Casa apn_apply_write"
+
+    # The APN page writes APN + credentials with AT+QICSGP before calling
+    # apn_apply_write. Casa's reconnect pushes link.profile.1 (auth included)
+    # to the modem, so for CID 1 the credentials must land in the Casa profile
+    # too, or Casa would overwrite them with its stored auth.
+    local apn_cgi="$TARGET/scripts/www/cgi-bin/quecmanager/cellular/apn.sh"
+    [ -f "$apn_cgi" ] || return 0
+    python3 - "$apn_cgi" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+marker = "Casa CFW-3212: mirror CID 1 credentials into link.profile.1"
+if marker in text:
+    sys.exit(0)
+anchor = """        if ! run_at "$qicsgp_cmd" >/dev/null; then
+            die "qicsgp_failed" "AT+QICSGP failed for CID $IDX"
+        fi
+"""
+if text.count(anchor) != 1:
+    raise SystemExit("apn.sh QICSGP write anchor not found")
+text = text.replace(anchor, anchor + f"""
+        # {marker} (Casa pushes that
+        # profile to the modem on reconnect). Auth codes follow AT+QICSGP.
+        if [ "$IDX" = "1" ] && command -v rdb >/dev/null 2>&1 \\
+            && [ -n "$(rdb get link.profile.1.module_profile_idx 2>/dev/null)" ]; then
+            case "$AUTH_AT" in
+                1) _casa_auth="pap" ;;
+                2) _casa_auth="chap" ;;
+                3) _casa_auth="pap|chap" ;;
+                *) _casa_auth="none" ;;
+            esac
+            rdb set link.profile.1.auth_type "$_casa_auth" 2>/dev/null
+            if [ "$_casa_auth" = "none" ]; then
+                rdb set link.profile.1.user "" 2>/dev/null
+                rdb set link.profile.1.pass "" 2>/dev/null
+            else
+                rdb set link.profile.1.user "$USERNAME" 2>/dev/null
+                rdb set link.profile.1.pass "$eff_pass" 2>/dev/null
+            fi
+        fi
+""", 1)
+path.write_text(text)
+PY
+    grep -q 'Casa CFW-3212: mirror CID 1 credentials into link.profile.1' "$apn_cgi" \
+        || fail "Could not mirror APN page credentials into the Casa profile"
+}
+
 patch_casa_managed_reboot_cfw3212() {
     # Every QManager reboot on Casa should go through Casa's RDB managed reset
     # (records a reason, same path as the stock UI) rather than /sbin/reboot.
@@ -8137,6 +8209,7 @@ apply_casa_overlays() {
     patch_casa_cgcontrdp_dualstack_cfw3212
     patch_casa_single_sim_slot_cfw3212
     patch_casa_managed_reboot_cfw3212
+    patch_casa_apn_apply_cfw3212
     patch_radio_info_row_wrap_cfw3212
     patch_casa_dns_status_merge_cfw3212
     patch_casa_dns_badges_cfw3212
