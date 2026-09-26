@@ -6508,6 +6508,83 @@ PY
     echo "  [tailscale] Connection card: Check for updates + Update Tiny Tailscale"
 }
 
+patch_casa_tailscale_connect_already_authed_cfw3212() {
+    # Upstream bug: Connect on an already-logged-in router. Current tailscale
+    # (1.102.x) `tailscale up` reconnects in ~2 s, exits 0 and prints nothing,
+    # but vpn/tailscale.sh only accepts "Success" or a login URL in its output,
+    # so it waited 15 s and returned auth_timeout while the backend was Running.
+    # Record the `up` exit code: 0 without a login URL = already authenticated;
+    # non-zero = a real failure, reported with tailscale's own message.
+    local cgi="$TARGET/scripts/www/cgi-bin/quecmanager/vpn/tailscale.sh"
+    [ -f "$cgi" ] || fail "vpn/tailscale.sh not found at $cgi"
+
+    python3 - "$cgi" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+
+def once(old, new, what):
+    global text
+    if text.count(old) != 1:
+        raise SystemExit(f"tailscale connect: {what} not found once ({text.count(old)})")
+    text = text.replace(old, new)
+
+once('''        # Clean up old temp files
+        rm -f "$AUTH_URL_FILE" "$TS_UP_OUTPUT"
+''', '''        # Clean up old temp files
+        TS_UP_RC_FILE="${TS_UP_OUTPUT}.rc"
+        rm -f "$AUTH_URL_FILE" "$TS_UP_OUTPUT" "$TS_UP_RC_FILE"
+''', "connect temp-file cleanup")
+
+once('''        ( ts_cmd up --reset --accept-dns=false $ssh_flag_arg > "$TS_UP_OUTPUT" 2>&1 ) &
+''', '''        # Casa: record the exit code; an already-logged-in `up` prints nothing.
+        ( ts_cmd up --reset --accept-dns=false $ssh_flag_arg > "$TS_UP_OUTPUT" 2>&1; echo $? > "$TS_UP_RC_FILE" ) &
+''', "connect tailscale up line")
+
+once('''                if [ -n "$auth_url" ]; then
+                    printf '%s' "$auth_url" > "$AUTH_URL_FILE"
+                    break
+                fi
+            fi
+            attempts=$((attempts + 1))
+        done
+''', '''                if [ -n "$auth_url" ]; then
+                    printf '%s' "$auth_url" > "$AUTH_URL_FILE"
+                    break
+                fi
+            fi
+            # Casa: `up` finished without a login URL.
+            if [ -s "$TS_UP_RC_FILE" ]; then
+                ts_up_rc=$(tr -d ' \\n\\r' < "$TS_UP_RC_FILE")
+                rm -f "$TS_UP_RC_FILE" "$TS_UP_PID_FILE"
+                if [ "$ts_up_rc" = "0" ]; then
+                    rm -f "$AUTH_URL_FILE"
+                    qlog_info "Tailscale already authenticated (tailscale up exited 0)"
+                    jq -n '{"success": true, "already_authenticated": true}'
+                    exit 0
+                fi
+                ts_up_msg=$(tr '\\n' ' ' < "$TS_UP_OUTPUT" 2>/dev/null | cut -c1-300)
+                qlog_error "tailscale up failed (exit $ts_up_rc): $ts_up_msg"
+                cgi_error "connect_failed" "tailscale up failed (exit $ts_up_rc): ${ts_up_msg:-no output}"
+                exit 0
+            fi
+            attempts=$((attempts + 1))
+        done
+''', "connect poll loop tail")
+
+path.write_text(text)
+PY
+
+    grep -qF 'echo $? > "$TS_UP_RC_FILE"' "$cgi" \
+        || fail "Could not record the tailscale up exit code in vpn/tailscale.sh"
+    grep -q 'already authenticated (tailscale up exited 0)' "$cgi" \
+        || fail "Could not add the already-authenticated connect path to vpn/tailscale.sh"
+    sh -n "$cgi" || fail "vpn/tailscale.sh has a syntax error after the connect patch"
+    echo "  [tailscale] Connect: already-logged-in reconnect succeeds instead of auth_timeout"
+}
+
 patch_casa_single_sim_slot_cfw3212() {
     # Casa CFW-3212 has one SIM slot. Cellular Settings' SIM Slot control would
     # switch the modem to an empty slot 2 (AT+QUIMSLOT) and drop the data
@@ -9289,6 +9366,7 @@ apply_casa_overlays() {
     fi
     patch_casa_tailscale_tiny_cfw3212
     patch_casa_tailscale_inplace_upgrade_cfw3212
+    patch_casa_tailscale_connect_already_authed_cfw3212
     patch_casa_tailscale_install_label_cfw3212
     patch_casa_tailscale_update_ui_cfw3212
     patch_casa_poller_boot_identity_cfw3212
