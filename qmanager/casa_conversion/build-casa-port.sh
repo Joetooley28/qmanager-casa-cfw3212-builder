@@ -5643,6 +5643,11 @@ patch_casa_tailscale_tiny_cfw3212() {
     #
     # Why: on the CFW-3212 (~183 MB RAM, single armv7 core) the official
     # tailscaled is the single largest RAM consumer (~29 MB RSS, AI-47).
+    # Our fork also keeps the 'dns' feature (from 1.102.4): with dns stripped,
+    # netstack still routes MagicDNS (100.100.100.100:53) queries to a nil
+    # dns.Manager and tailscaled panics and crash-loops (seen on Box 2 with
+    # 1.98.3; costs ~+0.4 MB).
+    #
     # tiny-tailscale is a statically-linked, feature-reduced *combined* binary
     # (one `tailscaled`, with `tailscale` a symlink that switches to CLI mode by
     # argv[0]). Although romulan built it for the RM551E (Qualcomm OpenWRT), a
@@ -5656,7 +5661,7 @@ patch_casa_tailscale_tiny_cfw3212() {
     local ts_mgr="$TARGET/scripts/usr/bin/qmanager_tailscale_mgr"
     [ -f "$ts_mgr" ] || fail "qmanager_tailscale_mgr not found at $ts_mgr (upstream layout changed?)"
 
-    local tiny_ver="1.98.3"
+    local tiny_ver="1.102.4"
 
     python3 - "$ts_mgr" "$tiny_ver" <<'PY'
 from pathlib import Path
@@ -5713,7 +5718,7 @@ PY
         || fail "Could not apply tiny-tailscale tarball/extract patch"
     grep -q 'Joetooley28/tiny-tailscale/releases/download' "$ts_mgr" \
         || fail "Could not apply tiny-tailscale URL patch"
-    grep -q 'TAILSCALE_VERSION="1.98.3"' "$ts_mgr" \
+    grep -q "TAILSCALE_VERSION=\"$tiny_ver\"" "$ts_mgr" \
         || fail "Could not apply tiny-tailscale version patch"
     grep -q 'reinstall to upgrade' "$ts_mgr" \
         || fail "Could not neutralise tailscale update path"
