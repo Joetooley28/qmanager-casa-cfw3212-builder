@@ -5785,6 +5785,490 @@ PY
         || fail "Could not apply Tiny Tailscale install button label"
 }
 
+patch_casa_tailscale_inplace_upgrade_cfw3212() {
+    # Tailscale is installed on demand from the UI, and upstream's "already
+    # installed" path ran `tailscale update`, which patch_casa_tailscale_tiny
+    # neutralised (it would pull the official full-size build). That left no way
+    # to move an installed Tiny Tailscale to a newer pinned build except
+    # uninstall + reinstall, and uninstall wipes /usrdata/tailscale, which also
+    # holds tailscaled.state (login, device name, tailnet IP). 1.98.3 users need
+    # this to get off the build that crash-loops on MagicDNS queries.
+    #
+    # - qmanager_tailscale_mgr: the inner script's "already installed" path now
+    #   swaps in the pinned binary in place (verify download reports the pinned
+    #   version, keep the old binary until the new one stays running, roll back
+    #   otherwise). New subcommands: `upgrade` (same job as install) and
+    #   `pinned_version`.
+    # - vpn/tailscale.sh: GET adds latest_version + update_available; new POST
+    #   action=update starts the job, polled with the existing install_status.
+    # - install_cfw3212.sh runs `qmanager_tailscale_mgr upgrade` when Tailscale is
+    #   installed, so a QManager update carries the Tailscale update with it.
+    local ts_mgr="$TARGET/scripts/usr/bin/qmanager_tailscale_mgr"
+    local cgi="$TARGET/scripts/www/cgi-bin/quecmanager/vpn/tailscale.sh"
+    [ -f "$ts_mgr" ] || fail "qmanager_tailscale_mgr not found at $ts_mgr"
+    [ -f "$cgi" ] || fail "vpn/tailscale.sh not found at $cgi"
+    grep -q 'reinstall to upgrade' "$ts_mgr" \
+        || fail "tailscale in-place upgrade: run patch_casa_tailscale_tiny_cfw3212 first"
+
+    python3 - "$ts_mgr" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+
+upgrade_block = r'''# -----------------------------------------------------------------------------
+# Upgrade path (Casa CFW-3212) — already installed: replace the binary in place
+# with the pinned Tiny Tailscale build. /usrdata/tailscale also holds
+# tailscaled.state, so the login, device name and tailnet IP are kept (uninstall
+# + reinstall would wipe them). `tailscale update` is never used: it would pull
+# the official full-size build from pkgs.tailscale.com.
+# -----------------------------------------------------------------------------
+ts_status() { printf '{"success":%s,"status":"%s","message":"%s"}' "$1" "$2" "$3" > "$STATUS_FILE"; }
+ts_ver_of() { "$1" --version 2>/dev/null | head -1 | awk '{print $1}'; }
+# True when dotted version $1 is older than $2.
+ts_ver_lt() {
+    awk -v a="$1" -v b="$2" 'BEGIN { n = split(a, x, "."); m = split(b, y, "."); if (m > n) n = m;
+        for (i = 1; i <= n; i++) { if (x[i] + 0 < y[i] + 0) exit 0; if (x[i] + 0 > y[i] + 0) exit 1 } exit 1 }'
+}
+ts_nrestarts() { systemctl show -p NRestarts tailscaled 2>/dev/null | cut -d= -f2; }
+
+if [ -f "$TAILSCALE_DIR/tailscaled" ]; then
+    mkdir -p /usrdata/root/bin
+    ln -sf "$TAILSCALE_DIR/tailscale" /usrdata/root/bin/tailscale
+    ln -sf "$TAILSCALE_DIR/tailscale" /usr/bin/tailscale
+
+    cur_ver=$(ts_ver_of "$TAILSCALE_DIR/tailscaled")
+    echo "Installed: ${cur_ver:-unknown}   Pinned: $TAILSCALE_VERSION"
+    if [ -n "$cur_ver" ] && ! ts_ver_lt "$cur_ver" "$TAILSCALE_VERSION"; then
+        ts_status true complete "Tailscale v$cur_ver is up to date"
+        echo "=== already up to date ==="
+        exit 0
+    fi
+
+    ts_status true running "Updating Tailscale v${cur_ver:-unknown} to v$TAILSCALE_VERSION..."
+    stage="/usrdata/tailscale_upgrade"
+    upgrade_fail() {
+        echo "ERROR: $1"
+        ts_status false error "Tailscale update failed: $1"
+        cd / || true
+        rm -rf "$stage"
+        exit 1
+    }
+    rm -rf "$stage"
+    mkdir -p "$stage" && cd "$stage" || upgrade_fail "cannot create $stage"
+
+    echo "Downloading $TAILSCALE_URL"
+    curl -fL -o "$TAILSCALE_TARBALL" "$TAILSCALE_URL" \
+        || upgrade_fail "download failed, check the internet connection. The installed version was left in place"
+    echo "Extracting..."
+    tar -xzf "$TAILSCALE_TARBALL" || upgrade_fail "could not extract the download. The installed version was left in place"
+    rm -f "$TAILSCALE_TARBALL"
+    new_bin="$stage/$TAILSCALE_EXTRACT_DIR/tailscaled"
+    [ -f "$new_bin" ] || upgrade_fail "the download has no tailscaled. The installed version was left in place"
+    chmod 755 "$new_bin"
+    new_ver=$(ts_ver_of "$new_bin")
+    [ "$new_ver" = "$TAILSCALE_VERSION" ] \
+        || upgrade_fail "the downloaded tailscaled reports version ${new_ver:-none}, expected $TAILSCALE_VERSION. The installed version was left in place"
+
+    # Start it again afterwards unless the user had stopped it. A crash-looping
+    # daemon shows activating/failed and should come back on the new build.
+    prev_state=$(systemctl is-active tailscaled 2>/dev/null)
+    echo "tailscaled before update: ${prev_state:-unknown}"
+    ts_status true running "Installing Tailscale v$TAILSCALE_VERSION..."
+    systemctl stop tailscaled 2>/dev/null || true
+
+    # Keep the old binary until the new one is confirmed running.
+    rm -f "$TAILSCALE_DIR/tailscaled.previous"
+    mv -f "$TAILSCALE_DIR/tailscaled" "$TAILSCALE_DIR/tailscaled.previous" \
+        || upgrade_fail "could not move the old tailscaled aside"
+    if ! mv -f "$new_bin" "$TAILSCALE_DIR/tailscaled"; then
+        mv -f "$TAILSCALE_DIR/tailscaled.previous" "$TAILSCALE_DIR/tailscaled"
+        [ "$prev_state" = "inactive" ] || systemctl start tailscaled
+        upgrade_fail "could not install the new tailscaled. v${cur_ver:-unknown} was restored"
+    fi
+    ln -sfn tailscaled "$TAILSCALE_DIR/tailscale"
+    cd / || true
+    rm -rf "$stage"
+
+    # Refresh the unit from the bundled copy so unit fixes ship with the update.
+    # The boot symlink and tailscaled.defaults (user flags) are left alone.
+    if [ -f "$QM_BUNDLED_UNIT" ]; then
+        cp -f "$QM_BUNDLED_UNIT" "$TAILSCALE_SYSD_DIR/tailscaled.service"
+        sed -i 's/\r$//' "$TAILSCALE_SYSD_DIR/tailscaled.service"
+        cp -f "$TAILSCALE_SYSD_DIR/tailscaled.service" "$SYSTEMD_DIR/tailscaled.service"
+    fi
+    systemctl daemon-reload
+
+    if [ "$prev_state" != "inactive" ]; then
+        echo "Starting tailscaled v$TAILSCALE_VERSION..."
+        systemctl start tailscaled
+        n0=$(ts_nrestarts)
+        sleep 12
+        if [ "$(systemctl is-active tailscaled)" != "active" ] || [ "$(ts_nrestarts)" != "$n0" ]; then
+            echo "ERROR: tailscaled v$TAILSCALE_VERSION did not stay running; restoring v${cur_ver:-unknown}"
+            systemctl stop tailscaled 2>/dev/null || true
+            mv -f "$TAILSCALE_DIR/tailscaled.previous" "$TAILSCALE_DIR/tailscaled"
+            systemctl start tailscaled
+            ts_status false error "Tailscale v$TAILSCALE_VERSION did not stay running, so v${cur_ver:-unknown} was restored"
+            exit 1
+        fi
+    else
+        echo "tailscaled was stopped before the update; leaving it stopped"
+    fi
+    rm -f "$TAILSCALE_DIR/tailscaled.previous"
+
+    # tailscale0 trust in the port firewall follows the running daemon.
+    systemctl restart qmanager-firewall 2>/dev/null || true
+
+    ts_status true complete "Tailscale updated to v$TAILSCALE_VERSION. Your login and device were kept"
+    echo "=== Tailscale updated to v${TAILSCALE_VERSION} (state kept) ==="
+    exit 0
+fi
+
+'''
+
+pat = re.compile(r"# -{77}\n# Update path — .*?(?=# -{77}\n# Fresh install\n)", re.S)
+text, n = pat.subn(lambda _m: upgrade_block, text)
+if n != 1:
+    raise SystemExit(f"tailscale upgrade: expected one 'Update path' block, found {n}")
+
+old = """    write_status '{"success":true,"status":"running","message":"Starting Tailscale install..."}'"""
+new = """    if [ -f "$TAILSCALE_DIR/tailscaled" ]; then
+        write_status '{"success":true,"status":"running","message":"Starting Tailscale update..."}'
+    else
+        write_status '{"success":true,"status":"running","message":"Starting Tailscale install..."}'
+    fi"""
+if text.count(old) != 1:
+    raise SystemExit("tailscale upgrade: wrapper 'Starting Tailscale install' status line not found once")
+text = text.replace(old, new)
+
+old = "    install)      do_install ;;\n"
+new = ("    install)      do_install ;;\n"
+       "    upgrade)      do_install ;;  # same job: an installed box is updated in place\n"
+       "    pinned_version) echo \"$TAILSCALE_VERSION\" ;;\n")
+if text.count(old) != 1:
+    raise SystemExit("tailscale upgrade: dispatch 'install)' line not found once")
+text = text.replace(old, new)
+
+old = "qmanager_tailscale_mgr {install|uninstall|ensure_units}"
+if text.count(old) != 1:
+    raise SystemExit("tailscale upgrade: usage line not found once")
+text = text.replace(old, "qmanager_tailscale_mgr {install|upgrade|uninstall|ensure_units|pinned_version}")
+
+old = "#   qmanager_tailscale_mgr uninstall      Remove binaries, units, state\n"
+new = ("#   qmanager_tailscale_mgr upgrade        Update an installed Tiny Tailscale in place\n"
+       "#                                         (keeps tailscaled.state; install does the same)\n"
+       "#   qmanager_tailscale_mgr pinned_version Print the Tiny Tailscale version this package pins\n"
+       + old)
+if text.count(old) != 1:
+    raise SystemExit("tailscale upgrade: header usage line not found once")
+text = text.replace(old, new)
+
+path.write_text(text)
+PY
+
+    python3 - "$cgi" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+
+def once(old, new, what):
+    global text
+    if text.count(old) != 1:
+        raise SystemExit(f"tailscale upgrade CGI: {what} not found once")
+    text = text.replace(old, new)
+
+once("# --- Helper: run tailscale CLI with sudo",
+     """# --- Casa: Tiny Tailscale version this QManager package pins ----------------
+get_ts_pinned_version() {
+    /usrdata/bin/qmanager_tailscale_mgr pinned_version 2>/dev/null
+}
+
+# --- Casa: true when dotted version $1 is older than $2 ---------------------
+ts_ver_lt() {
+    awk -v a="$1" -v b="$2" 'BEGIN { n = split(a, x, "."); m = split(b, y, "."); if (m > n) n = m;
+        for (i = 1; i <= n; i++) { if (x[i] + 0 < y[i] + 0) exit 0; if (x[i] + 0 > y[i] + 0) exit 1 } exit 1 }'
+}
+
+# --- Helper: run tailscale CLI with sudo""", "ts_cmd helper header")
+
+once("    ts_version=$(get_ts_version)\n",
+     """    ts_version=$(get_ts_version)
+    ts_latest=$(get_ts_pinned_version)
+    ts_update_available=false
+    if [ -n "$ts_version" ] && [ -n "$ts_latest" ] && ts_ver_lt "$ts_version" "$ts_latest"; then
+        ts_update_available=true
+    fi
+""", "ts_version assignment")
+
+for old, new in [
+    ('--arg version "$ts_version"',
+     '--arg version "$ts_version" --arg latest_version "$ts_latest" --argjson update_available "$ts_update_available"'),
+    ("version: $version",
+     "version: $version, latest_version: $latest_version, update_available: $update_available"),
+]:
+    if text.count(old) != 3:
+        raise SystemExit(f"tailscale upgrade CGI: expected 3 x {old!r}, found {text.count(old)}")
+    text = text.replace(old, new)
+
+once("""    # -------------------------------------------------------------------------
+    # action: install_status""",
+     """    # -------------------------------------------------------------------------
+    # action: update (Casa) — replace an installed Tiny Tailscale in place with
+    # the pinned build; keeps login/device. Polled with install_status.
+    # -------------------------------------------------------------------------
+    if [ "$ACTION" = "update" ]; then
+        if [ -f "$INSTALL_PID" ]; then
+            inst_pid=$(cat "$INSTALL_PID" 2>/dev/null | tr -d ' \\n\\r')
+            if [ -n "$inst_pid" ] && pid_alive "$inst_pid"; then
+                cgi_error "already_running" "Installation already in progress"
+                exit 0
+            fi
+        fi
+        if ! is_installed; then
+            cgi_error "not_installed" "Tailscale is not installed"
+            exit 0
+        fi
+        qlog_info "Starting Tailscale in-place update via helper"
+        ( $_SUDO /usrdata/bin/qmanager_tailscale_mgr upgrade ) </dev/null >/dev/null 2>&1 &
+        cgi_success
+        exit 0
+    fi
+
+    # -------------------------------------------------------------------------
+    # action: install_status""", "install_status header")
+
+path.write_text(text)
+PY
+
+    grep -q '^# Upgrade path (Casa CFW-3212)' "$ts_mgr" \
+        || fail "Could not apply Tailscale in-place upgrade block"
+    grep -q 'pinned_version) echo' "$ts_mgr" \
+        || fail "Could not add qmanager_tailscale_mgr pinned_version"
+    if grep -qF '"$TAILSCALE_DIR/tailscale" update' "$ts_mgr"; then
+        fail "qmanager_tailscale_mgr still runs 'tailscale update'"
+    fi
+    grep -q 'ACTION" = "update"' "$cgi" \
+        || fail "Could not add Tailscale update action to vpn/tailscale.sh"
+    grep -q 'update_available: \$update_available' "$cgi" \
+        || fail "Could not add update_available to vpn/tailscale.sh status"
+    bash -n "$ts_mgr" || fail "qmanager_tailscale_mgr has a syntax error after the upgrade patch"
+    sh -n "$cgi" || fail "vpn/tailscale.sh has a syntax error after the upgrade patch"
+
+    echo "  [tailscale] in-place upgrade path, pinned_version, CGI update action + update_available"
+}
+
+patch_casa_tailscale_update_ui_cfw3212() {
+    # UI for patch_casa_tailscale_inplace_upgrade_cfw3212: when the status GET
+    # reports update_available, the Connection card shows "Tiny Tailscale vB is
+    # available" with an Update button (POST action=update), then the same
+    # progress/log the install card uses (polled via install_status). The
+    # install card only mounts when Tailscale is NOT installed, so it cannot host
+    # this. v0.1.14+ layout only (connection-card.tsx + i18n).
+    local hook="$TARGET/hooks/use-tailscale.ts"
+    local page="$TARGET/components/monitoring/tailscale/tailscale.tsx"
+    local card="$TARGET/components/monitoring/tailscale/connection-card.tsx"
+    local locale="$TARGET/public/locales/en/common.json"
+    local f
+    for f in "$hook" "$page" "$card" "$locale"; do
+        [ -f "$f" ] || fail "Tailscale update UI: missing $f (upstream layout changed?)"
+    done
+
+    python3 - "$hook" "$page" "$card" "$locale" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+hook, page, card, locale = (Path(p) for p in sys.argv[1:5])
+
+def patch(path, pairs):
+    text = path.read_text()
+    for old, new in pairs:
+        if text.count(old) != 1:
+            raise SystemExit(f"Tailscale update UI: expected one {old[:60]!r} in {path.name}, found {text.count(old)}")
+        text = text.replace(old, new)
+    path.write_text(text)
+
+patch(hook, [
+    ("  install_hint?: string;\n",
+     "  install_hint?: string;\n"
+     "  /** Casa: Tiny Tailscale version this QManager package pins. */\n"
+     "  latest_version?: string;\n"
+     "  /** Casa: installed version is older than latest_version. */\n"
+     "  update_available?: boolean;\n"),
+    ("  runInstall: () => Promise<void>;\n",
+     "  runInstall: () => Promise<void>;\n"
+     "  updateTailscale: () => Promise<void>;\n"
+     "  /** installResult belongs to an update (not a fresh install). */\n"
+     "  isUpdateJob: boolean;\n"),
+    ("  const installPollRef = useRef<ReturnType<typeof setInterval> | null>(null);\n",
+     "  const installPollRef = useRef<ReturnType<typeof setInterval> | null>(null);\n"
+     "  const [isUpdateJob, setIsUpdateJob] = useState(false);\n"),
+    ("  const runInstall = useCallback(async () => {\n    setInstallResult(",
+     "  const runInstall = useCallback(async () => {\n    setIsUpdateJob(false);\n    setInstallResult("),
+    ("""  }, [pollInstallStatus]);
+
+  const uninstall = useCallback(""",
+     """  }, [pollInstallStatus]);
+
+  // Casa: replace an installed Tiny Tailscale in place with the pinned build
+  // (keeps login and device). The helper runs the install job, so progress is
+  // polled with install_status like a fresh install.
+  const updateTailscale = useCallback(async () => {
+    if (installPollRef.current) return;
+    setIsUpdateJob(true);
+    setInstallResult({ success: true, status: "running", message: "Starting update..." });
+    try {
+      const resp = await authFetch(CGI_ENDPOINT, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "update" }),
+      });
+      const json = (await resp.json()) as {
+        success?: boolean;
+        error?: string;
+        detail?: string;
+      };
+      if (!mountedRef.current) return;
+      if (!resp.ok || json.success === false) {
+        setInstallResult({
+          success: false,
+          status: "error",
+          message: json.detail || json.error || "Failed to start the update",
+        });
+        return;
+      }
+      installPollRef.current = setInterval(pollInstallStatus, 2000);
+    } catch (err) {
+      if (mountedRef.current) {
+        setInstallResult({
+          success: false,
+          status: "error",
+          message: err instanceof Error ? err.message : "Failed to start the update",
+        });
+      }
+    }
+  }, [pollInstallStatus]);
+
+  const uninstall = useCallback("""),
+    ("    runInstall,\n",
+     "    runInstall,\n    updateTailscale,\n    isUpdateJob,\n"),
+])
+
+patch(page, [
+    ("              setSshEnabled={hook.setSshEnabled}\n",
+     "              setSshEnabled={hook.setSshEnabled}\n"
+     "              installResult={installResult}\n"
+     "              isUpdateJob={hook.isUpdateJob}\n"
+     "              updateTailscale={hook.updateTailscale}\n"),
+])
+
+patch(card, [
+    ("import {\n  ExternalLinkIcon,\n  Loader2Icon,\n  LogInIcon,\n  TriangleAlertIcon,\n} from \"lucide-react\";\n",
+     "import {\n  CheckCircle2Icon,\n  ExternalLinkIcon,\n  Loader2Icon,\n  LogInIcon,\n  PackageIcon,\n  TriangleAlertIcon,\n} from \"lucide-react\";\n"),
+    ('import { ConditionBlock } from "./condition-block";\n',
+     'import { ConditionBlock } from "./condition-block";\n'
+     'import type { InstallResultShape } from "./install-card";\n'
+     'import { InstallLogViewer } from "./install-log-viewer";\n'),
+    ("  setSshEnabled: (enabled: boolean) => Promise<boolean>;\n}\n",
+     "  setSshEnabled: (enabled: boolean) => Promise<boolean>;\n"
+     "  installResult: InstallResultShape;\n"
+     "  isUpdateJob: boolean;\n"
+     "  updateTailscale: () => Promise<void>;\n}\n"),
+    ("  setSshEnabled,\n}: ConnectionCardProps) {\n",
+     "  setSshEnabled,\n  installResult,\n  isUpdateJob,\n  updateTailscale,\n}: ConnectionCardProps) {\n"),
+    ("  const sshPending = sshEnabled && sshLocked;\n",
+     """  const sshPending = sshEnabled && sshLocked;
+
+  // Casa: in-place Tiny Tailscale update (offer, progress, result, log).
+  const updating = isUpdateJob && installResult.status === "running";
+  const updateDone = isUpdateJob && installResult.status === "complete";
+  const updateFailed = isUpdateJob && installResult.status === "error";
+  const showUpdateOffer = !!status.update_available && !updating;
+  const showUpdateLog =
+    isUpdateJob && (updating || !!installResult.log);
+"""),
+    ("""      <CardContent className={cn(CARD_PAD, CARD_BODY)}>
+        {health.length > 0 ? (""",
+     """      <CardContent className={cn(CARD_PAD, CARD_BODY)}>
+        {updateDone ? (
+          <div role="status" className={cn(NOTICE, NOTICE_TONE.success)}>
+            <CheckCircle2Icon className={NOTICE_GLYPH} />
+            <span className={NOTICE_BODY}>
+              {installResult.message ?? t("tailscale.connection.updateDone")}
+            </span>
+          </div>
+        ) : null}
+        {updateFailed ? (
+          <div role="alert" className={cn(NOTICE, NOTICE_TONE.destructive)}>
+            <TriangleAlertIcon className={NOTICE_GLYPH} />
+            <span className={NOTICE_BODY}>
+              {installResult.message ?? t("tailscale.connection.updateFailed")}
+              {installResult.detail ? (
+                <span className="mt-0.5 block">{installResult.detail}</span>
+              ) : null}
+            </span>
+          </div>
+        ) : null}
+        {showUpdateOffer ? (
+          <div role="status" className={cn(NOTICE, NOTICE_TONE.warning)}>
+            <PackageIcon className={NOTICE_GLYPH} />
+            <span className={NOTICE_BODY}>
+              {t("tailscale.connection.updateAvailable", {
+                current: version,
+                latest: status.latest_version,
+              })}
+            </span>
+          </div>
+        ) : null}
+        {showUpdateOffer || updating ? (
+          <div className={RAIL}>
+            <Button
+              type="button"
+              className={ACTION}
+              onClick={() => void updateTailscale()}
+              disabled={updating}
+            >
+              {updating ? (
+                <Loader2Icon className="size-4 animate-spin motion-reduce:animate-none" />
+              ) : (
+                <PackageIcon className="size-4" />
+              )}
+              {updating
+                ? t("tailscale.connection.updating")
+                : t("tailscale.connection.update")}
+            </Button>
+          </div>
+        ) : null}
+        {showUpdateLog ? (
+          <InstallLogViewer log={installResult.log ?? ""} isRunning={updating} />
+        ) : null}
+        {health.length > 0 ? ("""),
+])
+
+data = json.loads(locale.read_text())
+conn = data["tailscale"]["connection"]
+conn.update({
+    "updateAvailable": "Tiny Tailscale v{{latest}} is available (this router has v{{current}}). Updating keeps your login and this router's tailnet address.",
+    "update": "Update Tiny Tailscale",
+    "updating": "Updating…",
+    "updateDone": "Tailscale updated.",
+    "updateFailed": "Tailscale update failed.",
+})
+locale.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+PY
+
+    grep -q 'action: "update"' "$hook" || fail "Could not add updateTailscale to use-tailscale.ts"
+    grep -q 'updateTailscale={hook.updateTailscale}' "$page" || fail "Could not pass updateTailscale to ConnectionCard"
+    grep -q 'tailscale.connection.updateAvailable' "$card" || fail "Could not add the Tailscale update notice to connection-card.tsx"
+    grep -q '"update": "Update Tiny Tailscale"' "$locale" || fail "Could not add Tailscale update strings to en/common.json"
+    echo "  [tailscale] Connection card: update notice + Update Tiny Tailscale button"
+}
+
 patch_casa_single_sim_slot_cfw3212() {
     # Casa CFW-3212 has one SIM slot. Cellular Settings' SIM Slot control would
     # switch the modem to an empty slot 2 (AT+QUIMSLOT) and drop the data
@@ -8565,7 +9049,9 @@ apply_casa_overlays() {
         copy_template_or_fallback "hooks/use-software-update.ts" "$TEMPLATE_DIR/hooks/use-software-update.ts"
     fi
     patch_casa_tailscale_tiny_cfw3212
+    patch_casa_tailscale_inplace_upgrade_cfw3212
     patch_casa_tailscale_install_label_cfw3212
+    patch_casa_tailscale_update_ui_cfw3212
     patch_casa_poller_boot_identity_cfw3212
     patch_casa_ippt_disable_clears_service_cfw3212
     patch_casa_band_locking_persist_cfw3212

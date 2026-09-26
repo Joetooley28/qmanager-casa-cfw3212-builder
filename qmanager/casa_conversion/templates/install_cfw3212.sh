@@ -1910,6 +1910,44 @@ else
     warn "No curl or wget found — skipping Ookla download"
 fi
 
+# --- Tiny Tailscale in-place update -------------------------------------------
+# Tailscale is installed on demand from the UI, so without this a QManager
+# update never replaced an installed tailscaled. `qmanager_tailscale_mgr upgrade`
+# swaps in the Tiny Tailscale build this package pins when the installed one is
+# older, keeping /usrdata/tailscale/tailscaled.state (login, device, tailnet IP),
+# and rolls back if the new daemon does not stay running. It runs as a detached
+# oneshot; wait for its status file here so the result shows in this log.
+TS_UPDATE_FAILED=""
+step "Updating Tiny Tailscale"
+if [ ! -f /usrdata/tailscale/tailscaled ]; then
+    info "Tailscale is not installed — nothing to update (install it from the Tailscale page)"
+elif [ ! -x "$BIN_DIR/qmanager_tailscale_mgr" ]; then
+    TS_UPDATE_FAILED="qmanager_tailscale_mgr is missing"
+else
+    _ts_status_file=/tmp/qmanager_tailscale_install.json
+    _ts_state=""
+    _ts_msg=""
+    if "$BIN_DIR/qmanager_tailscale_mgr" upgrade; then
+        _ts_waited=0
+        while [ "$_ts_waited" -lt 300 ]; do
+            _ts_state=$(jq -r '.status // empty' "$_ts_status_file" 2>/dev/null || true)
+            [ "$_ts_state" = "complete" ] || [ "$_ts_state" = "error" ] && break
+            sleep 3
+            _ts_waited=$((_ts_waited + 3))
+        done
+        _ts_msg=$(jq -r '.message // empty' "$_ts_status_file" 2>/dev/null || true)
+    fi
+    if [ "$_ts_state" = "complete" ]; then
+        info "$_ts_msg"
+    else
+        TS_UPDATE_FAILED="${_ts_msg:-no result after 300 s (state: ${_ts_state:-none})}"
+    fi
+fi
+if [ -n "$TS_UPDATE_FAILED" ]; then
+    printf "  ${RED}✗${NC}  Tailscale update failed: %s\n" "$TS_UPDATE_FAILED"
+    warn "QManager itself is installed. Retry from the Tailscale page (Update), log: /tmp/qmanager_tailscale_install.log"
+fi
+
 # --- Summary -----------------------------------------------------------------
 
 echo ""

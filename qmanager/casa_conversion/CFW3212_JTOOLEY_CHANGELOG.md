@@ -42,7 +42,7 @@
 - Uninstall now stops every QManager service it removes, including ones added in newer versions (SMS forwarding, SMS storage, schedules), so nothing keeps running until the next reboot.
 - Background services such as **SMS forwarding**, tower failover, the Tower Lock schedule and the backup-IMEI check can now find the tools they need on CFW-3212. Before, they could quietly treat their saved settings as off or empty.
 - The **port firewall** that limits the QManager web UI (ports 9000/9080) to the LAN, Ethernet and Tailscale interfaces starts again. Earlier v0.1.16 test builds gave QManager services a tool path that left out `/usr/sbin`, where CFW-3212 keeps `iptables`, so the firewall service failed at boot and the web UI ports were left unfiltered.
-- **Tailscale** now installs Tiny Tailscale 1.102.4, built with Tailscale's DNS support kept. The earlier 1.98.3 tiny build left DNS out, so it crashed and restarted every few seconds as soon as anything asked it a MagicDNS question. Already have Tailscale installed? Remove and reinstall it from the Tailscale page to get the new build.
+- **Tailscale** now installs Tiny Tailscale 1.102.4, built with Tailscale's DNS support kept. The earlier 1.98.3 tiny build left DNS out, so it crashed and restarted every few seconds as soon as anything asked it a MagicDNS question. Already have Tailscale installed? Installing this QManager update also updates Tailscale in place, keeping your login, device name and tailnet address, and puts the old version back if the new one does not start. The Tailscale page also shows when a newer Tiny Tailscale is available, with an **Update Tiny Tailscale** button, so you no longer need to remove and reinstall it.
 
 ## v0.1.12-cfw3212.22
 
