@@ -6585,6 +6585,47 @@ PY
     echo "  [tailscale] Connect: already-logged-in reconnect succeeds instead of auth_timeout"
 }
 
+patch_casa_tailscale_shell_hint_cfw3212() {
+    # The Tailscale install card's "Or install from a shell" row showed (and
+    # its copy button copied) "Install via the button above or SSH: sudo
+    # qmanager_tailscale_mgr install". On Casa an SSH session is already root,
+    # has no sudo on PATH, and /usrdata/bin is not on PATH either, so it failed
+    # with "sudo: not found". Show only the command that works.
+    local cgi="$TARGET/scripts/www/cgi-bin/quecmanager/vpn/tailscale.sh"
+    local card="$TARGET/components/monitoring/tailscale/install-card.tsx"
+    [ -f "$cgi" ] || fail "vpn/tailscale.sh not found at $cgi"
+    [ -f "$card" ] || fail "tailscale install-card.tsx not found at $card"
+
+    python3 - "$cgi" "$card" <<'PY'
+from pathlib import Path
+import sys
+
+cmd = "/usrdata/bin/qmanager_tailscale_mgr install"
+for p, old, new in [
+    (sys.argv[1],
+     'install_hint: "Install via the button above or SSH: sudo qmanager_tailscale_mgr install"',
+     f'install_hint: "{cmd}"'),
+    (sys.argv[2],
+     'const command = installHint || "sudo qmanager_tailscale_mgr install";',
+     f'const command = installHint || "{cmd}";'),
+]:
+    path = Path(p)
+    text = path.read_text()
+    if text.count(old) != 1:
+        raise SystemExit(f"tailscale shell hint: expected one {old!r} in {path.name}, found {text.count(old)}")
+    path.write_text(text.replace(old, new))
+PY
+
+    grep -q 'install_hint: "/usrdata/bin/qmanager_tailscale_mgr install"' "$cgi" \
+        || fail "Could not fix the Tailscale install_hint in vpn/tailscale.sh"
+    grep -q '"/usrdata/bin/qmanager_tailscale_mgr install"' "$card" \
+        || fail "Could not fix the Tailscale shell command fallback in install-card.tsx"
+    if grep -q 'sudo qmanager_tailscale_mgr' "$cgi" "$card"; then
+        fail "Tailscale install card still shows 'sudo qmanager_tailscale_mgr'"
+    fi
+    echo "  [tailscale] install card shell command: /usrdata/bin/qmanager_tailscale_mgr install"
+}
+
 patch_casa_single_sim_slot_cfw3212() {
     # Casa CFW-3212 has one SIM slot. Cellular Settings' SIM Slot control would
     # switch the modem to an empty slot 2 (AT+QUIMSLOT) and drop the data
@@ -9369,6 +9410,7 @@ apply_casa_overlays() {
     patch_casa_tailscale_connect_already_authed_cfw3212
     patch_casa_tailscale_install_label_cfw3212
     patch_casa_tailscale_update_ui_cfw3212
+    patch_casa_tailscale_shell_hint_cfw3212
     patch_casa_poller_boot_identity_cfw3212
     patch_casa_ippt_disable_clears_service_cfw3212
     patch_casa_band_locking_persist_cfw3212
