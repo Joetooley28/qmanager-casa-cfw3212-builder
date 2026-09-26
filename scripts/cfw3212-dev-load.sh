@@ -103,11 +103,20 @@ cmd_install() {
   fetch_tarball
   check_box
   confirm "Full offline install of $(basename "$TARBALL") onto '$BOX' (overwrites the current install)?"
+  # /tmp on the router is RAM-backed tmpfs (~188 MB total): clear leftovers from a
+  # previous or dropped copy first, and never leave the package behind afterwards.
+  note "Clearing old install files from $BOX:/tmp ..."
+  ssh "$BOX" 'rm -rf /tmp/qmanager.tar.gz /tmp/qmanager_install'
   note "Copying package to $BOX:/tmp/qmanager.tar.gz ..."
-  scp -O "$TARBALL" "$BOX:/tmp/qmanager.tar.gz"
+  if ! scp -O "$TARBALL" "$BOX:/tmp/qmanager.tar.gz"; then
+    ssh "$BOX" 'rm -f /tmp/qmanager.tar.gz' || true
+    die "copy to '$BOX' failed (partial /tmp/qmanager.tar.gz removed); retry"
+  fi
   note "Running offline installer on $BOX ..."
-  ssh "$BOX" 'set -e; cd /tmp; rm -rf qmanager_install; tar xzf qmanager.tar.gz; sh /tmp/qmanager_install/install_cfw3212.sh'
-  note "Install finished. Check the UI / About Device."
+  ssh "$BOX" 'trap "rm -rf /tmp/qmanager.tar.gz /tmp/qmanager_install" EXIT
+    set -e; cd /tmp; tar xzf qmanager.tar.gz; rm -f qmanager.tar.gz
+    sh /tmp/qmanager_install/install_cfw3212.sh'
+  note "Install finished; removed the package and install files from $BOX:/tmp. Check the UI / About Device."
 }
 
 cmd_hotpatch() {
