@@ -1558,7 +1558,7 @@ fi
 # environment: expose /usrdata/bin and /usrdata/opt/bin to all QManager processes
 cat > "$CONF_DIR/environment" << EOF
 QLOG_LEVEL=INFO
-PATH=/usrdata/bin:/usrdata/opt/bin:/usrdata/opt/sbin:/usr/bin:/bin:/sbin
+PATH=/usrdata/bin:/usrdata/opt/bin:/usrdata/opt/sbin:/usr/sbin:/usr/bin:/sbin:/bin
 EOF
 info "environment written (PATH includes /usrdata/bin and /usrdata/opt/bin)"
 
@@ -1568,7 +1568,7 @@ info "environment written (PATH includes /usrdata/bin and /usrdata/opt/bin)"
 # the bare systemd PATH and cannot find qcmd/jq in /usrdata/bin.
 cat > /etc/qmanager.env << EOF
 QLOG_LEVEL=INFO
-PATH=/usrdata/bin:/usrdata/opt/bin:/usrdata/opt/sbin:/usr/bin:/bin:/sbin
+PATH=/usrdata/bin:/usrdata/opt/bin:/usrdata/opt/sbin:/usr/sbin:/usr/bin:/sbin:/bin
 EOF
 chown root:root /etc/qmanager.env 2>/dev/null || true
 chmod 644 /etc/qmanager.env
