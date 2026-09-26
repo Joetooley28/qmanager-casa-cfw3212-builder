@@ -1915,12 +1915,16 @@ fi
 # update never replaced an installed tailscaled. `qmanager_tailscale_mgr upgrade`
 # swaps in the Tiny Tailscale build this package pins when the installed one is
 # older, keeping /usrdata/tailscale/tailscaled.state (login, device, tailnet IP),
-# and rolls back if the new daemon does not stay running. It runs as a detached
-# oneshot; wait for its status file here so the result shows in this log.
+# and rolls back if the new daemon does not stay running. The user can turn this
+# off on the Tailscale page (/etc/qmanager/tailscale_auto_update = 0). It runs
+# as a detached oneshot; wait for its status file so the result shows here.
 TS_UPDATE_FAILED=""
 step "Updating Tiny Tailscale"
 if [ ! -f /usrdata/tailscale/tailscaled ]; then
     info "Tailscale is not installed — nothing to update (install it from the Tailscale page)"
+elif [ "$(cat "$CONF_DIR/tailscale_auto_update" 2>/dev/null | tr -d ' \n\r')" = "0" ]; then
+    # Tailscale page switch "Update with QManager updates" is off.
+    warn "Skipped: turned off on the Tailscale page (Update with QManager updates). The Update button there still works."
 elif [ ! -x "$BIN_DIR/qmanager_tailscale_mgr" ]; then
     TS_UPDATE_FAILED="qmanager_tailscale_mgr is missing"
 else

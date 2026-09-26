@@ -5663,12 +5663,27 @@ patch_casa_tailscale_tiny_cfw3212() {
 
     local tiny_ver="1.102.4"
 
-    python3 - "$ts_mgr" "$tiny_ver" <<'PY'
+    # Pin the release asset's SHA-256 at build time; the router refuses a
+    # download that does not match (fresh install and in-place update). If the
+    # fork's asset is ever rebuilt, older packages fail loudly instead of
+    # installing a different binary; a new package build picks up the new hash.
+    local tiny_url="https://github.com/Joetooley28/tiny-tailscale/releases/download/v${tiny_ver}/tiny-tailscale_${tiny_ver}_arm.tgz"
+    local tiny_tmp tiny_sha
+    tiny_tmp="$(mktemp)"
+    curl -fsSL --retry 3 -o "$tiny_tmp" "$tiny_url" \
+        || { rm -f "$tiny_tmp"; fail "Could not download $tiny_url to pin its SHA-256"; }
+    tiny_sha="$(sha256sum "$tiny_tmp" | awk '{print $1}')"
+    rm -f "$tiny_tmp"
+    printf '%s' "$tiny_sha" | grep -Eq '^[0-9a-f]{64}$' \
+        || fail "Could not compute SHA-256 of $tiny_url"
+
+    python3 - "$ts_mgr" "$tiny_ver" "$tiny_sha" <<'PY'
 from pathlib import Path
 import sys
 
 path = Path(sys.argv[1])
 ver = sys.argv[2]
+sha = sys.argv[3]
 text = path.read_text()
 
 # TAILSCALE_VERSION appears twice (outer wrapper + inner install script); both
@@ -5711,6 +5726,28 @@ text = text.replace(
     'echo "tiny-tailscale build: skipping tailscale update (reinstall to upgrade)"',
 )
 
+url_line = 'TAILSCALE_URL="https://github.com/Joetooley28/tiny-tailscale/releases/download/v${TAILSCALE_VERSION}/${TAILSCALE_TARBALL}"\n'
+if text.count(url_line) != 1:
+    raise SystemExit("tiny-tailscale: expected one inner TAILSCALE_URL line for the SHA-256 pin")
+text = text.replace(
+    url_line,
+    url_line + "# SHA-256 of the release asset, pinned when this QManager package was built.\n"
+    f'TAILSCALE_SHA256="{sha}"\n',
+)
+
+extract = 'echo "Extracting..."\ntar -xzf "$TAILSCALE_TARBALL"\nrm -f "$TAILSCALE_TARBALL"\n'
+if text.count(extract) != 1:
+    raise SystemExit("tiny-tailscale: expected one fresh-install extract block for the SHA-256 check")
+text = text.replace(extract, """echo "Verifying SHA-256..."
+got_sha=$(sha256sum "$TAILSCALE_TARBALL" | awk '{print $1}')
+if [ "$got_sha" != "$TAILSCALE_SHA256" ]; then
+    echo "ERROR: SHA-256 mismatch: expected $TAILSCALE_SHA256, got ${got_sha:-none}"
+    rm -f "$TAILSCALE_TARBALL"
+    write_status '{"success":false,"status":"error","message":"The Tailscale v'"$TAILSCALE_VERSION"' download failed its checksum check","detail":"expected '"$TAILSCALE_SHA256"', got '"${got_sha:-none}"'"}'
+    exit 1
+fi
+""" + extract)
+
 path.write_text(text)
 PY
 
@@ -5724,6 +5761,10 @@ PY
         || fail "Could not neutralise tailscale update path"
     grep -q 'curl -fL -O' "$ts_mgr" \
         || fail "Could not apply tiny-tailscale curl follow-redirect (-fL) patch"
+    grep -q "^TAILSCALE_SHA256=\"$tiny_sha\"" "$ts_mgr" \
+        || fail "Could not pin tiny-tailscale SHA-256"
+    grep -q 'failed its checksum check' "$ts_mgr" \
+        || fail "Could not add tiny-tailscale SHA-256 check to the fresh install"
     grep -q '^Type=simple' "$ts_mgr" \
         || fail "Could not set Type=simple in qmanager_tailscale_mgr inline unit"
 
@@ -5734,7 +5775,7 @@ PY
     grep -q '^Type=simple' "$ts_unit" \
         || fail "Could not set Type=simple in staged tailscaled.service"
 
-    echo "  [tailscale] on-demand installer switched to tiny-tailscale v$tiny_ver (arm), Type=simple"
+    echo "  [tailscale] on-demand installer switched to tiny-tailscale v$tiny_ver (arm, sha256 $tiny_sha), Type=simple"
 }
 
 patch_casa_tailscale_install_label_cfw3212() {
@@ -5863,6 +5904,9 @@ if [ -f "$TAILSCALE_DIR/tailscaled" ]; then
     curl -fL -o "$TAILSCALE_TARBALL" "$TAILSCALE_URL" \
         || upgrade_fail "download failed, check the internet connection. The installed version was left in place"
     echo "Extracting..."
+    got_sha=$(sha256sum "$TAILSCALE_TARBALL" | awk '{print $1}')
+    [ "$got_sha" = "$TAILSCALE_SHA256" ] \
+        || upgrade_fail "the download failed its checksum check (expected $TAILSCALE_SHA256, got ${got_sha:-none}). The installed version was left in place"
     tar -xzf "$TAILSCALE_TARBALL" || upgrade_fail "could not extract the download. The installed version was left in place"
     rm -f "$TAILSCALE_TARBALL"
     new_bin="$stage/$TAILSCALE_EXTRACT_DIR/tailscaled"
@@ -5966,6 +6010,12 @@ if text.count(old) != 1:
     raise SystemExit("tailscale upgrade: header usage line not found once")
 text = text.replace(old, new)
 
+old = "    rm -f /etc/qmanager/tailscale_ssh\n"
+if text.count(old) != 1:
+    raise SystemExit("tailscale upgrade: uninstall tailscale_ssh cleanup line not found once")
+text = text.replace(old, old + "    # Casa: auto-update preference (a reinstall starts with the default, on).\n"
+                              "    rm -f /etc/qmanager/tailscale_auto_update\n")
+
 path.write_text(text)
 PY
 
@@ -5988,6 +6038,18 @@ get_ts_pinned_version() {
     /usrdata/bin/qmanager_tailscale_mgr pinned_version 2>/dev/null
 }
 
+# --- Casa: update Tiny Tailscale with QManager updates? (default on) -------
+# /etc/qmanager/tailscale_auto_update holds 0 when the user turned it off; the
+# QManager installer reads the same file.
+TS_AUTO_UPDATE_FILE="/etc/qmanager/tailscale_auto_update"
+get_auto_update_pref() {
+    if [ "$(cat "$TS_AUTO_UPDATE_FILE" 2>/dev/null | tr -d ' \\n\\r')" = "0" ]; then
+        echo "false"
+    else
+        echo "true"
+    fi
+}
+
 # --- Casa: true when dotted version $1 is older than $2 ---------------------
 ts_ver_lt() {
     awk -v a="$1" -v b="$2" 'BEGIN { n = split(a, x, "."); m = split(b, y, "."); if (m > n) n = m;
@@ -6000,6 +6062,7 @@ once("    ts_version=$(get_ts_version)\n",
      """    ts_version=$(get_ts_version)
     ts_latest=$(get_ts_pinned_version)
     ts_update_available=false
+    ts_auto_update=$(get_auto_update_pref)
     if [ -n "$ts_version" ] && [ -n "$ts_latest" ] && ts_ver_lt "$ts_version" "$ts_latest"; then
         ts_update_available=true
     fi
@@ -6007,9 +6070,9 @@ once("    ts_version=$(get_ts_version)\n",
 
 for old, new in [
     ('--arg version "$ts_version"',
-     '--arg version "$ts_version" --arg latest_version "$ts_latest" --argjson update_available "$ts_update_available"'),
+     '--arg version "$ts_version" --arg latest_version "$ts_latest" --argjson update_available "$ts_update_available" --argjson auto_update "$ts_auto_update"'),
     ("version: $version",
-     "version: $version, latest_version: $latest_version, update_available: $update_available"),
+     "version: $version, latest_version: $latest_version, update_available: $update_available, auto_update: $auto_update"),
 ]:
     if text.count(old) != 3:
         raise SystemExit(f"tailscale upgrade CGI: expected 3 x {old!r}, found {text.count(old)}")
@@ -6040,6 +6103,31 @@ once("""    # ------------------------------------------------------------------
     fi
 
     # -------------------------------------------------------------------------
+    # action: set_auto_update (Casa) — update Tiny Tailscale with QManager
+    # updates (installer step). Stored as 1/0 in $TS_AUTO_UPDATE_FILE.
+    # -------------------------------------------------------------------------
+    if [ "$ACTION" = "set_auto_update" ]; then
+        au_value=$(printf '%s' "$POST_DATA" | jq -r '.enabled | if . == null then empty else tostring end')
+        case "$au_value" in
+            true)  au_flag="1" ;;
+            false) au_flag="0" ;;
+            *)
+                cgi_error "invalid_value" "enabled must be true or false"
+                exit 0
+                ;;
+        esac
+        if ! printf '%s\\n' "$au_flag" > "${TS_AUTO_UPDATE_FILE}.tmp" \\
+            || ! mv -f "${TS_AUTO_UPDATE_FILE}.tmp" "$TS_AUTO_UPDATE_FILE"; then
+            rm -f "${TS_AUTO_UPDATE_FILE}.tmp"
+            cgi_error "write_failed" "Could not save the Tailscale auto-update setting"
+            exit 0
+        fi
+        qlog_info "Tailscale auto-update with QManager updates set to $au_value"
+        cgi_success
+        exit 0
+    fi
+
+    # -------------------------------------------------------------------------
     # action: install_status""", "install_status header")
 
 path.write_text(text)
@@ -6054,8 +6142,12 @@ PY
     fi
     grep -q 'ACTION" = "update"' "$cgi" \
         || fail "Could not add Tailscale update action to vpn/tailscale.sh"
-    grep -q 'update_available: \$update_available' "$cgi" \
-        || fail "Could not add update_available to vpn/tailscale.sh status"
+    grep -q 'update_available: \$update_available, auto_update: \$auto_update' "$cgi" \
+        || fail "Could not add update_available/auto_update to vpn/tailscale.sh status"
+    grep -q 'ACTION" = "set_auto_update"' "$cgi" \
+        || fail "Could not add set_auto_update to vpn/tailscale.sh"
+    grep -q 'SHA256' "$ts_mgr" && grep -q 'failed its checksum check (expected' "$ts_mgr" \
+        || fail "Tailscale in-place upgrade has no SHA-256 check"
     bash -n "$ts_mgr" || fail "qmanager_tailscale_mgr has a syntax error after the upgrade patch"
     sh -n "$cgi" || fail "vpn/tailscale.sh has a syntax error after the upgrade patch"
 
@@ -6099,12 +6191,15 @@ patch(hook, [
      "  /** Casa: Tiny Tailscale version this QManager package pins. */\n"
      "  latest_version?: string;\n"
      "  /** Casa: installed version is older than latest_version. */\n"
-     "  update_available?: boolean;\n"),
+     "  update_available?: boolean;\n"
+     "  /** Casa: update Tiny Tailscale with QManager updates (default on). */\n"
+     "  auto_update?: boolean;\n"),
     ("  runInstall: () => Promise<void>;\n",
      "  runInstall: () => Promise<void>;\n"
      "  updateTailscale: () => Promise<void>;\n"
      "  /** installResult belongs to an update (not a fresh install). */\n"
-     "  isUpdateJob: boolean;\n"),
+     "  isUpdateJob: boolean;\n"
+     "  setAutoUpdate: (enabled: boolean) => Promise<boolean>;\n"),
     ("  const installPollRef = useRef<ReturnType<typeof setInterval> | null>(null);\n",
      "  const installPollRef = useRef<ReturnType<typeof setInterval> | null>(null);\n"
      "  const [isUpdateJob, setIsUpdateJob] = useState(false);\n"),
@@ -6154,9 +6249,30 @@ patch(hook, [
     }
   }, [pollInstallStatus]);
 
+  // Casa: update Tiny Tailscale with QManager updates on/off.
+  const setAutoUpdate = useCallback(
+    async (enabled: boolean): Promise<boolean> => {
+      try {
+        const json = await postAction({ action: "set_auto_update", enabled });
+        if (!mountedRef.current) return false;
+        if (!json.success) {
+          setError(json.detail || json.error || "Failed to update the auto-update setting");
+          return false;
+        }
+        await fetchStatus(true);
+        return true;
+      } catch (err) {
+        if (!mountedRef.current) return false;
+        setError(err instanceof Error ? err.message : "Failed to update the auto-update setting");
+        return false;
+      }
+    },
+    [postAction, fetchStatus],
+  );
+
   const uninstall = useCallback("""),
     ("    runInstall,\n",
-     "    runInstall,\n    updateTailscale,\n    isUpdateJob,\n"),
+     "    runInstall,\n    updateTailscale,\n    isUpdateJob,\n    setAutoUpdate,\n"),
 ])
 
 patch(page, [
@@ -6164,7 +6280,8 @@ patch(page, [
      "              setSshEnabled={hook.setSshEnabled}\n"
      "              installResult={installResult}\n"
      "              isUpdateJob={hook.isUpdateJob}\n"
-     "              updateTailscale={hook.updateTailscale}\n"),
+     "              updateTailscale={hook.updateTailscale}\n"
+     "              setAutoUpdate={hook.setAutoUpdate}\n"),
 ])
 
 patch(card, [
@@ -6178,9 +6295,10 @@ patch(card, [
      "  setSshEnabled: (enabled: boolean) => Promise<boolean>;\n"
      "  installResult: InstallResultShape;\n"
      "  isUpdateJob: boolean;\n"
-     "  updateTailscale: () => Promise<void>;\n}\n"),
+     "  updateTailscale: () => Promise<void>;\n"
+     "  setAutoUpdate: (enabled: boolean) => Promise<boolean>;\n}\n"),
     ("  setSshEnabled,\n}: ConnectionCardProps) {\n",
-     "  setSshEnabled,\n  installResult,\n  isUpdateJob,\n  updateTailscale,\n}: ConnectionCardProps) {\n"),
+     "  setSshEnabled,\n  installResult,\n  isUpdateJob,\n  updateTailscale,\n  setAutoUpdate,\n}: ConnectionCardProps) {\n"),
     ("  const sshPending = sshEnabled && sshLocked;\n",
      """  const sshPending = sshEnabled && sshLocked;
 
@@ -6191,7 +6309,32 @@ patch(card, [
   const showUpdateOffer = !!status.update_available && !updating;
   const showUpdateLog =
     isUpdateJob && (updating || !!installResult.log);
+  const autoUpdate = status.auto_update ?? true;
+  const handleAutoUpdate = async (checked: boolean) => {
+    const ok = await setAutoUpdate(checked);
+    if (ok) {
+      toast.success(
+        checked
+          ? t("tailscale.toast.autoUpdateEnabled")
+          : t("tailscale.toast.autoUpdateDisabled"),
+      );
+    } else {
+      toast.error(t("tailscale.toast.autoUpdateFailed"));
+    }
+  };
 """),
+    ("""        <div className={RAIL}>{rail}</div>
+      </CardContent>""",
+     """        <SettingRow
+          id="tailscale-auto-update"
+          title={t("tailscale.connection.autoUpdateTitle")}
+          description={t("tailscale.connection.autoUpdateDescription")}
+          checked={autoUpdate}
+          onCheckedChange={handleAutoUpdate}
+        />
+
+        <div className={RAIL}>{rail}</div>
+      </CardContent>"""),
     ("""      <CardContent className={cn(CARD_PAD, CARD_BODY)}>
         {health.length > 0 ? (""",
      """      <CardContent className={cn(CARD_PAD, CARD_BODY)}>
@@ -6258,6 +6401,14 @@ conn.update({
     "updating": "Updating…",
     "updateDone": "Tailscale updated.",
     "updateFailed": "Tailscale update failed.",
+    "autoUpdateTitle": "Update with QManager updates",
+    "autoUpdateDescription": "When QManager is updated, also update Tiny Tailscale if a newer build is included. Your login is kept; Tailscale drops for about 15 seconds while it restarts.",
+})
+toast = data["tailscale"]["toast"]
+toast.update({
+    "autoUpdateEnabled": "Tailscale will update with QManager updates",
+    "autoUpdateDisabled": "Tailscale will not update with QManager updates",
+    "autoUpdateFailed": "Could not change the auto-update setting",
 })
 locale.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
 PY
@@ -6266,6 +6417,8 @@ PY
     grep -q 'updateTailscale={hook.updateTailscale}' "$page" || fail "Could not pass updateTailscale to ConnectionCard"
     grep -q 'tailscale.connection.updateAvailable' "$card" || fail "Could not add the Tailscale update notice to connection-card.tsx"
     grep -q '"update": "Update Tiny Tailscale"' "$locale" || fail "Could not add Tailscale update strings to en/common.json"
+    grep -q 'id="tailscale-auto-update"' "$card" || fail "Could not add the Tailscale auto-update switch to connection-card.tsx"
+    grep -q 'action: "set_auto_update"' "$hook" || fail "Could not add setAutoUpdate to use-tailscale.ts"
     echo "  [tailscale] Connection card: update notice + Update Tiny Tailscale button"
 }
 
