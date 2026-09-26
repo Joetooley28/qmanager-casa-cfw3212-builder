@@ -5903,10 +5903,11 @@ if [ -f "$TAILSCALE_DIR/tailscaled" ]; then
     echo "Downloading $TAILSCALE_URL"
     curl -fL -o "$TAILSCALE_TARBALL" "$TAILSCALE_URL" \
         || upgrade_fail "download failed, check the internet connection. The installed version was left in place"
-    echo "Extracting..."
+    echo "Verifying SHA-256..."
     got_sha=$(sha256sum "$TAILSCALE_TARBALL" | awk '{print $1}')
     [ "$got_sha" = "$TAILSCALE_SHA256" ] \
         || upgrade_fail "the download failed its checksum check (expected $TAILSCALE_SHA256, got ${got_sha:-none}). The installed version was left in place"
+    echo "Extracting..."
     tar -xzf "$TAILSCALE_TARBALL" || upgrade_fail "could not extract the download. The installed version was left in place"
     rm -f "$TAILSCALE_TARBALL"
     new_bin="$stage/$TAILSCALE_EXTRACT_DIR/tailscaled"
