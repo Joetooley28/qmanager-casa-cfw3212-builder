@@ -5835,9 +5835,9 @@ ts_ver_lt() {
 ts_nrestarts() { systemctl show -p NRestarts tailscaled 2>/dev/null | cut -d= -f2; }
 
 if [ -f "$TAILSCALE_DIR/tailscaled" ]; then
+    # /usr/bin is on Casa's read-only rootfs; the CLI link lives in /usrdata.
     mkdir -p /usrdata/root/bin
     ln -sf "$TAILSCALE_DIR/tailscale" /usrdata/root/bin/tailscale
-    ln -sf "$TAILSCALE_DIR/tailscale" /usr/bin/tailscale
 
     cur_ver=$(ts_ver_of "$TAILSCALE_DIR/tailscaled")
     echo "Installed: ${cur_ver:-unknown}   Pinned: $TAILSCALE_VERSION"

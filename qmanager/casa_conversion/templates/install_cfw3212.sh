@@ -1930,12 +1930,13 @@ else
     if "$BIN_DIR/qmanager_tailscale_mgr" upgrade; then
         _ts_waited=0
         while [ "$_ts_waited" -lt 300 ]; do
-            _ts_state=$(jq -r '.status // empty' "$_ts_status_file" 2>/dev/null || true)
+            # sed, not jq: jq in /usrdata/bin is not on this script's PATH.
+            _ts_state=$(sed -n 's/.*"status":"\([a-z]*\)".*/\1/p' "$_ts_status_file" 2>/dev/null || true)
             [ "$_ts_state" = "complete" ] || [ "$_ts_state" = "error" ] && break
             sleep 3
             _ts_waited=$((_ts_waited + 3))
         done
-        _ts_msg=$(jq -r '.message // empty' "$_ts_status_file" 2>/dev/null || true)
+        _ts_msg=$(sed -n 's/.*"message":"\([^"]*\)".*/\1/p' "$_ts_status_file" 2>/dev/null || true)
     fi
     if [ "$_ts_state" = "complete" ]; then
         info "$_ts_msg"
