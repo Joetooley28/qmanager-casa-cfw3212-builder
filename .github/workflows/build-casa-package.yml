@@ -647,6 +647,8 @@ jobs:
 
           Default uninstall removes QManager services, `/usrdata/qmanager`, and QManager-installed binaries under `/usrdata/bin`. It preserves `/etc/qmanager` and `/usrdata/opt`.
 
+          Tailscale is not removed by a default uninstall: if you installed it from the Tailscale page, it keeps running (so the router stays reachable on your tailnet), but there is no QManager page left to manage it. To remove it too, use **Uninstall** in the **Remove Tailscale** card at the bottom of the Tailscale page before uninstalling QManager, or uninstall with `--purge`.
+
           ### Online Uninstall
 
           SSH into the router from Windows PowerShell:
