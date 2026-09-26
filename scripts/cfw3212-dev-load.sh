@@ -114,7 +114,7 @@ cmd_install() {
   fi
   note "Running offline installer on $BOX ..."
   ssh "$BOX" 'trap "rm -rf /tmp/qmanager.tar.gz /tmp/qmanager_install" EXIT
-    set -e; cd /tmp; tar xzf qmanager.tar.gz; rm -f qmanager.tar.gz
+    set -e; cd /tmp; tar xzf qmanager.tar.gz  # installer pre-flight needs the tarball; the EXIT trap removes it
     sh /tmp/qmanager_install/install_cfw3212.sh'
   note "Install finished; removed the package and install files from $BOX:/tmp. Check the UI / About Device."
 }
