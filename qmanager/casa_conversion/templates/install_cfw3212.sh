@@ -727,6 +727,9 @@ PROBE_NAME="cp.cloudflare.com"
 PROBE_TIMEOUT=3
 FAIL_COUNT_FILE="/tmp/qmanager_dns_casa_fails"
 REPAIR_FLAG="/tmp/qmanager_dns_repair_active"
+# Servers of the last working repair; re-applied at once when Casa overwrites
+# resolv.conf again (reconnect), then verified on the next pass.
+LAST_UPSTREAM="/tmp/qmanager_dns_last_upstream"
 # qmanager_dns_watch (runs this the moment Casa rewrites resolv.conf) and the
 # 30 s timer can overlap; only one reconcile runs at a time.
 LOCK_DIR="/tmp/qmanager_dns_reconcile.lock"
@@ -839,11 +842,12 @@ nameserver $ns"
         write_resolv "$content" && log "resolv.conf -> $* (Casa DNS not answering)"
     fi
     : > "$REPAIR_FLAG" 2>/dev/null || true
+    printf '%s\n' "$*" > "$LAST_UPSTREAM" 2>/dev/null || true
 }
 
 # Hand resolv.conf back to Casa's servers if it still holds our repair.
 release_resolv() {
-    rm -f "$REPAIR_FLAG" 2>/dev/null || true
+    rm -f "$REPAIR_FLAG" "$LAST_UPSTREAM" 2>/dev/null || true
     resolv_is_ours || return 0
     content="# modem DNS server list"
     for ns in $(rdb_read link.policy.1.dns1) $(rdb_read link.policy.1.dns2); do
@@ -928,6 +932,15 @@ main() {
         # answers, so one slow probe does not rewrite resolv.conf (dnsmasq runs
         # with --clear-on-reload, so every change also empties its cache).
         current="$(current_repair_servers)"
+        last="$(cat "$LAST_UPSTREAM" 2>/dev/null)"
+        if [ -z "$current" ] && [ -f "$REPAIR_FLAG" ] && [ -n "$last" ]; then
+            # Casa just overwrote an active repair (reconnect): put the last
+            # working servers back first so LAN DNS returns at once, then the
+            # sticky check below verifies them and re-probes if they are dead.
+            # shellcheck disable=SC2086
+            repair_resolv $last
+            current="$last"
+        fi
         keep=false
         case " $current " in
             *" 1.1.1.1 "*) ;;   # public fallback: prefer carrier again when it answers
