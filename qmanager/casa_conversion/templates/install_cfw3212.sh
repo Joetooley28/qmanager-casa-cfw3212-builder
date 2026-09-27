@@ -727,6 +727,9 @@ PROBE_NAME="cp.cloudflare.com"
 PROBE_TIMEOUT=3
 FAIL_COUNT_FILE="/tmp/qmanager_dns_casa_fails"
 REPAIR_FLAG="/tmp/qmanager_dns_repair_active"
+# qmanager_dns_watch (runs this the moment Casa rewrites resolv.conf) and the
+# 30 s timer can overlap; only one reconcile runs at a time.
+LOCK_DIR="/tmp/qmanager_dns_reconcile.lock"
 # Consecutive ticks with Casa's DNS not answering before resolv.conf is
 # repointed, so one slow probe does not switch DNS.
 CONFIRM_FAILS=2
@@ -877,6 +880,18 @@ write_state() {
 }
 
 main() {
+    now="$(date +%s)"
+    if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+        # A crashed run must not block reconciling forever (lock older than 60 s).
+        since="$(cat "$LOCK_DIR/since" 2>/dev/null || echo 0)"
+        case "$since" in ''|*[!0-9]*) since=0 ;; esac
+        [ $((now - since)) -gt 60 ] || exit 0
+        rm -rf "$LOCK_DIR"
+        mkdir "$LOCK_DIR" 2>/dev/null || exit 0
+    fi
+    echo "$now" > "$LOCK_DIR/since" 2>/dev/null || true
+    trap 'rm -rf "$LOCK_DIR" 2>/dev/null' EXIT
+
     remove_legacy_block || true
 
     ippt=false; ippt_enabled && ippt=true
@@ -894,6 +909,10 @@ main() {
 
     confirmed=false
     { [ "$fails" -ge "$CONFIRM_FAILS" ] || [ -f "$REPAIR_FLAG" ]; } && confirmed=true
+    # Casa's list holds only the passthrough placeholder / this box's own
+    # addresses (what it writes after every reconnect under IP Passthrough):
+    # broken by definition, so repair now instead of confirming on a 2nd tick.
+    [ -z "$(casa_upstream)" ] && confirmed=true
     reach=false
 
     if [ "$casa_ok" = "true" ]; then
@@ -956,6 +975,41 @@ esac
 main
 EOF
 chmod 755 "$SRC_SCRIPTS/usr/bin/qmanager_dns_reconcile" 2>/dev/null || true
+
+cat > "$SRC_SCRIPTS/usr/bin/qmanager_dns_watch" << 'EOF'
+#!/bin/sh
+# qmanager_dns_watch -- Casa CFW-3212: run the DNS reconciler the moment Casa
+# rewrites /var/run/resolv.conf. Casa does that after every data-session
+# re-establish (LTE <-> 5G switch, signal blip, reboot) and, under IP
+# Passthrough, leaves only the placeholder 192.0.0.1 there, so LAN DNS was dead
+# until the next 30 s reconciler tick (~40 s seen on Box 2). Checking every 2 s
+# costs one file read; the reconciler only runs when the content changes. The
+# 30 s timer stays as the safety net.
+RESOLV="/var/run/resolv.conf"
+MARK="# qmanager-dns-reconcile:"
+FAIL_COUNT_FILE="/tmp/qmanager_dns_casa_fails"
+last=""
+while :; do
+    cur="$(cat "$RESOLV" 2>/dev/null)"
+    if [ "$cur" != "$last" ]; then
+        case "$cur" in
+            "$MARK"*) ;;   # our own repair
+            *)
+                /usrdata/bin/qmanager_dns_reconcile --once >/dev/null 2>&1
+                # Real carrier servers that did not answer are confirmed on a
+                # second check; do that 5 s later instead of waiting 30 s.
+                if [ "$(cat "$FAIL_COUNT_FILE" 2>/dev/null)" = "1" ]; then
+                    sleep 5
+                    /usrdata/bin/qmanager_dns_reconcile --once >/dev/null 2>&1
+                fi
+                ;;
+        esac
+        last="$(cat "$RESOLV" 2>/dev/null)"
+    fi
+    sleep 2
+done
+EOF
+chmod 755 "$SRC_SCRIPTS/usr/bin/qmanager_dns_watch" 2>/dev/null || true
 info "Casa LAN DNS reconciler staged"
 
 # Casa keeps the upstream SIM Profile UI/manual apply path enabled. Profiles
@@ -1738,6 +1792,30 @@ ln -sf "$SYSTEMD_DIR/qmanager-dns-reconcile.timer" \
 systemctl daemon-reload 2>/dev/null || true
 systemctl start qmanager-dns-reconcile.timer 2>/dev/null || true
 info "Casa LAN DNS reconciler timer installed (30s)"
+
+# Reacts within ~2 s when Casa rewrites resolv.conf (reconnect / reboot).
+cat > "$SYSTEMD_DIR/qmanager-dns-watch.service" << 'EOF'
+[Unit]
+Description=QManager Casa DNS watcher (repairs DNS right after reconnects)
+After=dnsmasq_service@0.service
+
+[Service]
+Type=simple
+ExecStart=/usrdata/bin/qmanager_dns_watch
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+sed -i 's/\r$//' "$SYSTEMD_DIR/qmanager-dns-watch.service" 2>/dev/null || true
+mkdir -p "$SYSTEMD_DIR/multi-user.target.wants"
+ln -sf "$SYSTEMD_DIR/qmanager-dns-watch.service" \
+    "$SYSTEMD_DIR/multi-user.target.wants/qmanager-dns-watch.service" 2>/dev/null || true
+systemctl daemon-reload 2>/dev/null || true
+systemctl restart qmanager-dns-watch.service 2>/dev/null \
+    || warn "qmanager-dns-watch did not start; DNS repair falls back to the 30 s timer"
+info "Casa DNS watcher installed (repairs within ~2 s of a reconnect)"
 
 # --- Scheduled Reboot / Tower Lock schedule timers (config-driven re-arm) -----
 # Upstream v0.1.14+ generates these .timer units at save time and its installer
