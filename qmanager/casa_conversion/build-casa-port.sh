@@ -6717,7 +6717,39 @@ PY
     grep -q "^[[:space:]]*trap 'exit 0' INT TERM$" "$wc" \
         || fail "Could not make qmanager_watchcat exit on INT/TERM"
     sh -n "$wc" || fail "qmanager_watchcat has a syntax error after the stop-exit patch"
-    echo "  [watchcat] exits cleanly on stop (INT/TERM) instead of being SIGKILLed"
+
+    # The Watchdog page's backend stops the daemon first and saves enabled=0
+    # afterwards, so the daemon's own exit handler still read "enabled" and
+    # left the state file on "monitor" (the page could show it monitoring while
+    # off). Mark the state file disabled right after enabled=0 is saved.
+    local cgi="$TARGET/scripts/www/cgi-bin/quecmanager/monitoring/watchdog.sh"
+    [ -f "$cgi" ] || fail "Target missing monitoring/watchdog.sh"
+    python3 - "$cgi" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+anchor = "            qm_config_set watchcat enabled 0\n"
+if text.count(anchor) != 1:
+    raise SystemExit(f"watchdog.sh: expected one 'qm_config_set watchcat enabled 0', found {text.count(anchor)}")
+if 'WATCHCAT_STATE="/tmp/qmanager_watchcat.json"' not in text:
+    raise SystemExit("watchdog.sh: WATCHCAT_STATE definition not found")
+text = text.replace(anchor, anchor + """            # Casa: the daemon exited before enabled=0 was saved, so its exit
+            # handler still wrote "monitor"; show the Watchdog as disabled.
+            if [ -f "$WATCHCAT_STATE" ]; then
+                jq '.enabled = false | .state = "disabled" | .ping_status = "disabled"' "$WATCHCAT_STATE" \\
+                    > "$WATCHCAT_STATE.tmp" 2>/dev/null \\
+                    && mv -f "$WATCHCAT_STATE.tmp" "$WATCHCAT_STATE" \\
+                    || rm -f "$WATCHCAT_STATE.tmp"
+            fi
+""")
+path.write_text(text)
+PY
+    grep -q '.state = "disabled"' "$cgi" \
+        || fail "Could not mark the watchcat state disabled in monitoring/watchdog.sh"
+    sh -n "$cgi" || fail "monitoring/watchdog.sh has a syntax error after the disabled-state patch"
+    echo "  [watchcat] exits cleanly on stop (INT/TERM) instead of being SIGKILLed; page shows disabled after turning it off"
 }
 
 patch_casa_single_sim_slot_cfw3212() {
