@@ -636,12 +636,12 @@ jobs:
           Then run these two commands from Windows PowerShell in that folder:
 
               scp -O .\TAR_NAME_PLACEHOLDER root@192.168.1.1:/tmp/qmanager.tar.gz
-              ssh root@192.168.1.1 "rm -rf /tmp/qmanager_install && tar xzf /tmp/qmanager.tar.gz -C /tmp && sh /tmp/qmanager_install/install_cfw3212.sh"
+              ssh root@192.168.1.1 "rm -rf /tmp/qmanager_install && tar xzf /tmp/qmanager.tar.gz -C /tmp qmanager_install/install_cfw3212.sh && sh /tmp/qmanager_install/install_cfw3212.sh"
 
           Linux/WSL users can use the same two-step flow:
 
               scp -O TAR_NAME_PLACEHOLDER root@192.168.1.1:/tmp/qmanager.tar.gz
-              ssh root@192.168.1.1 "rm -rf /tmp/qmanager_install && tar xzf /tmp/qmanager.tar.gz -C /tmp && sh /tmp/qmanager_install/install_cfw3212.sh"
+              ssh root@192.168.1.1 "rm -rf /tmp/qmanager_install && tar xzf /tmp/qmanager.tar.gz -C /tmp qmanager_install/install_cfw3212.sh && sh /tmp/qmanager_install/install_cfw3212.sh"
 
           ## Uninstall
 
@@ -668,12 +668,12 @@ jobs:
           If the router has no internet, use the same downloaded `.tar.gz` and run these two commands from Windows PowerShell:
 
               scp -O .\TAR_NAME_PLACEHOLDER root@192.168.1.1:/tmp/qmanager.tar.gz
-              ssh root@192.168.1.1 "rm -rf /tmp/qmanager_install && tar xzf /tmp/qmanager.tar.gz -C /tmp && sh /tmp/qmanager_install/uninstall_cfw3212.sh --force --no-reboot"
+              ssh root@192.168.1.1 "rm -rf /tmp/qmanager_install && tar xzf /tmp/qmanager.tar.gz -C /tmp qmanager_install/uninstall_cfw3212.sh && sh /tmp/qmanager_install/uninstall_cfw3212.sh --force --no-reboot"
 
           Linux/WSL:
 
               scp -O TAR_NAME_PLACEHOLDER root@192.168.1.1:/tmp/qmanager.tar.gz
-              ssh root@192.168.1.1 "rm -rf /tmp/qmanager_install && tar xzf /tmp/qmanager.tar.gz -C /tmp && sh /tmp/qmanager_install/uninstall_cfw3212.sh --force --no-reboot"
+              ssh root@192.168.1.1 "rm -rf /tmp/qmanager_install && tar xzf /tmp/qmanager.tar.gz -C /tmp qmanager_install/uninstall_cfw3212.sh && sh /tmp/qmanager_install/uninstall_cfw3212.sh --force --no-reboot"
 
           ### Purge
 

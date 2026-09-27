@@ -15,8 +15,9 @@ VERSION_FILE="/etc/qmanager/VERSION"
 UPDATES_DIR="/etc/qmanager/updates"
 STATUS_FILE="/tmp/qmanager_update.json"
 PID_FILE="/tmp/qmanager_update.pid"
-STAGED_TARBALL="/tmp/qmanager_staged.tar.gz"
-STAGED_VERSION="/tmp/qmanager_staged_version"
+# Casa: staged on flash by qmanager_update (see its STAGE_ROOT).
+STAGED_TARBALL="/usrdata/qmanager_stage/qmanager_staged.tar.gz"
+STAGED_VERSION="/usrdata/qmanager_stage/qmanager_staged_version"
 UPDATER="/usrdata/bin/qmanager_update"
 
 get_current_version() {

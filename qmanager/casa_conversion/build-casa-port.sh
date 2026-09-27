@@ -754,8 +754,10 @@ set -e
 
 TARBALL="${1:-/tmp/qmanager.tar.gz}"
 [ -f "$TARBALL" ] || { echo "Missing tarball: $TARBALL" >&2; exit 1; }
+[ "$TARBALL" = /tmp/qmanager.tar.gz ] || ln -sf "$TARBALL" /tmp/qmanager.tar.gz
 rm -rf /tmp/qmanager_install
-tar xzf "$TARBALL" -C /tmp
+# Only the installer script comes out here; it unpacks the rest on /usrdata.
+tar xzf /tmp/qmanager.tar.gz -C /tmp qmanager_install/install_cfw3212.sh
 exec sh /tmp/qmanager_install/install_cfw3212.sh
 EOF
     chmod 755 "$TARGET/qmanager-installer-cfw3212.sh"
@@ -6646,6 +6648,41 @@ PY
     echo "  [tailscale] install card shell command: /usrdata/bin/qmanager_tailscale_mgr install"
 }
 
+patch_casa_stage_boot_cleanup_cfw3212() {
+    # Install/update staging moved from /tmp (RAM, wiped at reboot) to
+    # /usrdata/qmanager_stage (flash). install_cfw3212.sh deletes it on exit,
+    # but a power cut or crash mid-install would leave ~30 MB on flash; remove
+    # it at boot like the old /tmp copy was. qmanager-setup is also restarted by
+    # the installer, so skip while an install or Software Update is running.
+    local setup="$TARGET/scripts/usr/bin/qmanager_setup"
+    [ -f "$setup" ] || fail "Target missing qmanager_setup"
+
+    python3 - "$setup" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+lines = path.read_text().split("\n")
+if not lines or not lines[0].startswith("#!"):
+    raise SystemExit("qmanager_setup: expected a shebang on line 1")
+block = '''
+# Casa: leftover install/update staging on flash (package + unpacked copy) from
+# an interrupted install. Skipped while an install or Software Update runs,
+# because the installer restarts this service.
+if [ -d /usrdata/qmanager_stage ] \\
+    && ! ps 2>/dev/null | grep -q '[i]nstall_cfw3212\\.sh' \\
+    && ! { [ -f /tmp/qmanager_update.pid ] && [ -d "/proc/$(cat /tmp/qmanager_update.pid 2>/dev/null)" ]; }; then
+    rm -rf /usrdata/qmanager_stage
+fi'''.split("\n")
+path.write_text("\n".join(lines[:1] + block + lines[1:]))
+PY
+
+    grep -q 'rm -rf /usrdata/qmanager_stage' "$setup" \
+        || fail "Could not add the staging cleanup to qmanager_setup"
+    sh -n "$setup" || fail "qmanager_setup has a syntax error after the staging cleanup patch"
+    echo "  [stage] qmanager_setup removes leftover /usrdata/qmanager_stage at boot"
+}
+
 patch_casa_single_sim_slot_cfw3212() {
     # Casa CFW-3212 has one SIM slot. Cellular Settings' SIM Slot control would
     # switch the modem to an empty slot 2 (AT+QUIMSLOT) and drop the data
@@ -9431,6 +9468,7 @@ apply_casa_overlays() {
     patch_casa_tailscale_install_label_cfw3212
     patch_casa_tailscale_update_ui_cfw3212
     patch_casa_tailscale_shell_hint_cfw3212
+    patch_casa_stage_boot_cleanup_cfw3212
     patch_casa_poller_boot_identity_cfw3212
     patch_casa_ippt_disable_clears_service_cfw3212
     patch_casa_band_locking_persist_cfw3212
@@ -9470,7 +9508,7 @@ Build: @VERSION_NAME@-cfw3212.1
 ## Install
 
 - Copy `qmanager-build/qmanager.tar.gz` to `/tmp/qmanager.tar.gz` on the router.
-- Run: `tar xzf /tmp/qmanager.tar.gz -C /tmp/`
+- Run: `tar xzf /tmp/qmanager.tar.gz -C /tmp qmanager_install/install_cfw3212.sh` (only the installer script; it unpacks the rest on `/usrdata` and deletes it afterwards)
 - Run: `sh /tmp/qmanager_install/install_cfw3212.sh`
 - Confirm the installer reports HTTP `9080` and HTTPS `9000`.
 

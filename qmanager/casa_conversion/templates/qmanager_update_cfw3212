@@ -8,8 +8,14 @@ STATUS_FILE="/tmp/qmanager_update.json"
 PID_FILE="/tmp/qmanager_update.pid"
 VERSION_FILE="/etc/qmanager/VERSION"
 UPDATES_DIR="/etc/qmanager/updates"
-STAGED_TARBALL="/tmp/qmanager_staged.tar.gz"
-STAGED_VERSION="/tmp/qmanager_staged_version"
+# Casa: downloads are staged on /usrdata (flash), not /tmp (RAM): a ~10.5 MB
+# package sitting in RAM until Install, plus unpacking, ran boxes with
+# Tailscale out of memory. install_cfw3212.sh deletes STAGE_ROOT when it exits.
+STAGE_ROOT="/usrdata/qmanager_stage"
+STAGED_TARBALL="$STAGE_ROOT/qmanager_staged.tar.gz"
+STAGED_VERSION="$STAGE_ROOT/qmanager_staged_version"
+# Flash needed for the download plus unpacking it at install time.
+STAGE_MIN_FREE_KB=61440
 PACKAGE_REPO="${QMANAGER_CFW3212_REPO:-Joetooley28/qmanager-casa-cfw3212-package}"
 
 export PATH="/usrdata/bin:/usrdata/opt/bin:/usrdata/opt/sbin:/usr/bin:/usr/sbin:/bin:/sbin:$PATH"
@@ -42,7 +48,11 @@ write_status() {
 
 cleanup() {
     rm -f "$PID_FILE"
-    rm -rf /tmp/qmanager_update_stage /tmp/qmanager_update_install
+    rm -rf "$STAGE_ROOT/download" /tmp/qmanager_update_stage /tmp/qmanager_update_install
+    # A failed or aborted install never leaves the package behind on flash.
+    if [ "${MODE:-}" = "install_staged" ]; then
+        rm -f "$STAGED_TARBALL" "$STAGED_VERSION" /tmp/qmanager.tar.gz
+    fi
 }
 
 die() {
@@ -119,8 +129,13 @@ if [ "$MODE" = "download" ]; then
 
     validate_tag "$VERSION" || die "Invalid Casa release tag"
 
-    work_dir="/tmp/qmanager_update_stage"
-    rm -rf "$work_dir"
+    # Drop any earlier download (and pre-flash-staging leftovers in RAM) first.
+    rm -rf "$STAGE_ROOT" /tmp/qmanager_update_stage
+    rm -f /tmp/qmanager_staged.tar.gz /tmp/qmanager_staged_version
+    free_kb=$(df /usrdata 2>/dev/null | awk 'NR==2 {print $4}')
+    [ "${free_kb:-0}" -ge "$STAGE_MIN_FREE_KB" ] \
+        || die "Not enough free space on /usrdata ($((${free_kb:-0} / 1024)) MB free, $((STAGE_MIN_FREE_KB / 1024)) MB needed)."
+    work_dir="$STAGE_ROOT/download"
     mkdir -p "$work_dir" || die "Could not create update work directory"
 
     # Resolve the release asset name. Builds from 99c5c47 on carry the full

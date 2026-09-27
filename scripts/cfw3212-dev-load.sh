@@ -103,20 +103,23 @@ cmd_install() {
   fetch_tarball
   check_box
   confirm "Full offline install of $(basename "$TARBALL") onto '$BOX' (overwrites the current install)?"
-  # /tmp on the router is RAM-backed tmpfs (~188 MB total): clear leftovers from a
-  # previous or dropped copy first, and never leave the package behind afterwards.
-  note "Clearing old install files from $BOX:/tmp ..."
-  ssh "$BOX" 'rm -rf /tmp/qmanager.tar.gz /tmp/qmanager_install'
-  note "Copying package to $BOX:/tmp/qmanager.tar.gz ..."
-  if ! scp -O "$TARBALL" "$BOX:/tmp/qmanager.tar.gz"; then
-    ssh "$BOX" 'rm -f /tmp/qmanager.tar.gz' || true
-    die "copy to '$BOX' failed (partial /tmp/qmanager.tar.gz removed); retry"
+  # /tmp on the router is RAM (~183 MB total, often only ~20-30 MB free), so the
+  # package goes to /usrdata (flash) with a /tmp symlink, and only the installer
+  # script is unpacked here; install_cfw3212.sh unpacks the rest on /usrdata and
+  # deletes the package, the link and /usrdata/qmanager_stage when it exits.
+  note "Clearing old install files from $BOX ..."
+  ssh "$BOX" 'rm -rf /usrdata/qmanager_stage /tmp/qmanager.tar.gz /tmp/qmanager_install; mkdir -p /usrdata/qmanager_stage'
+  note "Copying package to $BOX:/usrdata/qmanager_stage/qmanager.tar.gz ..."
+  if ! scp -O "$TARBALL" "$BOX:/usrdata/qmanager_stage/qmanager.tar.gz"; then
+    ssh "$BOX" 'rm -rf /usrdata/qmanager_stage' || true
+    die "copy to '$BOX' failed (partial copy removed); retry"
   fi
   note "Running offline installer on $BOX ..."
-  ssh "$BOX" 'trap "rm -rf /tmp/qmanager.tar.gz /tmp/qmanager_install" EXIT
-    set -e; cd /tmp; tar xzf qmanager.tar.gz  # installer pre-flight needs the tarball; the EXIT trap removes it
+  ssh "$BOX" 'trap "rm -rf /usrdata/qmanager_stage /tmp/qmanager.tar.gz /tmp/qmanager_install" EXIT
+    set -e; ln -sf /usrdata/qmanager_stage/qmanager.tar.gz /tmp/qmanager.tar.gz
+    cd /tmp; tar xzf qmanager.tar.gz qmanager_install/install_cfw3212.sh
     sh /tmp/qmanager_install/install_cfw3212.sh'
-  note "Install finished; removed the package and install files from $BOX:/tmp. Check the UI / About Device."
+  note "Install finished; removed the package and install files from $BOX (/usrdata/qmanager_stage, /tmp). Check the UI / About Device."
 }
 
 cmd_hotpatch() {

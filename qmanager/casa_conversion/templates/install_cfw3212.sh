@@ -47,7 +47,13 @@ SYSTEMD_DIR="/etc/systemd/system"
 WANTS_DIR="/etc/systemd/system/multi-user.target.wants"
 
 TARBALL="/tmp/qmanager.tar.gz"
-EXTRACT_DIR="/tmp/qmanager_install"
+# Casa: the package is unpacked on /usrdata (flash), never in /tmp. /tmp is RAM
+# on the CFW-3212 (~183 MB total, often only ~20-30 MB free with Tailscale
+# running); packed + unpacked (~30 MB) in RAM ran the box out of memory and it
+# rebooted mid-install. Everything under STAGE_ROOT (and the package itself)
+# is deleted when this installer exits, whether it succeeds or fails.
+STAGE_ROOT="/usrdata/qmanager_stage"
+EXTRACT_DIR="$STAGE_ROOT/qmanager_install"
 SRC_FRONTEND="$EXTRACT_DIR/out"
 SRC_SCRIPTS="$EXTRACT_DIR/scripts"
 SRC_DEPS="$EXTRACT_DIR/dependencies"
@@ -355,16 +361,31 @@ info "/dev/smd11 present"
 
 [ -f "$TARBALL" ] || die "Tarball not found at $TARBALL"
 
+# Remove the package, its unpacked copy and any Software Update download when
+# this installer exits (success or failure), so nothing is left in RAM (/tmp)
+# or on flash (/usrdata/qmanager_stage).
+qm_stage_cleanup() {
+    rm -rf "$STAGE_ROOT" /tmp/qmanager_install /tmp/qmanager_update_install 2>/dev/null || true
+    rm -f "$TARBALL" /tmp/qmanager_staged.tar.gz /tmp/qmanager_staged_version 2>/dev/null || true
+    sync
+}
+trap qm_stage_cleanup EXIT
+
+rm -rf "$EXTRACT_DIR"
+unpacked_kb=$(tar tzvf "$TARBALL" 2>/dev/null | awk '{ s += $3 } END { printf "%d", s / 1024 }')
+[ "${unpacked_kb:-0}" -gt 0 ] || die "Could not read $TARBALL (corrupt package?)"
+need_kb=$((unpacked_kb + 20480))
 available_kb=$(df /usrdata | awk 'NR==2{print $4}')
-[ "$available_kb" -gt 30000 ] || die "/usrdata < 30MB free"
-info "/usrdata has $((available_kb/1024))MB free"
+[ "$available_kb" -gt "$need_kb" ] \
+    || die "/usrdata has $((available_kb/1024)) MB free; this install needs $((need_kb/1024)) MB (the package is unpacked there, not in RAM)"
+info "/usrdata has $((available_kb/1024)) MB free (package unpacks to $((unpacked_kb/1024)) MB on flash)"
 
 # --- Extract -----------------------------------------------------------------
 
 step "Extracting tarball"
 rm -rf "$EXTRACT_DIR"
 mkdir -p "$EXTRACT_DIR"
-tar xzf "$TARBALL" -C /tmp/
+tar xzf "$TARBALL" -C "$STAGE_ROOT/"
 [ -d "$SRC_SCRIPTS" ] || die "Expected $SRC_SCRIPTS after extraction"
 info "Extracted to $EXTRACT_DIR"
 

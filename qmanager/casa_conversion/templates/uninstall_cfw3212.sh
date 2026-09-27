@@ -100,6 +100,9 @@ rm -f /usrdata/bin/qmanager_* \
 info "Install files removed"
 
 step "Removing temporary QManager state"
+# Install/update staging on flash (package + unpacked copy); normally already
+# deleted by the installer, but remove leftovers from an interrupted run.
+rm -rf /usrdata/qmanager_stage 2>/dev/null || true
 rm -rf /tmp/qmanager_install \
     /tmp/qmanager_update \
     /tmp/qmanager_update_stage \
