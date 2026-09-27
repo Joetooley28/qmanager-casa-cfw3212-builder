@@ -733,14 +733,27 @@ resolv_is_ours() {
     grep -qxF "$RESOLV_MARK" "$RESOLV" 2>/dev/null
 }
 
+# Addresses owned by this box, one per line. Under IP Passthrough the placeholder
+# 192.0.0.1 is the box's own bridge0 address, so "asking Casa's DNS" there just
+# asks our dnsmasq again, which answers once repaired; counting that as Casa's
+# DNS working made the repair hand itself back and break DNS in a loop.
+local_addrs() {
+    ip -o addr show 2>/dev/null | awk '{ sub(/\/.*/, "", $4); print $4 }'
+}
+
 # Casa's own resolver list: link.policy.1.dns1/dns2 plus whatever Casa last
-# wrote into resolv.conf (skipped while resolv.conf holds our repair).
+# wrote into resolv.conf (skipped while resolv.conf holds our repair), minus the
+# passthrough placeholder range and any address of this box.
 casa_upstream() {
+    local_list="$(local_addrs)"
     {
         rdb_read link.policy.1.dns1
         rdb_read link.policy.1.dns2
         resolv_is_ours || sed -n 's/^nameserver[[:space:]][[:space:]]*//p' "$RESOLV" 2>/dev/null
-    } | grep -vE '^$|^0\.0\.0\.0$|^::$|^127\.|^::1$' | awk '!seen[$0]++'
+    } | grep -vE '^$|^0\.0\.0\.0$|^::$|^127\.|^::1$|^192\.0\.0\.[0-7]$' | awk '!seen[$0]++' \
+      | while read -r ns; do
+            printf '%s\n' "$local_list" | grep -qxF "$ns" || printf '%s\n' "$ns"
+        done
 }
 
 casa_upstream_ok() {
