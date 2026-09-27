@@ -103,8 +103,13 @@ copy_if_changed() {
         return 1
     fi
 
-    cp "$src" "$dst"
-    [ -n "$mode" ] && chmod "$mode" "$dst" 2>/dev/null || true
+    # Write next to the target, then rename over it: a running binary or daemon
+    # script keeps its old copy. Copying in place failed with "Text file busy"
+    # when the poller happened to be running jq/atcli, and rewriting a running
+    # shell script in place can make it read a half-new file.
+    cp "$src" "$dst.qmnew.$$" || { rm -f "$dst.qmnew.$$"; die "Could not copy $src to $dst"; }
+    [ -n "$mode" ] && chmod "$mode" "$dst.qmnew.$$" 2>/dev/null || true
+    mv -f "$dst.qmnew.$$" "$dst" || { rm -f "$dst.qmnew.$$"; die "Could not install $dst"; }
     return 0
 }
 
@@ -336,11 +341,13 @@ create_entware_wrapper() {
     local name="$1"
     local target="$2"
 
-    cat > "$BIN_DIR/$name" <<EOF
+    # Write then rename (see copy_if_changed): jq is in use by the poller.
+    cat > "$BIN_DIR/$name.qmnew" <<EOF
 #!/bin/sh
 exec $OPT_DIR/lib/ld-linux.so.3 --library-path $OPT_DIR/lib $target "\$@"
 EOF
-    chmod 755 "$BIN_DIR/$name"
+    chmod 755 "$BIN_DIR/$name.qmnew"
+    mv -f "$BIN_DIR/$name.qmnew" "$BIN_DIR/$name"
 }
 
 # --- Pre-flight --------------------------------------------------------------
@@ -1100,7 +1107,7 @@ if [ -f "$BIN_DIR/qmanager_ping" ]; then
     mv "$BIN_DIR/qmanager_ping" "$BIN_DIR/qmanager_ping_rust"
     chmod 755 "$BIN_DIR/qmanager_ping_rust"
 fi
-cat > "$BIN_DIR/qmanager_ping_shell" << 'EOF'
+cat > "$BIN_DIR/qmanager_ping_shell.qmnew" << 'EOF'
 #!/bin/sh
 
 LIB_DIR="${QM_LIB_DIR:-/usrdata/qmanager/lib}"
@@ -1341,8 +1348,9 @@ while true; do
     sleep "$interval_sec"
 done
 EOF
+mv -f "$BIN_DIR/qmanager_ping_shell.qmnew" "$BIN_DIR/qmanager_ping_shell"  # write then rename: may be running
 chmod 755 "$BIN_DIR/qmanager_ping_shell"
-cat > "$BIN_DIR/qmanager_ping" << 'EOF'
+cat > "$BIN_DIR/qmanager_ping.qmnew" << 'EOF'
 #!/bin/sh
 
 RUST="/usrdata/bin/qmanager_ping_rust"
@@ -1378,6 +1386,7 @@ fi
 
 exec "$SHELL_FALLBACK"
 EOF
+mv -f "$BIN_DIR/qmanager_ping.qmnew" "$BIN_DIR/qmanager_ping"  # write then rename: may be running
 chmod 755 "$BIN_DIR/qmanager_ping"
 info "Casa qmanager_ping wrapper installed (Rust primary, shell fallback)"
 fi
@@ -1493,7 +1502,7 @@ fi
 # the passwd database". Since the caller is already root, elevation is a no-op:
 # install a tiny shim that strips sudo's own options and execs the command
 # directly. If somehow not root, fall back to the bundled Entware sudo.
-cat > "$BIN_DIR/sudo" <<'SUDO_EOF'
+cat > "$BIN_DIR/sudo.qmnew" <<'SUDO_EOF'
 #!/bin/sh
 if [ "$(id -u)" -ne 0 ]; then
     exec /usrdata/opt/bin/sudo "$@"
@@ -1509,6 +1518,7 @@ while [ $# -gt 0 ]; do
 done
 exec "$@"
 SUDO_EOF
+mv -f "$BIN_DIR/sudo.qmnew" "$BIN_DIR/sudo"  # write then rename: may be running
 chmod 755 "$BIN_DIR/sudo"
 info "sudo shim installed at $BIN_DIR/sudo (Casa CGIs run as root)"
 # Keep the bundled Entware sudo as a setuid fallback for non-root callers.
