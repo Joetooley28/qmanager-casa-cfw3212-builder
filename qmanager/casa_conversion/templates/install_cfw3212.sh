@@ -2130,6 +2130,34 @@ else
     fi
 fi
 
+# --- Watchdog cooldown: 120 s on Casa, once per box ---------------------------
+# Casa starts a Tier 1 reconnect ~40 s after the trigger (Box 2, 2026-09-27),
+# so upstream's 60 s cooldown could judge it failed mid-reconnect and escalate
+# to a reboot. New installs are seeded with 120; a saved upstream-default 60 is
+# moved to 120 once. Any other value, or 60 chosen again later, is kept.
+WATCHDOG_COOLDOWN_MARK="$CONF_DIR/watchdog_cooldown_casa_applied"
+step "Watchdog cooldown default (120 s)"
+if [ -f "$WATCHDOG_COOLDOWN_MARK" ]; then
+    info "Already applied once on this box; keeping the saved Watchdog cooldown"
+else
+    (
+    PATH="$BIN_DIR:$OPT_DIR/bin:$PATH"
+    command -v qm_config_get >/dev/null 2>&1 && command -v qm_config_set >/dev/null 2>&1 \
+        || { printf "  ${RED}✗${NC}  %s\n" "Config helpers not loaded; Watchdog cooldown left unchanged (will retry on the next install)"; exit 1; }
+    _wd_cooldown=$(qm_config_get watchcat cooldown "" 2>/dev/null) || _wd_cooldown=""
+    if [ "$_wd_cooldown" = "60" ]; then
+        qm_config_set watchcat cooldown 120 \
+            && [ "$(qm_config_get watchcat cooldown "" 2>/dev/null)" = "120" ] \
+            || { printf "  ${RED}✗${NC}  %s\n" "Could not save Watchdog cooldown 120; left at 60 (will retry on the next install)"; exit 1; }
+        touch /tmp/qmanager_watchcat_reload 2>/dev/null || true
+        info "Watchdog cooldown 60 -> 120 s (Casa reconnects start late)"
+    else
+        info "Watchdog cooldown is ${_wd_cooldown:-default}; left unchanged"
+    fi
+    date +%s > "$WATCHDOG_COOLDOWN_MARK" 2>/dev/null || true
+    ) || true
+fi
+
 # --- Summary -----------------------------------------------------------------
 
 echo ""

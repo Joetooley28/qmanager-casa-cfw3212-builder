@@ -6683,6 +6683,41 @@ PY
     echo "  [stage] qmanager_setup removes leftover /usrdata/qmanager_stage at boot"
 }
 
+patch_casa_watchcat_cooldown_cfw3212() {
+    # Casa's connection manager starts a Tier 1 reconnect late: on Box 2
+    # (2026-09-27) the link went down ~40 s after the RDB trigger and was still
+    # down when upstream's 60 s cooldown ended, so Tier 1 was judged failed
+    # mid-reconnect (with Tier 4 on, that means a reboot). Casa default: 120 s.
+    # The installer moves a saved upstream-default 60 to 120 once per box.
+    local watchcat="$TARGET/scripts/usr/bin/qmanager_watchcat"
+    local cgi="$TARGET/scripts/www/cgi-bin/quecmanager/monitoring/watchdog.sh"
+    local config="$TARGET/scripts/usr/lib/qmanager/config.sh"
+
+    if ! upstream_has_v14_software_update; then
+        log "Watchdog cooldown Casa patch skipped (pre-v0.1.14 upstream)"
+        return 0
+    fi
+    [ -f "$watchcat" ] || fail "Target missing qmanager_watchcat (cooldown patch)"
+    [ -f "$cgi" ] || fail "Target missing monitoring/watchdog.sh (cooldown patch)"
+    [ -f "$config" ] || fail "Target missing lib/qmanager/config.sh (cooldown patch)"
+
+    grep -q '^CFG_COOLDOWN=60$' "$watchcat" || grep -q '^CFG_COOLDOWN=120 ' "$watchcat" \
+        || fail "qmanager_watchcat CFG_COOLDOWN=60 default not found"
+    sed -i 's/^CFG_COOLDOWN=60$/CFG_COOLDOWN=120  # Casa CFW-3212: reconnect starts late (upstream 60)/' "$watchcat"
+    grep -q '^CFG_COOLDOWN=120 ' "$watchcat" || fail "Could not set watchcat cooldown default to 120"
+
+    grep -q 'qm_config_get watchcat cooldown 60)' "$cgi" || grep -q 'qm_config_get watchcat cooldown 120)' "$cgi" \
+        || fail "monitoring/watchdog.sh cooldown default read not found"
+    sed -i 's/qm_config_get watchcat cooldown 60)/qm_config_get watchcat cooldown 120)/' "$cgi"
+    grep -q 'qm_config_get watchcat cooldown 120)' "$cgi" || fail "Could not set Watchdog CGI cooldown default to 120"
+
+    [ "$(grep -c '"cooldown": 60,' "$config")" = "1" ] || grep -q '"cooldown": 120,' "$config" \
+        || fail "config.sh seeded watchcat cooldown 60 not found exactly once"
+    sed -i 's/"cooldown": 60,/"cooldown": 120,/' "$config"
+    grep -q '"cooldown": 120,' "$config" || fail "Could not seed watchcat cooldown 120 in config.sh"
+    echo "  [watchcat] Casa default cooldown 120 s (daemon, CGI, seeded config)"
+}
+
 patch_casa_watchcat_stop_exit_cfw3212() {
     # Upstream bug (since at least v0.1.11): qmanager_watchcat's cleanup trap is
     # set for EXIT INT TERM but never exits, so on `systemctl stop` (turning the
@@ -9525,6 +9560,7 @@ apply_casa_overlays() {
     patch_casa_watchcat_tier2_off_cfw3212
     patch_casa_watchcat_ping_health_cfw3212
     patch_casa_watchcat_stop_exit_cfw3212
+    patch_casa_watchcat_cooldown_cfw3212
     merge_template_cfw3212 "components/nav-user.tsx"
     merge_template_cfw3212 "components/reboot/reboot-countdown.tsx"
     if ! upstream_has_v14_software_update; then
