@@ -53,6 +53,8 @@ cleanup() {
     if [ "${MODE:-}" = "install_staged" ]; then
         rm -f "$STAGED_TARBALL" "$STAGED_VERSION" /tmp/qmanager.tar.gz
     fi
+    # Leave no empty staging folder behind (e.g. after a failed download).
+    rmdir "$STAGE_ROOT" 2>/dev/null || true
 }
 
 die() {
