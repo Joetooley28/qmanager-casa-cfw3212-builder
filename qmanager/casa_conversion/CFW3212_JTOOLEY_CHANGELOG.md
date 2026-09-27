@@ -9,6 +9,7 @@
 - Ookla Speedtest works once the `speedtest` helper is installed. install handles if connected to internet.
 - Email Alerts can install and remove `msmtp` through the Casa Entware package flow. The Gmail app-password setup and an actual test send are the last things to confirm working on your end. (wired up, not tested yet) 
 - Discord Bot backend is now part of the Casa package, so you can plug in your own Discord bot token and user ID and try the UI. (wired up, not tested yet)
+- Cell Lock and Frequency Lock (Tower Lock page) come from upstream QManager and are wired up on Casa, but have not been tested on the CFW-3212 yet. (wired up, not tested yet)
 - SIM Profiles can be saved, applied, deleted, and deactivated by hand on Casa. That includes APN, TTL/HL, IMEI, and the modem reboot apply step. ICCID-matched auto-apply is available as an explicit on/off setting in the SIM Profiles page and stays off until you turn it on.
 - Custom DNS works from the QManager UI, including custom upstream resolvers for LAN clients without changing DHCP leases or rebooting the router.
 - IP Passthrough keeps the router/LAN DNS correct automatically: a background reconciler restores carrier DNS when passthrough is turned off and falls back to public DNS only when carrier DNS is actually unreachable. The dashboard shows whether IP Passthrough is on and where the router/LAN DNS is currently coming from.
