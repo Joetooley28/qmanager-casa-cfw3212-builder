@@ -13,10 +13,11 @@
 - SIM Profiles can be saved, applied, deleted, and deactivated by hand on Casa. That includes APN, TTL/HL, IMEI, and the modem reboot apply step. ICCID-matched auto-apply is available as an explicit on/off setting in the SIM Profiles page and stays off until you turn it on.
 - Custom DNS works from the QManager UI, including custom upstream resolvers for LAN clients without changing DHCP leases or rebooting the router.
 - DNS for the router and the devices behind it is kept working automatically: whenever the router's own DNS is broken (which happens after reconnects, especially with IP Passthrough), QManager points it at the carrier DNS servers that answer, or at public DNS if none do, within a few seconds. IP Passthrough is off by default (you can turn it back on); the dashboard shows whether it is on and where the router/LAN DNS is currently coming from.
+- The Watchdog works on Casa: when the connection stops answering it reconnects through the router's connection manager, waits 120 seconds, and only reboots the router if that did not help (tested on a CFW-3212 with a simulated outage).
 - The Reconnect Network menu action now uses Casa's connection manager path instead of forcing a modem deregister/re-register.
 - Reconnect Network now keeps a small progress window open so you can watch elapsed time, network registration, WAN IP, and internet status while the router comes back online.
 - Cellular → Radio Information now lets you keep multiple Active Cellular Bands expanded at the same time, so you can compare signal details across carriers without one row closing another.
-- Software Update → Version Management can now install a different version (including rollbacks). After the download verifies, the Install button switches to "Install Now" so the staged package actually gets applied instead of being left on disk.
+- Software Update → Version Management can now install a different version (including rollbacks). After the download verifies, the Install button switches to "Install Now" so the staged package actually gets applied instead of being left on disk. (v0.1.16 install flow not tested yet)
 - A handful of upstream modem-management actions stay blocked or limited on Casa because they'd let you push the modem into a state we don't want it in.
 
 ## v0.1.16-cfw3212.1
@@ -33,7 +34,7 @@
 - The **Video Optimizer** traffic mode is hidden on Casa for now while it is checked on this hardware.
 - Uses upstream's new connectivity monitor (ping daemon) instead of the older Casa build, so Cellular Information can show whether traffic is flowing over IPv4 or IPv6. Existing ping settings are migrated to the new four-target format automatically.
 - The IP Passthrough status now shows real values on Casa: the device passthrough is locked to, whether it sits behind an extra NAT (placeholder mode) or holds the carrier IP directly, and that the router answers its DNS.
-- APN changes from SIM Profiles and the APN page now go through the CFW-3212's own connection manager instead of writing to the modem and forcing a raw detach/re-attach. Deactivating a profile restores the APN the router had before, instead of blanking it. Credentials saved on the APN page are kept in the router's profile so they are not lost on reconnect.
+- APN changes from SIM Profiles and the APN page now go through the CFW-3212's own connection manager instead of writing to the modem and forcing a raw detach/re-attach. Deactivating a profile restores the APN the router had before, instead of blanking it. Credentials saved on the APN page are kept in the router's profile so they are not lost on reconnect. (not tested yet with a real APN change)
 - Reboots triggered by IMEI changes, MBN selection and the backup-IMEI check now use the router's managed reboot, like the Reboot button.
 - Cellular Settings no longer offers a SIM Slot switch, since CFW-3212 has one SIM slot (switching to the empty slot would drop the connection).
 - Connection details now show the correct carrier DNS servers. The CFW-3212 modem reports IPv4 and IPv6 details in a different layout, which made the page show the gateway as Primary DNS and a run-together string as Secondary DNS.
