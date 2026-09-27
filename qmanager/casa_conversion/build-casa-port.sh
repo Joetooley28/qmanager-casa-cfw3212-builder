@@ -6075,6 +6075,23 @@ once("#   qmanager_tailscale_mgr uninstall      Remove binaries, units, state\n"
      "#   qmanager_tailscale_mgr pinned_version Print the Tiny Tailscale version this package installs\n"
      "#   qmanager_tailscale_mgr uninstall      Remove binaries, units, state\n", "header usage")
 
+# Fresh install: /usr/bin is on Casa's read-only rootfs, so this link always
+# failed ("ln: /usr/bin/tailscale: Read-only file system" in the install log).
+# The /usrdata/root/bin link is the one that works; drop the other.
+once("""# CLI symlinks — BOTH required
+#   /usrdata/root/bin/tailscale — matches rgmii-toolkit convention
+#   /usr/bin/tailscale           — QManager's default root PATH includes this
+# -----------------------------------------------------------------------------
+mkdir -p /usrdata/root/bin
+ln -sf /usrdata/tailscale/tailscale /usrdata/root/bin/tailscale
+ln -sf /usrdata/tailscale/tailscale /usr/bin/tailscale
+""", """# CLI symlink (Casa: /usr/bin is on the read-only rootfs, so only /usrdata)
+#   /usrdata/root/bin/tailscale — matches rgmii-toolkit convention
+# -----------------------------------------------------------------------------
+mkdir -p /usrdata/root/bin
+ln -sf /usrdata/tailscale/tailscale /usrdata/root/bin/tailscale
+""", "fresh-install CLI symlink block")
+
 path.write_text(text)
 PY
 
@@ -6195,6 +6212,9 @@ PY
         || fail "Tailscale install and update must both check the SHA-256"
     if grep -qF '"$TAILSCALE_DIR/tailscale" update' "$ts_mgr"; then
         fail "qmanager_tailscale_mgr still runs 'tailscale update'"
+    fi
+    if grep -q '^ *ln -sf .*/usr/bin/tailscale$' "$ts_mgr"; then
+        fail "qmanager_tailscale_mgr still links /usr/bin/tailscale (read-only on Casa)"
     fi
     grep -q 'ACTION" = "update"' "$cgi" && grep -q 'ACTION" = "check_update"' "$cgi" \
         || fail "Could not add Tailscale check_update/update actions to vpn/tailscale.sh"
