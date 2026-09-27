@@ -127,6 +127,45 @@ rm -rf /tmp/qmanager_install \
     /var/lock/qmanager.pid 2>/dev/null || true
 info "Temporary files removed"
 
+step "Removing QManager automatic DNS repair"
+# The DNS reconciler (removed above) may have left a marked recovery block in
+# Casa's dnsmasq config (no-resolv + carrier/public servers) and pointed the
+# router's own /var/run/resolv.conf at dnsmasq. Both are automatic state, not
+# user settings, so remove them on every uninstall; Custom DNS stays unless
+# --purge. resolv.conf goes back to Casa's servers first, so dnsmasq (which
+# reads it once no-resolv is gone) never forwards to itself.
+QM_RESOLV="/var/run/resolv.conf"
+if grep -q '^# qmanager-dns-reconcile:' "$QM_RESOLV" 2>/dev/null; then
+    {
+        echo "# modem DNS server list"
+        for ns in $(rdb get link.policy.1.dns1 2>/dev/null) $(rdb get link.policy.1.dns2 2>/dev/null); do
+            echo "nameserver $ns"
+        done
+    } > "$QM_RESOLV.qm.$$" && mv -f "$QM_RESOLV.qm.$$" "$QM_RESOLV" \
+        && info "Router resolv.conf restored to Casa's DNS servers" \
+        || { rm -f "$QM_RESOLV.qm.$$"; info "Could not restore $QM_RESOLV"; }
+fi
+QM_DNSMASQ_CONF="/etc/data/dnsmasq.conf"
+if [ -f "$QM_DNSMASQ_CONF" ] && grep -q '^# QMANAGER-DNS-RECOVERY-BEGIN' "$QM_DNSMASQ_CONF"; then
+    QM_DNS_TMP="/tmp/qmanager-dnsmasq.recovery.$$"
+    if awk '
+        /^# QMANAGER-DNS-RECOVERY-BEGIN/ { skip = 1; next }
+        /^# QMANAGER-DNS-RECOVERY-END/   { skip = 0; next }
+        skip != 1 { print }
+    ' "$QM_DNSMASQ_CONF" > "$QM_DNS_TMP" && cat "$QM_DNS_TMP" > "$QM_DNSMASQ_CONF"; then
+        chown radio:radio "$QM_DNSMASQ_CONF" 2>/dev/null || true
+        chmod 0644 "$QM_DNSMASQ_CONF" 2>/dev/null || true
+        systemctl restart dnsmasq_service@0.service 2>/dev/null || true
+        info "QManager DNS recovery block removed; dnsmasq restarted"
+    else
+        info "Could not rewrite $QM_DNSMASQ_CONF; left unchanged"
+    fi
+    rm -f "$QM_DNS_TMP"
+else
+    info "No QManager DNS recovery block present"
+fi
+rm -f /tmp/qmanager_dns_casa_fails /tmp/qmanager_dns_carrier_fails /tmp/qmanager_dns_state.json 2>/dev/null || true
+
 if [ "$PURGE" = "1" ]; then
     step "Purging optional QManager-installed tools"
     systemctl stop --no-block tailscaled 2>/dev/null || true
