@@ -1622,7 +1622,7 @@ new = """t_net_dns() {
         poisoned=1
         resolver=$(ip -o -4 addr show dev bridge0 2>/dev/null \\
             | awk '{print $4}' | cut -d/ -f1 \\
-            | grep -E '^192\\.168\\.' | head -1)
+            | grep -vE '^192\\.0\\.0\\.' | head -1)
         [ -z "$resolver" ] && resolver="1.1.1.1"
     fi
     if [ "$poisoned" = "0" ] && command -v getent >/dev/null 2>&1; then
@@ -6683,6 +6683,43 @@ PY
     echo "  [stage] qmanager_setup removes leftover /usrdata/qmanager_stage at boot"
 }
 
+patch_casa_watchcat_stop_exit_cfw3212() {
+    # Upstream bug (since at least v0.1.11): qmanager_watchcat's cleanup trap is
+    # set for EXIT INT TERM but never exits, so on `systemctl stop` (turning the
+    # Watchdog off) it ran the cleanup and kept looping; systemd waited
+    # TimeoutStopSec=10, SIGKILLed it and the unit showed "failed" (the disable
+    # request hung ~10 s). Keep the cleanup on EXIT and make INT/TERM exit,
+    # which still runs it.
+    local wc="$TARGET/scripts/usr/bin/qmanager_watchcat"
+    [ -f "$wc" ] || fail "Target missing qmanager_watchcat"
+
+    python3 - "$wc" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+pat = re.compile(r"^(?P<ind>[ \t]*)trap '(?P<body>[^\n]*PID_FILE[^\n]*)' EXIT INT TERM$", re.M)
+matches = pat.findall(text)
+if len(matches) != 1:
+    raise SystemExit(f"qmanager_watchcat: expected one cleanup trap on EXIT INT TERM, found {len(matches)}")
+text = pat.sub(
+    lambda m: (f"{m.group('ind')}trap '{m.group('body')}' EXIT\n"
+               f"{m.group('ind')}# Casa: exit on INT/TERM (runs the EXIT cleanup); upstream kept looping,\n"
+               f"{m.group('ind')}# so systemctl stop waited 10 s, SIGKILLed it and left the unit failed.\n"
+               f"{m.group('ind')}trap 'exit 0' INT TERM"),
+    text,
+)
+path.write_text(text)
+PY
+
+    grep -q "^[[:space:]]*trap 'exit 0' INT TERM$" "$wc" \
+        || fail "Could not make qmanager_watchcat exit on INT/TERM"
+    sh -n "$wc" || fail "qmanager_watchcat has a syntax error after the stop-exit patch"
+    echo "  [watchcat] exits cleanly on stop (INT/TERM) instead of being SIGKILLed"
+}
+
 patch_casa_single_sim_slot_cfw3212() {
     # Casa CFW-3212 has one SIM slot. Cellular Settings' SIM Slot control would
     # switch the modem to an empty slot 2 (AT+QUIMSLOT) and drop the data
@@ -9455,6 +9492,7 @@ apply_casa_overlays() {
     patch_casa_watchdog_ui_single_sim_cfw3212
     patch_casa_watchcat_tier2_off_cfw3212
     patch_casa_watchcat_ping_health_cfw3212
+    patch_casa_watchcat_stop_exit_cfw3212
     merge_template_cfw3212 "components/nav-user.tsx"
     merge_template_cfw3212 "components/reboot/reboot-countdown.tsx"
     if ! upstream_has_v14_software_update; then
