@@ -785,6 +785,12 @@ write_resolv() {
     mv -f "$RESOLV.qm.$$" "$RESOLV" 2>/dev/null || { rm -f "$RESOLV.qm.$$"; return 1; }
 }
 
+# Servers in resolv.conf while it holds our repair (space-separated), else "".
+current_repair_servers() {
+    resolv_is_ours || return 0
+    sed -n 's/^nameserver[[:space:]][[:space:]]*//p' "$RESOLV" 2>/dev/null | tr '\n' ' ' | sed 's/ *$//'
+}
+
 # $@ = servers
 repair_resolv() {
     content="$RESOLV_MARK"
@@ -852,39 +858,53 @@ main() {
         echo "$fails" > "$FAIL_COUNT_FILE" 2>/dev/null || true
     fi
 
-    working=""
-    [ "$casa_ok" = "true" ] || working="$(working_carrier)"
-    reach=false
-    { [ "$casa_ok" = "true" ] || [ -n "$working" ]; } && reach=true
     confirmed=false
     { [ "$fails" -ge "$CONFIRM_FAILS" ] || [ -f "$REPAIR_FLAG" ]; } && confirmed=true
+    reach=false
 
     if [ "$casa_ok" = "true" ]; then
-        source="carrier"; upstream="casa"
+        reach=true; source="carrier"; upstream="casa"
         release_resolv
     elif [ "$confirmed" = "false" ]; then
         # First failed tick: confirm on the next one before changing anything.
         source="carrier"; upstream="casa"
+        [ -n "$(working_carrier)" ] && reach=true
         log "Casa DNS not answering ($fails/$CONFIRM_FAILS); confirming before repointing"
-    elif [ -n "$working" ]; then
-        # Casa's list is broken but the carrier's own resolvers answer: use them.
-        source="carrier"; upstream="$working"
-        # shellcheck disable=SC2086
-        repair_resolv $working
-    elif public_reachable; then
-        # Link works but no carrier resolver answers: public fallback.
-        source="public_fallback"; upstream="$PUBLIC_RESOLVERS"
-        # shellcheck disable=SC2086
-        repair_resolv $PUBLIC_RESOLVERS
     else
-        # Nothing answers: the link is down. Leave resolv.conf as it is.
-        if resolv_is_ours && grep -q '^nameserver 1\.1\.1\.1$' "$RESOLV" 2>/dev/null; then
-            source="public_fallback"
+        # Sticky: keep an active carrier repair while any of its servers still
+        # answers, so one slow probe does not rewrite resolv.conf (dnsmasq runs
+        # with --clear-on-reload, so every change also empties its cache).
+        current="$(current_repair_servers)"
+        keep=false
+        case " $current " in
+            *" 1.1.1.1 "*) ;;   # public fallback: prefer carrier again when it answers
+            *) for ns in $current; do answers "$ns" && { keep=true; break; }; done ;;
+        esac
+        if [ "$keep" = "true" ]; then
+            reach=true; source="carrier"; upstream="$current"
+            : > "$REPAIR_FLAG" 2>/dev/null || true
         else
-            source="carrier"
+            working="$(working_carrier)"
+            if [ -n "$working" ]; then
+                # Casa's list is broken but the carrier's own resolvers answer.
+                reach=true; source="carrier"; upstream="$working"
+                # shellcheck disable=SC2086
+                repair_resolv $working
+            elif public_reachable; then
+                # Link works but no carrier resolver answers: public fallback.
+                source="public_fallback"; upstream="$PUBLIC_RESOLVERS"
+                # shellcheck disable=SC2086
+                repair_resolv $PUBLIC_RESOLVERS
+            else
+                # Nothing answers: the link is down. Leave resolv.conf as it is.
+                case " $current " in
+                    *" 1.1.1.1 "*) source="public_fallback" ;;
+                    *) source="carrier" ;;
+                esac
+                upstream="unchanged (link down)"
+                log "no resolver answers; link down, leaving resolv.conf unchanged"
+            fi
         fi
-        upstream="unchanged (link down)"
-        log "no resolver answers; link down, leaving resolv.conf unchanged"
     fi
 
     custom_dns_active && source="custom"
