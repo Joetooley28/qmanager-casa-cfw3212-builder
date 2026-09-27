@@ -2070,6 +2070,44 @@ else
     warn "No curl or wget found — skipping Ookla download"
 fi
 
+# --- IP Passthrough: off by default, once per box ---------------------------
+# Casa ships every CFW-3212 with IP Passthrough on (default.conf). On IPv6-only
+# carriers such as T-Mobile there is no real IPv4 address to pass through: the
+# device gets the placeholder 192.0.0.2 and is NATed anyway, and on Box 2
+# (2026-09-27) 35-55% of its new connections failed while the box itself was
+# fine; with passthrough off it was 20/20. So QManager turns it off once per
+# box. If the user turns it back on, the marker keeps QManager from changing it
+# again. Same RDB writes as the IP Passthrough page's "disabled" apply.
+IPPT_DEFAULT_MARK="$CONF_DIR/ippt_default_off_applied"
+step "IP Passthrough default (off)"
+if [ -f "$IPPT_DEFAULT_MARK" ]; then
+    info "Already applied once on this box; keeping the current IP Passthrough setting"
+elif ! command -v rdb >/dev/null 2>&1; then
+    warn "rdb not found; IP Passthrough left unchanged"
+else
+    _ippt_pe=$(rdb get link.profile.1.ip_handover.enable 2>/dev/null || true)
+    _ippt_se=$(rdb get service.ip_handover.enable 2>/dev/null || true)
+    if [ "$_ippt_pe" = "1" ] || [ "$_ippt_se" = "1" ]; then
+        if rdb set link.profile.1.ip_handover.enable 0 2>/dev/null; then
+            rdb set service.ip_handover.enable 0 2>/dev/null || true
+            rdb setflags service.ip_handover.enable p 2>/dev/null || true
+            rdb set service.ip_handover.last_wwan_ip "" 2>/dev/null || true
+            rdb setflags service.ip_handover.last_wwan_ip p 2>/dev/null || true
+            rdb set link.profile.1.writeflag 1 2>/dev/null || true
+            _ippt_policy=$(rdb get link.policy.1.enable 2>/dev/null || true)
+            rdb set link.policy.1.trigger_connect "${_ippt_policy:-1}" 2>/dev/null || true
+            date +%s > "$IPPT_DEFAULT_MARK" 2>/dev/null || true
+            warn "IP Passthrough turned OFF (QManager default). The device on the LAN port now gets a normal address from this router; its connection drops for a moment while this applies."
+            warn "Turn it back on in Network > IP Passthrough if you need it; QManager will not change it again."
+        else
+            printf "  ${RED}✗${NC}  %s\n" "Could not switch IP Passthrough off (rdb write failed); left unchanged and will retry on the next install"
+        fi
+    else
+        info "IP Passthrough already off"
+        date +%s > "$IPPT_DEFAULT_MARK" 2>/dev/null || true
+    fi
+fi
+
 # --- Summary -----------------------------------------------------------------
 
 echo ""
