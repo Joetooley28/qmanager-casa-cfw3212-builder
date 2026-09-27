@@ -128,12 +128,11 @@ rm -rf /tmp/qmanager_install \
 info "Temporary files removed"
 
 step "Removing QManager automatic DNS repair"
-# The DNS reconciler (removed above) may have left a marked recovery block in
-# Casa's dnsmasq config (no-resolv + carrier/public servers) and pointed the
-# router's own /var/run/resolv.conf at dnsmasq. Both are automatic state, not
-# user settings, so remove them on every uninstall; Custom DNS stays unless
-# --purge. resolv.conf goes back to Casa's servers first, so dnsmasq (which
-# reads it once no-resolv is gone) never forwards to itself.
+# The DNS reconciler (removed above) may have repointed /var/run/resolv.conf
+# (used by dnsmasq and the router) at the carrier or public resolvers that
+# answer, and older builds kept a recovery block in Casa's dnsmasq config. Both
+# are automatic state, not user settings, so remove them on every uninstall;
+# Custom DNS stays unless --purge.
 QM_RESOLV="/var/run/resolv.conf"
 if grep -q '^# qmanager-dns-reconcile:' "$QM_RESOLV" 2>/dev/null; then
     {

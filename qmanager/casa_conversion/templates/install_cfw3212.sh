@@ -670,48 +670,46 @@ cat > "$SRC_SCRIPTS/usr/bin/qmanager_dns_reconcile" << 'EOF'
 #
 # Keeps DNS working for the router itself and for LAN clients. DHCP hands every
 # LAN client (including the IP Passthrough device, usually the user's own
-# router) 192.168.20.1, i.e. this box's dnsmasq, and dnsmasq forwards to Casa's
-# resolver list (link.policy.1.dns1/dns2 -> /etc/resolv.conf). Under IP
-# Passthrough Casa often leaves that list on the handover placeholder 192.0.0.1,
-# which REFUSES every query, while the carrier's real resolvers (frequently only
-# the IPv6 ones) keep working. Checking only "does a carrier resolver answer?"
-# missed this: it reported carrier DNS as fine while nothing could resolve.
+# router) 192.168.20.1, i.e. this box's dnsmasq, and both dnsmasq and the
+# router's own lookups use /etc/resolv.conf (-> /var/run/resolv.conf), which
+# Casa fills from link.policy.1.dns1/dns2. Under IP Passthrough Casa often
+# leaves that on the handover placeholder 192.0.0.1, which REFUSES every query,
+# while the carrier's real resolvers (frequently only the IPv6 ones) keep
+# working. Checking only "does some carrier resolver answer?" missed this.
 #
 # Every tick (timer, ~30 s):
-#   1. QManager Custom DNS present -> it is authoritative; no recovery block.
-#   2. Casa's own upstream answers -> nothing to fix; no recovery block.
-#   3. Otherwise (confirmed on 2 consecutive ticks) a recovery block in
-#      /etc/data/dnsmasq.conf (no-resolv + server=...) points dnsmasq at the
-#      carrier resolvers that DO answer (source "carrier"), or at public DNS
-#      when none does but public DNS answers (source "public_fallback"). When
-#      nothing answers the link is down and dnsmasq is left alone.
-#   4. Router's own lookups (downloads, Software Update, Tailscale): while
-#      dnsmasq.conf has no-resolv (our block, or Custom DNS "ignore carrier") and
-#      Casa's upstream does not answer, /var/run/resolv.conf (RAM) points at
-#      127.0.0.1 (dnsmasq). It is put back to Casa's servers as soon as no-resolv
-#      is gone, so dnsmasq can never end up forwarding to itself.
+#   1. Casa's own resolvers answer -> nothing to fix (a previous repair is
+#      handed back to Casa's list).
+#   2. Otherwise (confirmed on 2 consecutive ticks, or at once if a repair was
+#      already active this boot) /var/run/resolv.conf lists the carrier
+#      resolvers that DO answer (source "carrier"), or public DNS when none
+#      does but public DNS answers (source "public_fallback"). dnsmasq re-reads
+#      resolv.conf by itself, so LAN clients follow without a restart.
+#   3. Nothing answers -> link down; leave everything alone.
+# Casa rewrites resolv.conf on its own link events; the next tick re-applies.
 #
-# Flash-safe: /etc/data/dnsmasq.conf is rewritten (and dnsmasq restarted) only
-# when the recovery block's content must change. Steady state writes nothing.
+# Only RAM (/var/run, /tmp) is written in normal operation: no flash writes, no
+# dnsmasq restarts, and resolv.conf never lists 127.0.0.1, so dnsmasq cannot
+# forward to itself. QManager Custom DNS (its dnsmasq block) is untouched. A
+# recovery block left in /etc/data/dnsmasq.conf by older builds is removed.
 set -u
 
 DNSMASQ_CONF="/etc/data/dnsmasq.conf"
 RESOLV="/var/run/resolv.conf"
-RESOLV_MARK="# qmanager-dns-reconcile: router lookups via local dnsmasq (Casa DNS not answering)"
+RESOLV_MARK="# qmanager-dns-reconcile: Casa DNS not answering; using resolvers that do"
 STATE_FILE="/tmp/qmanager_dns_state.json"
 TMP_CONF="/tmp/qmanager-dns-reconcile.$$"
-SNAPSHOT_CONF="/tmp/qmanager-dns-reconcile.$$.orig"
 BEGIN="# QMANAGER-DNS-RECOVERY-BEGIN"
 END="# QMANAGER-DNS-RECOVERY-END"
 CUSTOM_BEGIN="# QMANAGER-CUSTOM-DNS-BEGIN v1"
 PROBE_NAME="cp.cloudflare.com"
 PROBE_TIMEOUT=3
 FAIL_COUNT_FILE="/tmp/qmanager_dns_casa_fails"
-# Consecutive ticks with Casa's DNS not answering before dnsmasq is repointed.
-# One slow probe must not cost a flash write and a dnsmasq restart (which also
-# blips DHCP); Casa DNS answering again switches back at once.
+REPAIR_FLAG="/tmp/qmanager_dns_repair_active"
+# Consecutive ticks with Casa's DNS not answering before resolv.conf is
+# repointed, so one slow probe does not switch DNS.
 CONFIRM_FAILS=2
-PUBLIC_RESOLVERS="1.1.1.1 8.8.8.8 8.8.4.4"
+PUBLIC_RESOLVERS="1.1.1.1 8.8.8.8"
 
 log() { logger -t qmanager-dns-reconcile "$*" 2>/dev/null || true; }
 rdb_read() { rdb get "$1" 2>/dev/null || true; }
@@ -726,23 +724,22 @@ custom_dns_active() {
     grep -qxF "$CUSTOM_BEGIN" "$DNSMASQ_CONF" 2>/dev/null
 }
 
-recovery_block_present() {
-    grep -qxF "$BEGIN" "$DNSMASQ_CONF" 2>/dev/null
-}
-
 # True if nameserver $1 answers a real query.
 answers() {
     timeout "$PROBE_TIMEOUT" nslookup "$PROBE_NAME" "$1" 2>/dev/null | grep -q '^Name:'
 }
 
-# Casa's own resolver list: what /etc/resolv.conf (and so dnsmasq without a
-# no-resolv block) uses. Our 127.0.0.1 redirect is never part of it.
+resolv_is_ours() {
+    grep -qxF "$RESOLV_MARK" "$RESOLV" 2>/dev/null
+}
+
+# Casa's own resolver list: link.policy.1.dns1/dns2 plus whatever Casa last
+# wrote into resolv.conf (skipped while resolv.conf holds our repair).
 casa_upstream() {
     {
         rdb_read link.policy.1.dns1
         rdb_read link.policy.1.dns2
-        grep -qxF "$RESOLV_MARK" "$RESOLV" 2>/dev/null \
-            || sed -n 's/^nameserver[[:space:]][[:space:]]*//p' "$RESOLV" 2>/dev/null
+        resolv_is_ours || sed -n 's/^nameserver[[:space:]][[:space:]]*//p' "$RESOLV" 2>/dev/null
     } | grep -vE '^$|^0\.0\.0\.0$|^::$|^127\.|^::1$' | awk '!seen[$0]++'
 }
 
@@ -767,136 +764,81 @@ carrier_nameservers() {
       | grep -vE '^$|^0\.0\.0\.0$|^::$|^192\.0\.0\.[12]$|^127\.|^::1$' | awk '!seen[$0]++'
 }
 
-# Carrier nameservers that answer right now (at most 4), space-separated.
+# Carrier nameservers that answer right now (resolv.conf takes at most 3).
 working_carrier() {
     for ns in $(carrier_nameservers); do
         answers "$ns" && printf '%s\n' "$ns"
-    done | head -4 | tr '\n' ' ' | sed 's/ *$//'
+    done | head -3 | tr '\n' ' ' | sed 's/ *$//'
 }
 
 public_reachable() {
-    for ns in 1.1.1.1 8.8.8.8; do
+    for ns in $PUBLIC_RESOLVERS; do
         answers "$ns" && return 0
     done
     return 1
 }
 
-# "carrier" / "public" from the current block's "# source=" line, else "".
-block_source() {
-    awk -v b="$BEGIN" -v e="$END" '
-        $0 == b { in_b = 1; next }
-        $0 == e { in_b = 0; next }
-        in_b && /^# source=/ { sub(/^# source=/, ""); print; exit }
-    ' "$DNSMASQ_CONF" 2>/dev/null
-}
-
-current_block() {
-    awk -v b="$BEGIN" -v e="$END" '
-        $0 == b { in_b = 1 }
-        in_b { print }
-        $0 == e { in_b = 0 }
-    ' "$DNSMASQ_CONF" 2>/dev/null
-}
-
-# $1 = source label, $2.. = servers
-render_block() {
-    label="$1"; shift
-    printf '%s\n' "$BEGIN" "# source=$label" "no-resolv"
-    for s in "$@"; do printf 'server=%s\n' "$s"; done
-    printf '%s\n' "$END"
-}
-
-restart_dnsmasq() {
-    systemctl restart dnsmasq_service@0.service 2>/dev/null || \
-        /bin/systemctl restart dnsmasq_service@0.service 2>/dev/null || true
-}
-
-strip_recovery_block() {
-    # $1 = source file, $2 = dest file
-    awk -v b="$BEGIN" -v e="$END" '
-        $0 == b { skip = 1; next }
-        $0 == e { skip = 0; next }
-        skip != 1 { print }
-    ' "$1" > "$2"
-}
-
-commit_conf() {
-    # Validate $TMP_CONF, replace $DNSMASQ_CONF, fix perms, restart dnsmasq.
-    if command -v dnsmasq >/dev/null 2>&1; then
-        dnsmasq --test --conf-file="$TMP_CONF" >/dev/null 2>&1 || {
-            log "dnsmasq validation failed; leaving config unchanged"
-            rm -f "$TMP_CONF"; return 1
-        }
-    fi
-    # Custom DNS (CGI) writes the same file; if it changed since we read it,
-    # skip this round rather than overwrite it. The next tick recomputes.
-    if ! cmp -s "$DNSMASQ_CONF" "$SNAPSHOT_CONF"; then
-        log "dnsmasq.conf changed during reconcile; retrying next tick"
-        rm -f "$TMP_CONF"; return 1
-    fi
-    # No backup copy: this only adds/removes the marked recovery block, which
-    # is fully reconstructible, and uninstall strips blocks by marker.
-    cat "$TMP_CONF" > "$DNSMASQ_CONF" || { rm -f "$TMP_CONF"; return 1; }
-    rm -f "$TMP_CONF"
-    chown radio:radio "$DNSMASQ_CONF" 2>/dev/null || true
-    chmod 0644 "$DNSMASQ_CONF" 2>/dev/null || true
-    restart_dnsmasq
-}
-
-# Make the recovery block exactly $1 (rendered text), or absent when $1 is "".
-set_block() {
-    want="$1"
-    [ -f "$DNSMASQ_CONF" ] || { log "missing $DNSMASQ_CONF"; return 1; }
-    [ "$(current_block)" = "$want" ] && return 0
-    cp "$DNSMASQ_CONF" "$SNAPSHOT_CONF" 2>/dev/null || return 1
-    strip_recovery_block "$SNAPSHOT_CONF" "$TMP_CONF" || return 1
-    [ -n "$want" ] && printf '%s\n' "$want" >> "$TMP_CONF"
-    commit_conf || return 1
-    if [ -n "$want" ]; then
-        log "DNS recovery block set: $(printf '%s' "$want" | grep -E '^(# source=|server=)' | tr '\n' ' ')"
-    else
-        log "removed DNS recovery block (Casa/custom DNS authoritative)"
-    fi
-}
-
+# $1 = full content; replace /var/run/resolv.conf in one step (RAM) if it differs.
 write_resolv() {
-    # $1 = content; replace /var/run/resolv.conf in one step (RAM only).
+    [ "$(cat "$RESOLV" 2>/dev/null)" = "$1" ] && return 0
     printf '%s\n' "$1" > "$RESOLV.qm.$$" 2>/dev/null || { rm -f "$RESOLV.qm.$$"; return 1; }
     mv -f "$RESOLV.qm.$$" "$RESOLV" 2>/dev/null || { rm -f "$RESOLV.qm.$$"; return 1; }
 }
 
-# Point the router's own lookups at dnsmasq only while dnsmasq does not read
-# resolv.conf (no-resolv) and Casa's upstream is broken; otherwise make sure our
-# redirect is gone. Sets router_dns.
-reconcile_router_resolv() {
-    router_dns="casa"
-    if [ "$casa_ok" = "false" ] && grep -qx 'no-resolv' "$DNSMASQ_CONF" 2>/dev/null \
-        && answers 127.0.0.1; then
-        router_dns="dnsmasq"
-        grep -qxF "$RESOLV_MARK" "$RESOLV" 2>/dev/null && return 0
-        write_resolv "$RESOLV_MARK
-nameserver 127.0.0.1" && log "router resolv.conf -> 127.0.0.1 (Casa DNS not answering)"
-        return 0
+# $@ = servers
+repair_resolv() {
+    content="$RESOLV_MARK"
+    for ns in "$@"; do
+        content="$content
+nameserver $ns"
+    done
+    if [ "$(cat "$RESOLV" 2>/dev/null)" != "$content" ]; then
+        write_resolv "$content" && log "resolv.conf -> $* (Casa DNS not answering)"
     fi
-    grep -qxF "$RESOLV_MARK" "$RESOLV" 2>/dev/null || return 0
+    : > "$REPAIR_FLAG" 2>/dev/null || true
+}
+
+# Hand resolv.conf back to Casa's servers if it still holds our repair.
+release_resolv() {
+    rm -f "$REPAIR_FLAG" 2>/dev/null || true
+    resolv_is_ours || return 0
     content="# modem DNS server list"
     for ns in $(rdb_read link.policy.1.dns1) $(rdb_read link.policy.1.dns2); do
         content="$content
 nameserver $ns"
     done
-    write_resolv "$content" && log "router resolv.conf restored to Casa's DNS servers"
+    write_resolv "$content" && log "resolv.conf handed back to Casa's DNS servers"
+}
+
+# Older builds kept a recovery block in /etc/data/dnsmasq.conf, which Casa's
+# QCMAP_ConnectionManager regenerates on its own; remove any leftover once.
+remove_legacy_block() {
+    grep -qxF "$BEGIN" "$DNSMASQ_CONF" 2>/dev/null || return 0
+    awk -v b="$BEGIN" -v e="$END" '
+        $0 == b { skip = 1; next }
+        $0 == e { skip = 0; next }
+        skip != 1 { print }
+    ' "$DNSMASQ_CONF" > "$TMP_CONF" || { rm -f "$TMP_CONF"; return 1; }
+    cat "$TMP_CONF" > "$DNSMASQ_CONF" || { rm -f "$TMP_CONF"; return 1; }
+    rm -f "$TMP_CONF"
+    chown radio:radio "$DNSMASQ_CONF" 2>/dev/null || true
+    chmod 0644 "$DNSMASQ_CONF" 2>/dev/null || true
+    systemctl restart dnsmasq_service@0.service 2>/dev/null || true
+    log "removed legacy DNS recovery block from $DNSMASQ_CONF"
 }
 
 write_state() {
-    # $1 source, $2 carrier_reachable, $3 ippt_on, $4 router_dns, $5 upstream
+    # $1 source, $2 carrier_reachable, $3 ippt_on, $4 upstream
     ts="$(date +%s 2>/dev/null || echo 0)"
     tmp="$STATE_FILE.$$"
-    printf '{"ippt_on":%s,"dns_source":"%s","carrier_reachable":%s,"router_dns":"%s","upstream":"%s","scope":"router_lan","checked_at":%s}\n' \
-        "$3" "$1" "$2" "$4" "$5" "$ts" > "$tmp" 2>/dev/null || { rm -f "$tmp"; return 0; }
+    printf '{"ippt_on":%s,"dns_source":"%s","carrier_reachable":%s,"upstream":"%s","scope":"router_lan","checked_at":%s}\n' \
+        "$3" "$1" "$2" "$4" "$ts" > "$tmp" 2>/dev/null || { rm -f "$tmp"; return 0; }
     mv "$tmp" "$STATE_FILE" 2>/dev/null || rm -f "$tmp"
 }
 
 main() {
+    remove_legacy_block || true
+
     ippt=false; ippt_enabled && ippt=true
     casa_ok=false; casa_upstream_ok && casa_ok=true
 
@@ -914,41 +856,40 @@ main() {
     [ "$casa_ok" = "true" ] || working="$(working_carrier)"
     reach=false
     { [ "$casa_ok" = "true" ] || [ -n "$working" ]; } && reach=true
-    upstream="casa"
+    confirmed=false
+    { [ "$fails" -ge "$CONFIRM_FAILS" ] || [ -f "$REPAIR_FLAG" ]; } && confirmed=true
 
-    if custom_dns_active; then
-        source="custom"; upstream="custom"
-        set_block "" || true
-    elif [ "$casa_ok" = "true" ]; then
-        source="carrier"
-        set_block "" || true
-    elif [ -n "$working" ] && { recovery_block_present || [ "$fails" -ge "$CONFIRM_FAILS" ]; }; then
+    if [ "$casa_ok" = "true" ]; then
+        source="carrier"; upstream="casa"
+        release_resolv
+    elif [ "$confirmed" = "false" ]; then
+        # First failed tick: confirm on the next one before changing anything.
+        source="carrier"; upstream="casa"
+        log "Casa DNS not answering ($fails/$CONFIRM_FAILS); confirming before repointing"
+    elif [ -n "$working" ]; then
         # Casa's list is broken but the carrier's own resolvers answer: use them.
         source="carrier"; upstream="$working"
         # shellcheck disable=SC2086
-        set_block "$(render_block carrier $working)" || true
-    elif [ "$fails" -lt "$CONFIRM_FAILS" ] && ! recovery_block_present; then
-        # First failed tick: leave dnsmasq alone and confirm on the next one.
-        source="carrier"
-        log "Casa DNS not answering ($fails/$CONFIRM_FAILS); confirming before repointing dnsmasq"
+        repair_resolv $working
     elif public_reachable; then
         # Link works but no carrier resolver answers: public fallback.
         source="public_fallback"; upstream="$PUBLIC_RESOLVERS"
         # shellcheck disable=SC2086
-        set_block "$(render_block public $PUBLIC_RESOLVERS)" || true
-    elif recovery_block_present; then
-        # Nothing answers (link down): keep whatever block is there.
-        [ "$(block_source)" = "public" ] && source="public_fallback" || source="carrier"
-        upstream="unchanged (link down)"
-        log "no resolver answers; link down, leaving dnsmasq unchanged"
+        repair_resolv $PUBLIC_RESOLVERS
     else
-        source="carrier"
-        log "no resolver answers; link down, leaving dnsmasq unchanged"
+        # Nothing answers: the link is down. Leave resolv.conf as it is.
+        if resolv_is_ours && grep -q '^nameserver 1\.1\.1\.1$' "$RESOLV" 2>/dev/null; then
+            source="public_fallback"
+        else
+            source="carrier"
+        fi
+        upstream="unchanged (link down)"
+        log "no resolver answers; link down, leaving resolv.conf unchanged"
     fi
 
-    reconcile_router_resolv
-    write_state "$source" "$reach" "$ippt" "$router_dns" "$upstream"
-    rm -f "$TMP_CONF" "$SNAPSHOT_CONF" 2>/dev/null || true
+    custom_dns_active && source="custom"
+    write_state "$source" "$reach" "$ippt" "$upstream"
+    rm -f "$TMP_CONF" 2>/dev/null || true
 }
 
 # --once is the normal mode. --if-poisoned is accepted for backward-compat with
