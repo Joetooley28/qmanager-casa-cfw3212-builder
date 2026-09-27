@@ -775,16 +775,24 @@ local_addrs() {
     ip -o addr show 2>/dev/null | awk '{ sub(/\/.*/, "", $4); print $4 }'
 }
 
+# Drops the passthrough placeholder range 192.0.0.0/29 while IP Passthrough is
+# on. With passthrough off, 192.0.0.1 is the carrier's real resolver on
+# rmnet_data1 (T-Mobile 464XLAT; answers on Box 2); filtering it there left the
+# repair with no Casa server to probe, so it was never handed back.
+drop_placeholder() {
+    if ippt_enabled; then grep -vE '^192\.0\.0\.[0-7]$'; else cat; fi
+}
+
 # Casa's own resolver list: link.policy.1.dns1/dns2 plus whatever Casa last
 # wrote into resolv.conf (skipped while resolv.conf holds our repair), minus the
-# passthrough placeholder range and any address of this box.
+# passthrough placeholder range (passthrough on) and any address of this box.
 casa_upstream() {
     local_list="$(local_addrs)"
     {
         rdb_read link.policy.1.dns1
         rdb_read link.policy.1.dns2
         resolv_is_ours || sed -n 's/^nameserver[[:space:]][[:space:]]*//p' "$RESOLV" 2>/dev/null
-    } | grep -vE '^$|^0\.0\.0\.0$|^::$|^127\.|^::1$|^192\.0\.0\.[0-7]$' | awk '!seen[$0]++' \
+    } | grep -vE '^$|^0\.0\.0\.0$|^::$|^127\.|^::1$' | drop_placeholder | awk '!seen[$0]++' \
       | while read -r ns; do
             printf '%s\n' "$local_list" | grep -qxF "$ns" || printf '%s\n' "$ns"
         done
@@ -797,7 +805,8 @@ casa_upstream_ok() {
     return 1
 }
 
-# Candidate carrier nameservers (IPv4 + IPv6), excluding the IPPT placeholder.
+# Candidate carrier nameservers (IPv4 + IPv6), excluding the IPPT placeholder
+# while passthrough is on.
 carrier_nameservers() {
     {
         rdb_read link.policy.1.dns1
@@ -808,7 +817,7 @@ carrier_nameservers() {
         # dns1/dns2/ipv6_dns1/ipv6_dns2 for policies 1-6).
         rdb_read service.dns.prev_server
     } | tr ' ,' '\n\n' \
-      | grep -vE '^$|^0\.0\.0\.0$|^::$|^192\.0\.0\.[12]$|^127\.|^::1$' | awk '!seen[$0]++'
+      | grep -vE '^$|^0\.0\.0\.0$|^::$|^127\.|^::1$' | drop_placeholder | awk '!seen[$0]++'
 }
 
 # Carrier nameservers that answer right now (resolv.conf takes at most 3).
@@ -856,8 +865,11 @@ nameserver $ns"
 release_resolv() {
     rm -f "$REPAIR_FLAG" "$LAST_UPSTREAM" 2>/dev/null || true
     resolv_is_ours || return 0
+    # Same list and order Casa writes: dns1, dns2, ipv6_dns1, ipv6_dns2 (max 3).
     content="# modem DNS server list"
-    for ns in $(rdb_read link.policy.1.dns1) $(rdb_read link.policy.1.dns2); do
+    for ns in $({ rdb_read link.policy.1.dns1; rdb_read link.policy.1.dns2
+                  rdb_read link.policy.1.ipv6_dns1; rdb_read link.policy.1.ipv6_dns2; } \
+                | grep -vE '^$|^0\.0\.0\.0$|^::$' | drop_placeholder | awk '!seen[$0]++' | head -3); do
         content="$content
 nameserver $ns"
     done

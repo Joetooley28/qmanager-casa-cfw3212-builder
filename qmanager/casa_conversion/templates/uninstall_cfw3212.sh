@@ -139,10 +139,12 @@ step "Removing QManager automatic DNS repair"
 QM_RESOLV="/var/run/resolv.conf"
 if grep -q '^# qmanager-dns-reconcile:' "$QM_RESOLV" 2>/dev/null; then
     {
+        # Same list and order Casa writes: dns1, dns2, ipv6_dns1, ipv6_dns2 (max 3).
         echo "# modem DNS server list"
-        for ns in $(rdb get link.policy.1.dns1 2>/dev/null) $(rdb get link.policy.1.dns2 2>/dev/null); do
-            echo "nameserver $ns"
-        done
+        for k in dns1 dns2 ipv6_dns1 ipv6_dns2; do
+            rdb get "link.policy.1.$k" 2>/dev/null || true
+        done | grep -vE '^$|^0\.0\.0\.0$|^::$' | awk '!seen[$0]++' | head -3 \
+            | sed 's/^/nameserver /'
     } > "$QM_RESOLV.qm.$$" && mv -f "$QM_RESOLV.qm.$$" "$QM_RESOLV" \
         && info "Router resolv.conf restored to Casa's DNS servers" \
         || { rm -f "$QM_RESOLV.qm.$$"; info "Could not restore $QM_RESOLV"; }
