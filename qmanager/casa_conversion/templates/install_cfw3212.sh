@@ -743,6 +743,11 @@ LOCK_DIR="/tmp/qmanager_dns_reconcile.lock"
 # Consecutive ticks with Casa's DNS not answering before resolv.conf is
 # repointed, so one slow probe does not switch DNS.
 CONFIRM_FAILS=2
+# Passthrough off: failed ticks within this many seconds of Casa writing
+# resolv.conf (link just came up) are not counted. On a Box 2 cold boot Casa
+# wrote resolv.conf ~15 s before its DNS answered, and the reconciler repointed
+# DNS for 40 s for nothing.
+LINK_GRACE=45
 PUBLIC_RESOLVERS="1.1.1.1 8.8.8.8"
 
 log() { logger -t qmanager-dns-reconcile "$*" 2>/dev/null || true; }
@@ -921,13 +926,20 @@ main() {
     casa_ok=false; casa_upstream_ok && casa_ok=true
 
     fails=0
+    settling=false
+    if [ "$ippt" = "false" ] && [ ! -f "$REPAIR_FLAG" ] && ! resolv_is_ours; then
+        written="$(date -r "$RESOLV" +%s 2>/dev/null || echo 0)"
+        [ $((now - written)) -lt "$LINK_GRACE" ] && settling=true
+    fi
     if [ "$casa_ok" = "true" ]; then
         rm -f "$FAIL_COUNT_FILE" 2>/dev/null || true
     else
         fails="$(cat "$FAIL_COUNT_FILE" 2>/dev/null || echo 0)"
         case "$fails" in ''|*[!0-9]*) fails=0 ;; esac
-        fails=$((fails + 1))
-        echo "$fails" > "$FAIL_COUNT_FILE" 2>/dev/null || true
+        if [ "$settling" = "false" ]; then
+            fails=$((fails + 1))
+            echo "$fails" > "$FAIL_COUNT_FILE" 2>/dev/null || true
+        fi
     fi
 
     confirmed=false
@@ -935,7 +947,10 @@ main() {
     # Casa's list holds only the passthrough placeholder / this box's own
     # addresses (what it writes after every reconnect under IP Passthrough):
     # broken by definition, so repair now instead of confirming on a 2nd tick.
-    [ -z "$(casa_upstream)" ] && confirmed=true
+    # With passthrough off an empty list only means Casa has not filled in DNS
+    # yet (cold boot), so it goes through the normal confirmation.
+    [ "$ippt" = "true" ] && [ -z "$(casa_upstream)" ] && confirmed=true
+    [ "$settling" = "true" ] && confirmed=false
     reach=false
 
     if [ "$casa_ok" = "true" ]; then
@@ -944,8 +959,20 @@ main() {
     elif [ "$confirmed" = "false" ]; then
         # First failed tick: confirm on the next one before changing anything.
         source="carrier"; upstream="casa"
-        [ -n "$(working_carrier)" ] && reach=true
-        log "Casa DNS not answering ($fails/$CONFIRM_FAILS); confirming before repointing"
+        if [ -n "$(working_carrier)" ]; then
+            reach=true
+        elif ! public_reachable; then
+            # Nothing answers: link down, not a Casa DNS failure; do not count it.
+            rm -f "$FAIL_COUNT_FILE" 2>/dev/null || true
+            settling=link_down
+        fi
+        if [ "$settling" = "link_down" ]; then
+            log "no resolver answers; link down, leaving resolv.conf unchanged"
+        elif [ "$settling" = "true" ]; then
+            log "Casa DNS not answering yet; link just came up, waiting up to ${LINK_GRACE}s"
+        else
+            log "Casa DNS not answering ($fails/$CONFIRM_FAILS); confirming before repointing"
+        fi
     else
         # Sticky: keep an active carrier repair while any of its servers still
         # answers, so one slow probe does not rewrite resolv.conf (dnsmasq runs
@@ -987,6 +1014,9 @@ main() {
                     *) source="carrier" ;;
                 esac
                 upstream="unchanged (link down)"
+                # Ticks while the link is down are not "Casa DNS broken": without
+                # this, boot-time ticks confirmed a repair before DNS was set up.
+                [ -f "$REPAIR_FLAG" ] || rm -f "$FAIL_COUNT_FILE" 2>/dev/null || true
                 log "no resolver answers; link down, leaving resolv.conf unchanged"
             fi
         fi
