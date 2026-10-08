@@ -383,6 +383,10 @@ jobs:
           rustup target add armv7-unknown-linux-musleabihf
           bash qmanager/casa_conversion/ping-daemon/build-ping-daemon-cfw3212.sh
 
+      - name: Build and test selective video helper
+        if: steps.scheduled_check.outputs.should_build == 'true'
+        run: bash qmanager/casa_conversion/video-selective/build-video-selective-cfw3212.sh
+
       - name: Build Casa package off-device
         if: steps.scheduled_check.outputs.should_build == 'true'
         shell: bash
