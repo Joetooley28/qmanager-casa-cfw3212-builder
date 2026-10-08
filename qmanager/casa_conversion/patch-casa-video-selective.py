@@ -104,6 +104,12 @@ edit(runner, '    --clear-selective)\n        /usrdata/bin/qmanager_video_select
         /usrdata/bin/qmanager_video_selective --clear
 ''')
 
+edit(runner, '        dpi_reconcile_force_tcp\n', '''        if [ "$(dpi_active_mode)" != "video_optimizer" ]; then
+            /usrdata/bin/qmanager_video_selective --clear || qlog_warn "ensure: selective cleanup incomplete"
+        fi
+        dpi_reconcile_force_tcp
+''')
+
 # Existing Casa installer rewrites /usr/bin and /usr/lib/qmanager at install
 # time. Only the missing, fixed-verb tpws installer grant is added here.
 sudoers = target / "scripts/etc/sudoers.d/qmanager"

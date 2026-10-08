@@ -487,7 +487,9 @@ func main() {
 	}
 	fw := &firewall{iface: *iface, client: *client, proxyPort: *port, dnsPort: 1053}
 	if *clear {
-		fw.cleanup()
+		if err := fw.cleanup(); err != nil {
+			log.Fatal(err)
+		}
 		return
 	}
 	if err := run(*hostlist, *proxy, *listen, *upstream, *runtime, fw); err != nil {
@@ -598,8 +600,11 @@ func run(hostlist, proxy, listen, upstream, runtime string, fw *firewall) error 
 	defer func() {
 		e.mu.Lock()
 		e.stopping = true
-		fw.cleanup()
 		e.status.State = "off"
+		if err := fw.cleanup(); err != nil {
+			e.status.State = "cleanup_error"
+			e.recordError(err)
+		}
 		e.entries = map[netip.Addr]time.Time{}
 		e.writeStatus()
 		e.mu.Unlock()

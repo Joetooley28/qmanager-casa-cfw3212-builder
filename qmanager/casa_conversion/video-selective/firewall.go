@@ -185,7 +185,7 @@ func (f *firewall) removeAddress(a netip.Addr) error {
 	return nil
 }
 
-func (f *firewall) cleanup() {
+func (f *firewall) cleanup() error {
 	hooks := []struct {
 		table, chain string
 		spec         []string
@@ -212,4 +212,10 @@ func (f *firewall) cleanup() {
 		_ = f.call("-t", c.table, "-F", c.name)
 		_ = f.call("-t", c.table, "-X", c.name)
 	}
+	for _, c := range []struct{ table, name string }{{"nat", videoChain}, {"nat", dnsChain}, {"filter", quicChain}, {"filter", inputChain}} {
+		if f.call("-t", c.table, "-L", c.name, "-n") == nil {
+			return fmt.Errorf("cleanup incomplete: owned chain %s remains", c.name)
+		}
+	}
+	return nil
 }
