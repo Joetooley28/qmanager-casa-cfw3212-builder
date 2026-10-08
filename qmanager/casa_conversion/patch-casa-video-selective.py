@@ -23,8 +23,7 @@ shutil.copy2(templates / rel, target / rel)
 
 runner = "scripts/usr/bin/qmanager_dpi_run"
 edit(runner, '    --clear)\n', '''    --clear-selective)
-        /usrdata/bin/qmanager_video_selective --clear
-        exit 0
+        exec /usrdata/bin/qmanager_video_selective --clear
         ;;
     --clear)
 ''')
@@ -99,9 +98,9 @@ TimeoutStopSec=20
 Environment=GOMEMLIMIT=24MiB
 ''')
 
-edit(runner, '    --clear-selective)\n        /usrdata/bin/qmanager_video_selective --clear\n', '''    --clear-selective)
+edit(runner, '    --clear-selective)\n        exec /usrdata/bin/qmanager_video_selective --clear\n', '''    --clear-selective)
         dpi_remove_rule_upstream
-        /usrdata/bin/qmanager_video_selective --clear
+        exec /usrdata/bin/qmanager_video_selective --clear
 ''')
 
 edit(runner, '        dpi_reconcile_force_tcp\n', '''        if [ "$(dpi_active_mode)" != "video_optimizer" ]; then
@@ -120,7 +119,9 @@ www-data ALL=(root) NOPASSWD: /usrdata/bin/qmanager_dpi_install install, /usrdat
 
 cgi = "scripts/www/cgi-bin/quecmanager/network/video_optimizer.sh"
 edit(cgi, '        hostlist)\n', '''        selective_status)
-            if [ "$(dpi_active_mode)" = "video_optimizer" ] && [ "$(dpi_service_status)" = "running" ] && [ -r /run/qmanager-video-selective/status.json ]; then
+            if [ -r /run/qmanager-video-selective/status.json ] && jq -e '.state == "cleanup_error"' /run/qmanager-video-selective/status.json >/dev/null 2>&1; then
+                jq -c . /run/qmanager-video-selective/status.json
+            elif [ "$(dpi_active_mode)" = "video_optimizer" ] && [ "$(dpi_service_status)" = "running" ] && [ -r /run/qmanager-video-selective/status.json ]; then
                 jq -c . /run/qmanager-video-selective/status.json
             else
                 echo '{"state":"off","dns_queries":0,"selected_replies":0,"addresses":0,"errors":0,"ipv4_only":true}'

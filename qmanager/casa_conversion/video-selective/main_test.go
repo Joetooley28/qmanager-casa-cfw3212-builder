@@ -37,7 +37,7 @@ func TestSelectionAndCNAMEExpiry(t *testing.T) {
 		{Header: dnsmessage.ResourceHeader{Name: dnsmessage.MustNewName("r1.googlevideo.com."), Type: dnsmessage.TypeCNAME, Class: dnsmessage.ClassINET, TTL: 30}, Body: &dnsmessage.CNAMEResource{CNAME: dnsmessage.MustNewName("edge.example.net.")}},
 		aRecord("edge.example.net.", [4]byte{8, 8, 4, 4}, 120),
 		aRecord("unrelated.example.net.", [4]byte{1, 1, 1, 1}, 120),
-		aRecord("edge.example.net.", [4]byte{192, 168, 20, 1}, 120),
+		aRecord("edge.example.net.", [4]byte{192, 168, 50, 1}, 120),
 	}
 	q, r := dnsPair(t, "r1.googlevideo.com.", answers)
 	out, err := selectedAnswers(q, r, []string{"googlevideo.com"})
@@ -73,7 +73,7 @@ func TestDomainBoundariesAndPrivateDestinations(t *testing.T) {
 	if !matches("R1.GoogleVideo.com.", []string{"googlevideo.com"}) {
 		t.Fatal("subdomain should match")
 	}
-	for _, ip := range []string{"127.0.0.1", "100.98.1.2", "192.168.20.1", "169.254.1.1", "10.0.0.1", "172.16.0.1", "224.0.0.1", "::1", "2001:4860:4860::8888"} {
+	for _, ip := range []string{"127.0.0.1", "100.98.1.2", "192.168.50.1", "169.254.1.1", "10.0.0.1", "172.16.0.1", "224.0.0.1", "::1", "2001:4860:4860::8888"} {
 		if publicIPv4(netip.MustParseAddr(ip)) {
 			t.Fatal("unsafe address", ip)
 		}

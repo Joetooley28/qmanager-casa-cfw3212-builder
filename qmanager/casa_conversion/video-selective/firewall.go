@@ -84,7 +84,7 @@ func (f *firewall) ensure(entries map[netip.Addr]time.Time) error {
 		var sentinel []string
 		switch c.name {
 		case dnsChain:
-			sentinel = []string{"-j", "REDIRECT", "--to-ports", strconv.Itoa(f.dnsPort)}
+			sentinel = []string{"-p", "udp", "-j", "REDIRECT", "--to-ports", strconv.Itoa(f.dnsPort)}
 		case inputChain:
 			sentinel = []string{"-j", "REJECT"}
 		default:
@@ -101,8 +101,10 @@ func (f *firewall) ensure(entries map[netip.Addr]time.Time) error {
 				return err
 			}
 		}
-		if err := f.call("-t", "nat", "-A", dnsChain, "-j", "REDIRECT", "--to-ports", strconv.Itoa(f.dnsPort)); err != nil {
-			return err
+		for _, protocol := range []string{"tcp", "udp"} {
+			if err := f.call("-t", "nat", "-A", dnsChain, "-p", protocol, "-j", "REDIRECT", "--to-ports", strconv.Itoa(f.dnsPort)); err != nil {
+				return err
+			}
 		}
 		for _, i := range []string{f.iface, "lo"} {
 			spec := []string{"-i", i}

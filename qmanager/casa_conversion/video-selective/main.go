@@ -488,6 +488,11 @@ func main() {
 	fw := &firewall{iface: *iface, client: *client, proxyPort: *port, dnsPort: 1053}
 	if *clear {
 		if err := fw.cleanup(); err != nil {
+			e := &engine{statusPath: filepath.Join(*runtime, "status.json"), status: status{State: "cleanup_error", Errors: 1, LastError: err.Error(), IPv4Only: true}}
+			e.writeStatus()
+			log.Fatal(err)
+		}
+		if err := os.Remove(filepath.Join(*runtime, "status.json")); err != nil && !errors.Is(err, os.ErrNotExist) {
 			log.Fatal(err)
 		}
 		return

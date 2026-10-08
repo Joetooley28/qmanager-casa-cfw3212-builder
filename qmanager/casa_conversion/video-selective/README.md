@@ -3,6 +3,10 @@
 This branch builds workflow artifacts only. It is not a public package release.
 The performance goal is sustained 60–70 Mbps video with ordinary client traffic
 near 800 Mbps. Rates must be measured on the router and network in use.
+Initial bounded client trials reached 38–42 Mbps video at approximately
+95–96% CPU, against a 5.5 Mbps unmodified baseline. The requested combined
+60–70 / 800 Mbps performance has not been demonstrated. Packet-only NFQUEUE
+trials did not establish connections on this firmware and are not included.
 
 Video Optimizer starts a small IPv4 DNS forwarder in front of the existing Casa
 resolver. Plain LAN DNS requests use that resolver while the mode is enabled.
@@ -30,6 +34,8 @@ forwarding offload. No global offload setting is changed. Off removes the owned
 DNS/video rules. Cached client DNS sockets may need reopening after Off.
 The stored global Force TCP preference is paused in Video Optimizer mode and
 resumes in other modes. The previous package remains the full-build rollback.
+Choose Off and verify the service has stopped before reinstalling an older
+package, so its saved configuration cannot enable the older blanket proxy.
 
 `go test -race ./...` checks DNS identity, CNAME boundaries, domain validation,
 private-address exclusions, expiry, list changes, and partial-rule rollback.
