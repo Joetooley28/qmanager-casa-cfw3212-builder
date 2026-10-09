@@ -146,6 +146,25 @@ www-data ALL=(root) NOPASSWD: /usrdata/bin/qmanager_dpi_install install, /usrdat
 ''')
 
 cgi = "scripts/www/cgi-bin/quecmanager/network/video_optimizer.sh"
+# Casa CGIs run as root: platform.sh intentionally leaves _SUDO empty.
+# A unconditional "$_SUDO -n helper" then tries to execute "-n" itself.
+# Keep the fixed installer probe direct for root and noninteractive for sudo.
+edit(cgi, 'qlog_init "cgi_video_optimizer"\n', '''dpi_installer_probe() {
+    if [ -n "$_SUDO" ]; then
+        "$_SUDO" -n /usr/bin/qmanager_dpi_install --probe
+    else
+        /usr/bin/qmanager_dpi_install --probe
+    fi
+}
+
+qlog_init "cgi_video_optimizer"
+''')
+cgi_path = target / cgi
+cgi_text = cgi_path.read_text()
+probe = 'if ! $_SUDO -n /usr/bin/qmanager_dpi_install --probe >/dev/null 2>&1; then'
+if cgi_text.count(probe) != 2:
+    raise SystemExit("Selective-video installer preflight anchors changed")
+cgi_path.write_text(cgi_text.replace(probe, 'if ! dpi_installer_probe >/dev/null 2>&1; then'))
 edit(cgi, '        hostlist)\n', '''        selective_status)
             if [ -r /run/qmanager-video-selective/status.json ] && jq -e '.state == "cleanup_error"' /run/qmanager-video-selective/status.json >/dev/null 2>&1; then
                 jq -c . /run/qmanager-video-selective/status.json

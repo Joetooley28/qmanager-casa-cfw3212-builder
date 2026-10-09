@@ -1,7 +1,7 @@
 # Selective Video Optimizer on Casa
 
 This feature is experimental on `test/AI-72-selective-video`. The current
-testing build is `v0.1.16-cfw3212.1.40.dev`; it is a workflow artifact, not a
+testing build is `v0.1.16-cfw3212.1.41.dev`; it is a workflow artifact, not a
 public package release. Full installed-package validation is in progress.
 
 The goal is sustained 60–70 Mbps video while ordinary LAN traffic stays near
