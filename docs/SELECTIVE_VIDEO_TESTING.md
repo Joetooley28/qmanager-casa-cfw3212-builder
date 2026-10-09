@@ -200,5 +200,40 @@ Core services, DNS and the UI were healthy, and retained evidence checksums
 matched the router. No client video or performance test followed these failed
 compatibility prerequisites.
 
+### Netlink logging and rule-trace discriminators — 2026-10-09
+
+The exact running kernel was copied read-only from the active boot slot and
+checksum-verified against two reads on the router; nothing was written to the
+router. Its build string matches the stock kernel for this firmware. The stock
+reference dumps had not captured the boot partition, which is why no offline
+copy existed; there is no evidence it was modified. Disassembly of the queue
+path has not been done yet.
+
+Two further loopback-only controls then narrowed the queue failure. Each used
+the same scoped jump and an independent 60-second cleanup guard:
+
+| Control | Ping replies | Result |
+| --- | ---: | --- |
+| `NFLOG` to a bound diagnostic log reader | 1 | Reader received both logged packets (request and reply) |
+| `TRACE` with a scoped `RETURN` | 1 | Full raw → mangle → filter → input path traced |
+| `TRACE` with no-reader `NFQUEUE --queue-bypass` | 0 | Trace ends at the queue rule; no later hook is reached |
+
+Netfilter netlink delivery to a userspace reader therefore works on this
+kernel, so the failure is specific to the queue path. With bypass and no
+reader, standard Linux 5.4 continues to the next hook; here the packet is
+silently discarded at the queue verdict, with no kernel message and no queue
+counters. Together with the bound-reader results above, packets are lost
+before the kernel assigns a queue packet ID. Because the controls use loopback
+traffic, this is not attributed to hardware offload. Kernel trace logging is
+slow on this router (a traced ping took about 0.9 s) and is suitable only for
+single-packet diagnostics.
+
+The guard removed its harmless `RETURN` control after exactly 60 seconds.
+Afterwards the normalized raw, mangle, filter and nat rules matched the
+baseline, settings hashes and permissions were unchanged, no queue or log
+binding remained, and core services, DNS and the UI were healthy. Any
+packet-queue design, including one intended to keep bulk video on the offload
+path, remains blocked on this firmware until the queue path is understood.
+
 See the [implementation notes](../qmanager/casa_conversion/video-selective/README.md)
 and [artifact installation workflow](../scripts/README.md).
