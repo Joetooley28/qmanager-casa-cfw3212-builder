@@ -155,5 +155,50 @@ again. This kernel lacks the kprobe interface needed to observe the queue's
 return code with that tracing method; no kernel, module or offload settings
 were changed to work around it.
 
+### Independent queue compatibility check — 2026-10-09
+
+A separate raw-netlink diagnostic reader was tested before any further client
+or offloaded-video experiment. It sends only unchanged `NF_ACCEPT` verdicts;
+it does not modify packet payloads or marks. Its local protocol tests passed
+for mixed byte order, verdict framing, packet IDs, ACK/error handling and
+malformed messages. No successful reference-kernel packet test was completed,
+so these tests validate framing, not live packet delivery.
+
+On Casa, running as UID 0, the kernel acknowledged queue binding, copy mode,
+queue limit and fail-open configuration. The following loopback-only controls
+each sent one ping through the same scoped rule:
+
+| Control | Table | Queue-rule hits | Ping replies | Reader packets |
+| --- | --- | ---: | ---: | ---: |
+| Bound queue, metadata copy | mangle | 1 | 0 | 0 |
+| Bound queue, full-packet copy | mangle | 1 | 0 | 0 |
+| Bound queue, full-packet copy | filter | 1 | 0 | 0 |
+| No reader, `--queue-bypass` | mangle | 1 | 0 | No reader |
+| No reader, `--queue-bypass` | filter | 1 | 0 | No reader |
+| Same scoped jump with `RETURN` | mangle / filter | No queue | 1 each | No queue |
+
+All three bound queues retained packet sequence 0, with no queue or userspace drops
+recorded. Plain loopback ping passed after each cleanup. The no-reader control
+also failed despite the displayed bypass flag, so this build's tested path
+cannot rely on that flag to preserve traffic. Queue configuration ACKs establish
+the control interface works; they do not establish packet enqueue or reinjection.
+The exact failing kernel/target path remains unresolved, and these results do
+not attribute it to Casa's hardware offload. Moving the rule from mangle to
+filter did not repair delivery or the no-reader bypass control.
+
+The next step is offline inspection of the matching vendor kernel and NFQUEUE
+target/backend compatibility. Establish unchanged packet delivery and safe
+fallback before retrying client video manipulation or measuring offloaded
+throughput. The installed `.1.41.dev` build and optimizer-Off settings remain
+the recovery baseline; this diagnostic is not included in a package.
+
+The final independent guard was exercised using a harmless `RETURN` rule with
+automatic exit cleanup disabled for that control. It removed the owned rule
+after exactly 60 seconds. Original settings hashes/permissions and the
+normalized full firewall rules matched the baseline; no test queues remained.
+Core services, DNS and the UI were healthy, and retained evidence checksums
+matched the router. No client video or performance test followed these failed
+compatibility prerequisites.
+
 See the [implementation notes](../qmanager/casa_conversion/video-selective/README.md)
 and [artifact installation workflow](../scripts/README.md).
