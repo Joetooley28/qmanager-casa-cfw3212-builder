@@ -47,3 +47,9 @@ private-address exclusions, expiry, list changes, and partial-rule rollback.
 converter's vendor overlay. The backend helper is root-only and is not exposed
 through CGI sudoers. tpws runs as www-data to read the existing private host list.
 Only aggregate selection counters are returned by the UI status endpoint.
+
+Installed-package checks and measured results for `.1.41.dev` are recorded in
+[the testing guide](../../../docs/SELECTIVE_VIDEO_TESTING.md). The Casa CGI tool
+installer probes its fixed root helper directly when already root; the sudo
+path retains a noninteractive probe for other platforms. Existing live targets
+are preserved, while Reset uses the refreshed focused Casa factory list.
