@@ -47,7 +47,8 @@ export default function SelectiveSetupCard({ mode }: { mode: DpiMode }) {
           <li>Use Casa in routed mode with IP Passthrough off. Test from an Ethernet or Wi-Fi client connected to Casa.</li>
           <li>Use Casa for DNS. Disable browser Secure DNS / DNS over HTTPS, Private DNS, and client VPNs for the test. While enabled, plain IPv4 DNS requests use Casa’s existing resolver.</li>
           <li>Add bare video CDN domains under Optimizer targets. For YouTube include <code>googlevideo.com</code>; for Netflix include <code>nflxvideo.net</code>. A site’s homepage alone may not cover its video servers. Subdomains match automatically.</li>
-          <li>Select Video Optimizer, then close and reopen the video/browser to make fresh DNS requests and connections. Repeat after editing the list. If needed, clear the client DNS cache.</li>
+          <li>Older target lists may include <code>speedtest.net</code>, <code>ookla.com</code>, or broad shared CDNs. Remove those if you want ordinary traffic to stay offloaded, or use Reset targets for Casa’s YouTube/Netflix media defaults. Existing lists are preserved during updates.</li>
+          <li>If the page prompts you to install optimizer tools, install them first. Select Video Optimizer, then close and reopen the video/browser to make fresh DNS requests and connections. Repeat after editing the list. If needed, clear the client DNS cache.</li>
           <li>This first testing version optimizes IPv4. Use an IPv4 client for comparison; IPv6 and encrypted DNS traffic can bypass selection.</li>
         </ol>
         <div className="rounded-md border border-amber-500/40 bg-amber-500/5 p-3">

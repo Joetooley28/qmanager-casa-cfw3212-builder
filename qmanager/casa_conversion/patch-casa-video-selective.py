@@ -21,6 +21,34 @@ shutil.copy2(binary, target / "scripts/usr/bin/qmanager_video_selective")
 rel = "components/local-network/traffic-engine/selective-setup-card.tsx"
 shutil.copy2(templates / rel, target / rel)
 
+# Casa video defaults must not classify speed tests or whole shared CDNs.
+# Preserve the live list; Reset targets uses this separate factory copy.
+setup = target / "scripts/usr/bin/qmanager_setup"
+setup_text = setup.read_text()
+start = setup_text.index("# Seed the default Video Optimizer hostlist if missing.")
+end = setup_text.index("# Initialize default JSON config if missing", start)
+defaults = """# Casa selective-video targets: bare media CDN domains, subdomains included.
+# Add other services' actual media domains in the UI after checking them.
+googlevideo.com
+nflxvideo.net
+"""
+setup.write_text(setup_text[:start] + '''# Seed focused Casa video targets only when the live list is missing.
+# Existing custom and legacy lists are preserved; use Reset targets explicitly.
+DPI_HOSTLIST="/etc/qmanager/video_domains.txt"
+if [ ! -f "$DPI_HOSTLIST" ]; then
+    cat > "$DPI_HOSTLIST" << 'CASA_VIDEO_DEFAULTS'
+''' + defaults + '''CASA_VIDEO_DEFAULTS
+    chown www-data:www-data "$DPI_HOSTLIST"
+    chmod 644 "$DPI_HOSTLIST"
+fi
+# The factory copy is always the Casa list, never a copy of a custom live list.
+cat > "/etc/qmanager/video_domains_default.txt" << 'CASA_VIDEO_DEFAULTS'
+''' + defaults + '''CASA_VIDEO_DEFAULTS
+chown www-data:www-data "/etc/qmanager/video_domains_default.txt"
+chmod 644 "/etc/qmanager/video_domains_default.txt"
+
+''' + setup_text[end:])
+
 runner = "scripts/usr/bin/qmanager_dpi_run"
 edit(runner, '    --clear)\n', '''    --clear-selective)
         exec /usrdata/bin/qmanager_video_selective --clear

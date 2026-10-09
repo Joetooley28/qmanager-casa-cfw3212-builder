@@ -19,6 +19,10 @@ Full Bypass retains its upstream all-web relay behavior.
 Use Casa routed mode with IP Passthrough off, Casa DNS, and a LAN client.
 Disable client Secure DNS / DNS over HTTPS / Private DNS and VPNs for testing.
 Enter bare CDN domains: `googlevideo.com` for YouTube, `nflxvideo.net` for Netflix.
+Casa now seeds only those media domains. Existing lists are preserved: remove
+legacy `speedtest.net`, `ookla.com`, and broad shared-CDN entries, or use Reset
+targets to select the focused Casa defaults. Reset does not copy a custom list
+into the factory defaults. Install optimizer tools first if the UI prompts.
 Subdomains match automatically. Reopen browsers/streams and clear client DNS
 after enabling or changing targets so fresh DNS and connections are observed.
 
