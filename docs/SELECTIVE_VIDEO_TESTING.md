@@ -90,6 +90,7 @@ A cleanup-error message requires reviewing the router log before downgrading.
 | Soak video CPU / temperature | About 93–97% CPU during later video bursts; soak CPU sensor peak 55.8°C |
 | Final state | Optimizer Off; original configuration and live targets restored exactly; DNS and core services healthy |
 | Browser UI acceptance | Frontend build passed; headless runner stalled before rendering, so browser clicks remain unverified |
+| Overnight read-only logging | Running until 07:00 EDT / 11:00 UTC on 2026-10-09; final logs pending harvest |
 | Sustained 60–70 Mbps video with ~800 Mbps ordinary traffic | Unverified |
 
 Packet-only NFQUEUE experiments did not establish test connections on this
@@ -104,8 +105,9 @@ outside the selected video path, but these tests do not establish hardware
 offload operation at 800 Mbps. The optimizer-Off connection was only about
 134–144 Mbps that night. The 15-minute soak used intermittent 20-second bursts, rather than a
 continuous 15-minute video transfer. No sustained browser playback claim is
-made. The previous package was retained for rollback, and read-only CPU,
-temperature and service/link logging continues until the scheduled deadline.
+made. The exact prior `v0.1.16-cfw3212.1.35.dev` package was retained for
+rollback. Read-only CPU, temperature and service/carrier logging continues
+until 07:00 EDT / 11:00 UTC on 2026-10-09; its final logs remain pending harvest.
 
 The original live target list was restored after testing. Before testing again,
 review legacy entries or use **Reset targets**, then enable Video Optimizer.
