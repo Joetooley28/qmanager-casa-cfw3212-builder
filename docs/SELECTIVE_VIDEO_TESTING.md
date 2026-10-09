@@ -125,5 +125,35 @@ review legacy entries or use **Reset targets**, then enable Video Optimizer.
 Build source: [testing branch commit](https://github.com/Joetooley28/qmanager-casa-cfw3212-builder/commit/0295981b52315d94ada39960e8a136880108450c).
 [Artifact-only CI run](https://github.com/Joetooley28/qmanager-casa-cfw3212-builder/actions/runs/37891088605).
 
+### Packet-level offload investigation — 2026-10-09
+
+A follow-up test isolated NFQUEUE delivery before attempting video manipulation.
+A direct wired-client video HEAD request succeeded with HTTP 200. Routing only
+that client's SYN packets to one exact video destination through an unchanged
+queue caused connection timeouts. Rule counters advanced, but the queue's
+packet sequence remained zero and its reader logged no packets.
+
+Local loopback ping worked without interception, but also failed through the
+unchanged queue under explicit UID 0. Queue numbers 206 and 0, with and without
+the bypass flag, did not establish delivery. This does not identify the exact
+kernel/reader cause, but shows the tested failure occurs before the proposed
+TLS manipulation and also occurs outside LAN/WAN acceleration. It is not a
+valid speed measurement or proof that every packet-level design is impossible.
+
+No packet-level optimizer was added to the package. The installed `.1.41.dev`
+build, original settings and target list were preserved; optimizer remains Off.
+The exact current package and settings backup are retained for recovery, in
+addition to the earlier `.1.35.dev` rollback. The next investigation is queue
+delivery/compatibility; admission of an optimized flow to Casa's proprietary
+hardware offload remains unproven.
+
+The independent 60-second rollback timer was tested without manual cleanup:
+the owned queue/rules were gone after 61 seconds. Original settings hashes and
+permissions matched, core services stayed active, the normalized full rule
+set matched the baseline, and the direct video HEAD request returned HTTP 200
+again. This kernel lacks the kprobe interface needed to observe the queue's
+return code with that tracing method; no kernel, module or offload settings
+were changed to work around it.
+
 See the [implementation notes](../qmanager/casa_conversion/video-selective/README.md)
 and [artifact installation workflow](../scripts/README.md).
