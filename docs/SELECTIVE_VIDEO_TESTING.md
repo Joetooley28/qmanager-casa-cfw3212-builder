@@ -90,7 +90,9 @@ A cleanup-error message requires reviewing the router log before downgrading.
 | Soak video CPU / temperature | About 93–97% CPU during later video bursts; soak CPU sensor peak 55.8°C |
 | Final state | Optimizer Off; original configuration and live targets restored exactly; DNS and core services healthy |
 | Browser UI acceptance | Frontend build passed; headless runner stalled before rendering, so browser clicks remain unverified |
-| Overnight read-only logging | Running until 07:00 EDT / 11:00 UTC on 2026-10-09; final logs pending harvest |
+| Overnight read-only logging | Finished at 07:00:15–07:00:20 EDT on 2026-10-09; final logs harvested and checksums verified |
+| Overnight optimizer-Off CPU / temperature | 43.3% average CPU, 49.2% highest sample interval; CPU sensor 51.0–53.8°C |
+| Overnight service / Ethernet health | 535 samples; no observed reboot, non-active core service, or carrier-down sample |
 | Sustained 60–70 Mbps video with ~800 Mbps ordinary traffic | Unverified |
 
 Packet-only NFQUEUE experiments did not establish test connections on this
@@ -106,8 +108,16 @@ offload operation at 800 Mbps. The optimizer-Off connection was only about
 134–144 Mbps that night. The 15-minute soak used intermittent 20-second bursts, rather than a
 continuous 15-minute video transfer. No sustained browser playback claim is
 made. The exact prior `v0.1.16-cfw3212.1.35.dev` package was retained for
-rollback. Read-only CPU, temperature and service/carrier logging continues
-until 07:00 EDT / 11:00 UTC on 2026-10-09; its final logs remain pending harvest.
+rollback. Read-only CPU, temperature and service/carrier logging stopped just
+after 07:00 EDT / 11:00 UTC on 2026-10-09. Post-test optimizer-Off telemetry
+covers 02:32:55–06:59:49 EDT (534 samples, about 4 hours 27 minutes).
+Core services stayed active and Ethernet carriers stayed up in all 535 health
+samples; uptime showed no reboot. Approximately 30-second polling can miss
+brief outages or restarts between samples. Overnight monitoring generated no
+video or speed-test traffic, so it does not extend the earlier load-test result.
+The morning read-only check confirmed both loggers had stopped, the installed
+version remained `.1.41.dev`, and original configuration/live target hashes
+still matched.
 
 The original live target list was restored after testing. Before testing again,
 review legacy entries or use **Reset targets**, then enable Video Optimizer.
