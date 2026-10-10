@@ -9,13 +9,6 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { authFetch } from "@/lib/auth-fetch";
 import type { VideoScope } from "@/hooks/use-video-scope";
 import type { DpiMode } from "@/types/traffic-engine";
@@ -37,50 +30,25 @@ type SelectionStatus = {
 type VideoScopeCardProps = {
   mode: DpiMode;
   scope: VideoScope | null;
-  isSaving: boolean;
-  onScopeChange: (s: VideoScope) => void;
   forceTcp: boolean | undefined;
 };
 
 export default function VideoScopeCard({
   mode,
   scope,
-  isSaving,
-  onScopeChange,
   forceTcp,
 }: VideoScopeCardProps) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Video Optimizer scope</CardTitle>
+        <CardTitle>Narrow vs Broad</CardTitle>
         <CardDescription>
-          Applies when Video Optimizer is selected above. Changing it while Video
-          Optimizer is on restarts the engine, which briefly drops connections going
-          through it.
+          What each Video Optimizer scope sends through the proxy. Switch scope on the
+          Video Optimizer row above.
         </CardDescription>
       </CardHeader>
 
       <CardContent className="space-y-4 text-sm">
-        <Select
-          value={scope ?? ""}
-          disabled={isSaving || scope === null}
-          onValueChange={(v) => {
-            if (v === "narrow" || v === "broad") onScopeChange(v);
-          }}
-        >
-          <SelectTrigger className="w-full" aria-label="Video Optimizer scope">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="narrow">
-              Narrow — only video sites use the proxy (recommended)
-            </SelectItem>
-            <SelectItem value="broad">
-              Broad — all web traffic uses the proxy (upstream)
-            </SelectItem>
-          </SelectContent>
-        </Select>
-
         <div className="overflow-x-auto">
           <table className="w-full min-w-[32rem] border-collapse text-left text-xs">
             <thead>

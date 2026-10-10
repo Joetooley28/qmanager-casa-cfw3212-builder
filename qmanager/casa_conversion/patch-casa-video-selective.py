@@ -244,18 +244,46 @@ edit(page, '''            <VerifyCard binaryInstalled={installed} />
               <VideoScopeCard
                 mode={mode}
                 scope={videoScope.scope}
-                isSaving={videoScope.isSaving}
-                onScopeChange={(next) => {
-                  void videoScope.saveScope(next).then((ok) => {
-                    if (!ok) toast.error("Couldn't change the Video Optimizer scope");
-                  });
-                }}
                 forceTcp={videoOptimizer.data?.force_tcp}
               />
             </div>
 
             <VerifyCard binaryInstalled={installed} />
 ''')
+# Narrow/Broad switch on the Video Optimizer row itself (owner: the card
+# below was easy to miss). Rendered as a sibling of the row button.
+mc = "components/local-network/traffic-engine/mode-card.tsx"
+edit(mc, "  onSelect: (mode: DpiMode) => void;\n}", "  onSelect: (mode: DpiMode) => void;\n  /** Casa: Narrow/Broad switch shown on the Video Optimizer row. */\n  scopeSlot?: React.ReactNode;\n}")
+edit(mc, "  onSelect,\n}: ModeCardProps) {", "  onSelect,\n  scopeSlot,\n}: ModeCardProps) {")
+edit(mc, "            return (\n              <motion.button\n                key={entry.mode}", "            const row = (\n              <motion.button\n                key={entry.mode}")
+edit(mc, "              </motion.button>\n            );\n          })}", '''              </motion.button>
+            );
+            if (entry.mode !== "video_optimizer" || !scopeSlot) return row;
+            return (
+              <div key={entry.mode} className="relative">
+                {row}
+                {scopeSlot}
+              </div>
+            );
+          })}''')
+rel = "components/local-network/traffic-engine/video-scope-toggle.tsx"
+shutil.copy2(templates / rel, target / rel)
+edit(page, 'import VideoScopeCard from "./video-scope-card";', 'import VideoScopeCard from "./video-scope-card";\nimport VideoScopeToggle from "./video-scope-toggle";')
+edit(page, "              onSelect={selectMode}\n            />", '''              onSelect={selectMode}
+              scopeSlot={
+                <VideoScopeToggle
+                  scope={videoScope.scope}
+                  isSaving={videoScope.isSaving}
+                  onScopeChange={(next) => {
+                    void videoScope.saveScope(next).then((ok) => {
+                      if (ok) toast.success(next === "narrow" ? "Video Optimizer scope: Narrow" : "Video Optimizer scope: Broad");
+                      else toast.error("Couldn't change the Video Optimizer scope");
+                    });
+                  }}
+                />
+              }
+            />''')
+
 # Narrow pauses the global Force-TCP rule (the helper rejects UDP 443 per
 # learned address), so its toggle is hidden there; Broad and Off keep it.
 edit(page, '        <ForceTcpCard />', '        {mode === "video_optimizer" && videoScope.scope !== "broad" ? null : <ForceTcpCard />}')

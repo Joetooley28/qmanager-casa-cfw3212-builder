@@ -2064,6 +2064,13 @@ sleep 1
 systemctl start qmanager-poller 2>/dev/null \
     && info "qmanager-poller started" \
     || warn "qmanager-poller failed — check: systemctl status qmanager-poller"
+# A running Video Optimizer keeps the old engine/helper binary until restarted;
+# restart it only when it is already active (it is never started here).
+if systemctl is-active qmanager-dpi >/dev/null 2>&1; then
+    systemctl restart qmanager-dpi 2>/dev/null \
+        && info "Video Optimizer restarted on the new version" \
+        || warn "Video Optimizer restart failed — check: systemctl status qmanager-dpi"
+fi
 
 # --- Web Console (ttyd) ------------------------------------------------------
 # Upstream ships qmanager_console_mgr as an optional downloader for ttyd. The
