@@ -32,6 +32,13 @@ const maxAddresses = 512
 
 const ensureInterval = 30 * time.Second
 
+// Fail-open: when most lookups through the helper fail within a window, DNS
+// capture is paused so ordinary browsing never depends on the helper.
+const (
+	dnsWindow = 15 * time.Second
+	dnsBypass = 60 * time.Second
+)
+
 const typeHTTPS = dnsmessage.Type(65)
 
 var ipv4Pattern = regexp.MustCompile(`\b(?:\d{1,3}\.){3}\d{1,3}\b`)
@@ -203,6 +210,8 @@ type status struct {
 	Addresses       int    `json:"addresses"`
 	Connections     uint64 `json:"connections"`
 	Errors          uint64 `json:"errors"`
+	UpstreamFails   uint64 `json:"upstream_failures"`
+	DNSBypassed     bool   `json:"dns_bypassed"`
 	LastError       string `json:"last_error,omitempty"`
 	IPv4Only        bool   `json:"ipv4_only"`
 }
@@ -217,6 +226,10 @@ type engine struct {
 	semaphore                      chan struct{}
 	stopping                       bool
 	lastEnsure                     time.Time
+	windowStart                    time.Time
+	windowOK, windowFail           uint64
+	bypassUntil                    time.Time
+	errLog                         string
 }
 
 func (e *engine) writeStatus() {
@@ -248,6 +261,16 @@ func (e *engine) recordError(err error) {
 	e.status.Errors++
 	e.status.LastError = redact(err)
 	log.Print(err)
+	if e.errLog != "" {
+		// Root-only diagnostics on the router (never served to the UI).
+		if st, err := os.Stat(e.errLog); err == nil && st.Size() > 64<<10 {
+			_ = os.Truncate(e.errLog, 0)
+		}
+		if f, ferr := os.OpenFile(e.errLog, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600); ferr == nil {
+			fmt.Fprintf(f, "%s %v\n", time.Now().UTC().Format(time.RFC3339), err)
+			f.Close()
+		}
+	}
 }
 
 // redact keeps addresses out of status.json, which the web UI reads.
@@ -299,15 +322,24 @@ func (e *engine) classify(query, reply []byte) error {
 	return nil
 }
 
+// exchange asks Casa's resolver, retrying once on a slow or failed attempt.
 func (e *engine) exchange(query []byte, transport string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	b, err := e.exchangeOnce(query, transport, 2*time.Second)
+	if err == nil {
+		return b, nil
+	}
+	return e.exchangeOnce(query, transport, 3*time.Second)
+}
+
+func (e *engine) exchangeOnce(query []byte, transport string, timeout time.Duration) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	c, err := (&net.Dialer{}).DialContext(ctx, transport, e.upstream)
 	if err != nil {
 		return nil, err
 	}
 	defer c.Close()
-	_ = c.SetDeadline(time.Now().Add(4 * time.Second))
+	_ = c.SetDeadline(time.Now().Add(timeout))
 	if transport == "tcp" {
 		if len(query) > 65535 {
 			return nil, errors.New("DNS query too large")
@@ -393,10 +425,20 @@ func (e *engine) answer(query []byte, transport string) []byte {
 		return reply
 	}
 	b, err := e.exchange(query, transport)
-	if err == nil {
-		err = e.classify(query, b)
-	}
 	if err != nil {
+		// No answer from Casa's resolver: stay silent, as a slow resolver
+		// would, so the client retries or uses its other DNS server.
+		e.mu.Lock()
+		e.status.UpstreamFails++
+		e.windowFail++
+		e.recordError(err)
+		e.mu.Unlock()
+		return nil
+	}
+	e.mu.Lock()
+	e.windowOK++
+	e.mu.Unlock()
+	if err := e.classify(query, b); err != nil {
 		e.mu.Lock()
 		e.recordError(err)
 		e.mu.Unlock()
@@ -471,6 +513,7 @@ func (e *engine) serveTCP(l net.Listener) {
 func (e *engine) reconcile() error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	e.checkDNSHealth(time.Now())
 	domains, err := loadDomains(e.hostlist)
 	if err != nil {
 		e.recordError(err)
@@ -512,6 +555,31 @@ func (e *engine) reconcile() error {
 	}
 	e.writeStatus()
 	return nil
+}
+
+// checkDNSHealth pauses DNS capture for dnsBypass when most lookups in the
+// last window failed upstream, then resumes it. Caller holds e.mu.
+func (e *engine) checkDNSHealth(now time.Time) {
+	if !e.bypassUntil.IsZero() && now.After(e.bypassUntil) {
+		e.bypassUntil = time.Time{}
+		e.fw.skipDNS = false
+		e.status.DNSBypassed = false
+		e.lastEnsure = time.Time{} // re-add the DNS jumps on this pass
+	}
+	if e.windowStart.IsZero() {
+		e.windowStart = now
+	}
+	if now.Sub(e.windowStart) < dnsWindow {
+		return
+	}
+	if e.bypassUntil.IsZero() && e.windowFail >= 5 && e.windowFail > e.windowOK {
+		e.recordError(fmt.Errorf("DNS lookups failing (%d failed, %d answered); DNS capture paused for %s", e.windowFail, e.windowOK, dnsBypass))
+		e.fw.skipDNS = true
+		e.fw.removeDNSHooks()
+		e.bypassUntil = now.Add(dnsBypass)
+		e.status.DNSBypassed = true
+	}
+	e.windowStart, e.windowOK, e.windowFail = now, 0, 0
 }
 
 func main() {
@@ -677,7 +745,7 @@ func run(hostlist, proxy, listen, upstream, runtime string, fw *firewall) error 
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	e := &engine{domains: domains, entries: map[netip.Addr]time.Time{}, fw: fw, hostlist: hostlist, upstream: upstream, statusPath: filepath.Join(runtime, "status.json"), semaphore: make(chan struct{}, 64), status: status{State: "running", IPv4Only: true}}
+	e := &engine{domains: domains, entries: map[netip.Addr]time.Time{}, fw: fw, hostlist: hostlist, upstream: upstream, statusPath: filepath.Join(runtime, "status.json"), errLog: filepath.Join(runtime, "errors.log"), semaphore: make(chan struct{}, 64), status: status{State: "running", IPv4Only: true}}
 	defer func() {
 		e.mu.Lock()
 		e.stopping = true

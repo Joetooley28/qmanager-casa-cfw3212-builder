@@ -216,3 +216,43 @@ func FuzzDNSSelection(f *testing.F) {
 		}
 	})
 }
+
+func TestUpstreamFailureIsSilentAndPausesDNSCapture(t *testing.T) {
+	var deleted []string
+	f := &firewall{iface: "bridge0", proxyPort: 989, dnsPort: 1053, execute: func(args ...string) error {
+		if len(args) > 2 && args[2] == "-D" {
+			deleted = append(deleted, strings.Join(args, " "))
+			return errors.New("gone")
+		}
+		return nil
+	}}
+	e := &engine{fw: f, upstream: "127.0.0.1:1", domains: []string{"googlevideo.com"}, entries: map[netip.Addr]time.Time{}}
+	msg := dnsmessage.Message{Header: dnsmessage.Header{ID: 7, RecursionDesired: true}, Questions: []dnsmessage.Question{{Name: dnsmessage.MustNewName("example.com."), Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET}}}
+	query, err := msg.Pack()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := e.answer(query, "udp"); r != nil {
+		t.Fatalf("expected no reply on upstream failure, got %d bytes", len(r))
+	}
+	if e.status.UpstreamFails != 1 || e.windowFail != 1 {
+		t.Fatalf("failure not counted: %+v fail=%d", e.status, e.windowFail)
+	}
+	now := time.Now()
+	e.windowStart = now.Add(-20 * time.Second)
+	e.windowFail, e.windowOK = 6, 1
+	e.checkDNSHealth(now)
+	if !e.fw.skipDNS || !e.status.DNSBypassed || len(deleted) == 0 {
+		t.Fatalf("DNS capture not paused: skip=%v bypassed=%v deleted=%d", e.fw.skipDNS, e.status.DNSBypassed, len(deleted))
+	}
+	e.checkDNSHealth(now.Add(dnsBypass + time.Second))
+	if e.fw.skipDNS || e.status.DNSBypassed {
+		t.Fatal("DNS capture not resumed after the pause")
+	}
+	e.windowStart = now.Add(dnsBypass)
+	e.windowFail, e.windowOK = 3, 40
+	e.checkDNSHealth(now.Add(dnsBypass + 20*time.Second))
+	if e.fw.skipDNS {
+		t.Fatal("healthy window must not pause DNS capture")
+	}
+}

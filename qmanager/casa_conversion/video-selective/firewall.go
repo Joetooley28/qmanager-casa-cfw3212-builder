@@ -48,6 +48,7 @@ type firewall struct {
 	client             string
 	proxyPort, dnsPort int
 	ipv6               bool
+	skipDNS            bool
 	execute            func(...string) error
 	execute6           func(...string) error
 }
@@ -131,11 +132,31 @@ func (f *firewall) ensure6() error {
 		}
 	}
 	for _, p := range []string{"tcp", "udp"} {
+		if f.skipDNS {
+			break
+		}
 		if err := f.hook6("nat", "PREROUTING", []string{"-i", f.iface, "-p", p, "--dport", "53", "-j", dns6Chain}); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// removeDNSHooks sends LAN DNS straight to Casa's resolver again (fail-open).
+// Chains, listeners and learned video rules stay in place.
+func (f *firewall) removeDNSHooks() {
+	for _, p := range []string{"tcp", "udp"} {
+		for i := 0; i < 16; i++ {
+			if f.call(append([]string{"-t", "nat", "-D", "PREROUTING"}, f.lan("-p", p, "--dport", "53", "-j", dnsChain)...)...) != nil {
+				break
+			}
+		}
+		for i := 0; i < 16; i++ {
+			if f.call6("-t", "nat", "-D", "PREROUTING", "-i", f.iface, "-p", p, "--dport", "53", "-j", dns6Chain) != nil {
+				break
+			}
+		}
+	}
 }
 
 func (f *firewall) cleanup6() error {
@@ -241,7 +262,11 @@ func (f *firewall) ensure(entries map[netip.Addr]time.Time) error {
 		return err
 	}
 	// DNS jumps are last: both listeners and all selection chains exist first.
+	// Skipped while DNS capture is paused (fail-open, see engine.reconcile).
 	for _, p := range []string{"tcp", "udp"} {
+		if f.skipDNS {
+			break
+		}
 		if err := f.hook("nat", "PREROUTING", f.lan("-p", p, "--dport", "53", "-j", dnsChain)); err != nil {
 			return err
 		}

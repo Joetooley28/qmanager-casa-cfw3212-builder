@@ -23,6 +23,8 @@ type SelectionStatus = {
   selected_replies?: number;
   addresses?: number;
   hidden_ipv6?: number;
+  upstream_failures?: number;
+  dns_bypassed?: boolean;
   errors?: number;
   last_error?: string;
 };
@@ -211,6 +213,13 @@ function NarrowLiveStatus({ active }: { active: boolean }) {
             {selection.dns_queries ?? 0} DNS requests · {selection.selected_replies ?? 0} video
             DNS replies
           </p>
+          {selection.dns_bypassed && (
+            <p className="mt-1">
+              The router&apos;s DNS was answering too slowly, so video detection is paused for a
+              minute and lookups go straight to the router. Browsing keeps working; already
+              detected video stays optimized.
+            </p>
+          )}
           {addresses === 0 && (
             <p className="mt-1">
               Waiting for video DNS. Check the domain list, Secure DNS setting, and reopen the
