@@ -8,8 +8,9 @@ BASE_URL="${QMANAGER_CFW3212_BASE_URL:-https://github.com/$REPO/releases/downloa
 # Downloaded to /usrdata (flash), not /tmp (RAM); uninstall_cfw3212.sh removes
 # /usrdata/qmanager_stage when it finishes.
 WORK_DIR="${QMANAGER_CFW3212_WORK_DIR:-/usrdata/qmanager_stage/online-uninstall}"
-TARBALL_NAME="qmanager-cfw3212-$VERSION.tar.gz"
-SHA_NAME="qmanager-cfw3212-$VERSION.sha256"
+# Release assets carry the full Casa tag (AI-56); the upstream-only name 404s.
+TARBALL_NAME="qmanager-cfw3212-$TAG.tar.gz"
+SHA_NAME="qmanager-cfw3212-$TAG.sha256"
 
 download() {
     url="$1"

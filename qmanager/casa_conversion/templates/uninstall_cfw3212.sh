@@ -32,6 +32,34 @@ for f in /etc/systemd/system/qmanager*.service /etc/systemd/system/qmanager_*.se
     case " $SERVICES " in *" $u "*) ;; *) SERVICES="$SERVICES $u" ;; esac
 done
 
+step "Removing Video Optimizer rules"
+# The --no-block stop below can race the helper deletions, and the Force-TCP
+# UDP/443 REJECT is not owned by qmanager-dpi at all. Stop the optimizer
+# synchronously while its helpers still exist, then remove its rules directly
+# so QUIC/web traffic is not left redirected or rejected until the next reboot.
+systemctl stop qmanager-dpi 2>/dev/null || true
+if [ -x /usrdata/bin/qmanager_video_selective ]; then
+    /usrdata/bin/qmanager_video_selective --clear >/dev/null 2>&1 || true
+fi
+if command -v iptables >/dev/null 2>&1; then
+    i=0
+    while [ "$i" -lt 16 ] && iptables -w 5 -t nat -D PREROUTING -i bridge0 -p tcp \
+            -m multiport --dports 80,443 -j REDIRECT --to-ports 989 2>/dev/null; do
+        i=$((i + 1))
+    done
+    i=0
+    while [ "$i" -lt 16 ] && iptables -w 5 -t filter -D FORWARD -i bridge0 -p udp \
+            --dport 443 -j REJECT --reject-with icmp-port-unreachable 2>/dev/null; do
+        i=$((i + 1))
+    done
+fi
+pkill -f /usrdata/qmanager/bin/tpws 2>/dev/null || true
+if iptables-save 2>/dev/null | grep -q 'QMVS\|to-ports 989'; then
+    warn "Some Video Optimizer rules remain; they clear at the next reboot"
+else
+    info "Video Optimizer rules removed"
+fi
+
 step "Stopping QManager services"
 systemctl stop --no-block $SERVICES 2>/dev/null \
     && info "Stop requested" \
