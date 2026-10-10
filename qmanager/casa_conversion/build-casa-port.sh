@@ -3769,8 +3769,8 @@ if text == new_text:
 # Upstream v0.1.14+ adds root helpers that CGIs reach through sudo (schedule
 # timer arming, crash-log classification, secrets, email, timezone, SIM
 # registry, language packs). Keep them allowed at their Casa install path,
-# but only when the target actually ships the helper. DPI helpers are left
-# out: the zapret video optimizer is not supported on Casa.
+# but only when the target actually ships the helper. The tpws installer grant
+# is added separately, with fixed verbs only, by patch-casa-video-selective.py.
 bin_dir = path.parents[2] / "usr" / "bin"
 extra = [
     name for name in (
@@ -8125,65 +8125,6 @@ PY
         || fail "speedtest-dialog.tsx still has unsafe DL latency iqm read"
     ! grep -Fq '            {result.upload.latency.iqm.toFixed(1)} ms' "$dialog" \
         || fail "speedtest-dialog.tsx still has unsafe UL latency iqm read"
-}
-
-patch_casa_hide_video_optimizer_cfw3212() {
-    # Upstream v0.1.14+ added a Traffic Engine / DPI page (components/local-
-    # network/traffic-engine) with three selectable modes: "none", "full_bypass"
-    # and "video_optimizer" -- the latter installs/runs a DPI binary driven by
-    # scripts/www/cgi-bin/quecmanager/network/video_optimizer.sh. Casa wants to
-    # keep shipping the backend (to try later) but not expose it as choosable
-    # yet, pending Casa-specific validation. Remove just the "video_optimizer"
-    # entry from the mode selector's MODES array so the UI can never select or
-    # enable it; leave the hook/CGI/backend files untouched. Absent entirely on
-    # v0.1.12 (Traffic Engine is a v0.1.14+ feature), so this is a no-op there.
-    local mode_card="$TARGET/components/local-network/traffic-engine/mode-card.tsx"
-    if [ ! -f "$mode_card" ]; then
-        log "Video Optimizer hide: no-op (Traffic Engine not present, pre-v0.1.14 layout)"
-        return 0
-    fi
-
-    if grep -q "Casa CFW-3212: Video Optimizer mode hidden pending validation" "$mode_card"; then
-        log "Video Optimizer hide patch already applied"
-        return 0
-    fi
-
-    python3 - "$mode_card" <<'PY'
-from pathlib import Path
-import sys
-
-path = Path(sys.argv[1])
-text = path.read_text()
-
-entry = '''  {
-    mode: "video_optimizer",
-    nameKey: "trafficEngine.mode.video_optimizer",
-    hintKey: "trafficEngine.mode.video_optimizer_hint",
-    glyph: VideoIcon,
-  },
-'''
-if entry not in text:
-    raise SystemExit("mode-card: video_optimizer MODES entry not found (upstream may have changed)")
-text = text.replace(
-    entry,
-    "  // Casa CFW-3212: Video Optimizer mode hidden pending validation (backend\n"
-    "  // kept for a later try; see patch_casa_hide_video_optimizer_cfw3212).\n",
-    1,
-)
-
-# VideoIcon import is now unused; drop it so lint/tsc stay clean.
-unused_import = "  VideoIcon,\n"
-if unused_import in text and "VideoIcon" not in text.replace(unused_import, "", 1):
-    text = text.replace(unused_import, "", 1)
-
-path.write_text(text)
-PY
-
-    grep -q "Casa CFW-3212: Video Optimizer mode hidden pending validation" "$mode_card" \
-        || fail "Could not hide Video Optimizer mode from Traffic Engine selector"
-    ! grep -q 'mode: "video_optimizer"' "$mode_card" \
-        || fail "Video Optimizer mode entry still selectable in Traffic Engine"
-    log "Video Optimizer mode hidden from Traffic Engine selector (backend kept)"
 }
 
 patch_software_update_reboot_required_cfw3212() {

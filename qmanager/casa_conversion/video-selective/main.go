@@ -18,6 +18,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -28,6 +29,12 @@ import (
 )
 
 const maxAddresses = 512
+
+const ensureInterval = 30 * time.Second
+
+const typeHTTPS = dnsmessage.Type(65)
+
+var ipv4Pattern = regexp.MustCompile(`\b(?:\d{1,3}\.){3}\d{1,3}\b`)
 
 var exclusions = []netip.Prefix{
 	netip.MustParsePrefix("0.0.0.0/8"), netip.MustParsePrefix("10.0.0.0/8"),
@@ -191,6 +198,7 @@ type status struct {
 	State           string `json:"state"`
 	UpdatedUTC      string `json:"updated_utc"`
 	DNSQueries      uint64 `json:"dns_queries"`
+	HiddenIPv6      uint64 `json:"hidden_ipv6"`
 	SelectedReplies uint64 `json:"selected_replies"`
 	Addresses       int    `json:"addresses"`
 	Connections     uint64 `json:"connections"`
@@ -208,6 +216,7 @@ type engine struct {
 	statusPath, hostlist, upstream string
 	semaphore                      chan struct{}
 	stopping                       bool
+	lastEnsure                     time.Time
 }
 
 func (e *engine) writeStatus() {
@@ -237,8 +246,17 @@ func (e *engine) writeStatus() {
 
 func (e *engine) recordError(err error) {
 	e.status.Errors++
-	e.status.LastError = err.Error()
+	e.status.LastError = redact(err)
 	log.Print(err)
+}
+
+// redact keeps addresses out of status.json, which the web UI reads.
+func redact(err error) string {
+	msg := ipv4Pattern.ReplaceAllString(err.Error(), "<addr>")
+	if len(msg) > 200 {
+		msg = strings.ToValidUTF8(msg[:200], "")
+	}
+	return msg
 }
 
 func (e *engine) classify(query, reply []byte) error {
@@ -344,7 +362,36 @@ func failure(query []byte) []byte {
 	return b
 }
 
+// nodata hides AAAA and HTTPS answers for target domains so clients use the
+// IPv4 path that the optimizer can classify. Returns nil when not applicable.
+func nodata(query []byte, domains []string) []byte {
+	var m dnsmessage.Message
+	if m.Unpack(query) != nil || m.Response || m.OpCode != 0 || len(m.Questions) != 1 {
+		return nil
+	}
+	q := m.Questions[0]
+	if q.Class != dnsmessage.ClassINET || (q.Type != dnsmessage.TypeAAAA && q.Type != typeHTTPS) || !matches(hostname(q.Name.String()), domains) {
+		return nil
+	}
+	r := dnsmessage.Message{
+		Header:    dnsmessage.Header{ID: m.ID, Response: true, RecursionDesired: m.RecursionDesired, RecursionAvailable: true, RCode: dnsmessage.RCodeSuccess},
+		Questions: m.Questions,
+	}
+	b, _ := r.Pack()
+	return b
+}
+
 func (e *engine) answer(query []byte, transport string) []byte {
+	e.mu.Lock()
+	reply := nodata(query, e.domains)
+	if reply != nil {
+		e.status.DNSQueries++
+		e.status.HiddenIPv6++
+	}
+	e.mu.Unlock()
+	if reply != nil {
+		return reply
+	}
 	b, err := e.exchange(query, transport)
 	if err == nil {
 		err = e.classify(query, b)
@@ -449,13 +496,18 @@ func (e *engine) reconcile() error {
 			delete(e.entries, ip)
 		}
 	}
-	if err := e.fw.ensure(e.entries); err != nil {
-		e.recordError(err)
-		return err
-	}
-	if e.fw.execute == nil {
-		if n, err := e.fw.connections(); err == nil {
-			e.status.Connections = n
+	// The full chain/hook check costs about 16 iptables calls; expiry above
+	// stays on the 5 s tick, the re-assert (QCMAP flushes) runs every 30 s.
+	if now.Sub(e.lastEnsure) >= ensureInterval {
+		if err := e.fw.ensure(e.entries); err != nil {
+			e.recordError(err)
+			return err
+		}
+		e.lastEnsure = now
+		if e.fw.execute == nil {
+			if n, err := e.fw.connections(); err == nil {
+				e.status.Connections = n
+			}
 		}
 	}
 	e.writeStatus()
@@ -488,7 +540,7 @@ func main() {
 	fw := &firewall{iface: *iface, client: *client, proxyPort: *port, dnsPort: 1053}
 	if *clear {
 		if err := fw.cleanup(); err != nil {
-			e := &engine{statusPath: filepath.Join(*runtime, "status.json"), status: status{State: "cleanup_error", Errors: 1, LastError: err.Error(), IPv4Only: true}}
+			e := &engine{statusPath: filepath.Join(*runtime, "status.json"), status: status{State: "cleanup_error", Errors: 1, LastError: redact(err), IPv4Only: true}}
 			e.writeStatus()
 			log.Fatal(err)
 		}
@@ -614,6 +666,11 @@ func run(hostlist, proxy, listen, upstream, runtime string, fw *firewall) error 
 		e.writeStatus()
 		e.mu.Unlock()
 	}()
+	// A crash can leave per-address rules this process never learned about,
+	// so start from empty chains rather than adopting them.
+	if err := fw.cleanup(); err != nil {
+		return err
+	}
 	if err := fw.ensure(e.entries); err != nil {
 		return err
 	}

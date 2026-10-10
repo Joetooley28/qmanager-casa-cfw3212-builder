@@ -154,6 +154,56 @@ func TestExpiredAndEditedListsRemoveSelection(t *testing.T) {
 	}
 }
 
+func queryType(t *testing.T, name string, typ dnsmessage.Type) []byte {
+	t.Helper()
+	q := dnsmessage.Message{Header: dnsmessage.Header{ID: 7, RecursionDesired: true}, Questions: []dnsmessage.Question{{Name: dnsmessage.MustNewName(name), Type: typ, Class: dnsmessage.ClassINET}}}
+	b, err := q.Pack()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+func TestNODATAForTargetIPv6(t *testing.T) {
+	domains := []string{"googlevideo.com"}
+	for _, typ := range []dnsmessage.Type{dnsmessage.TypeAAAA, typeHTTPS} {
+		for _, name := range []string{"googlevideo.com.", "r1.googlevideo.com."} {
+			out := nodata(queryType(t, name, typ), domains)
+			var m dnsmessage.Message
+			if out == nil || m.Unpack(out) != nil {
+				t.Fatalf("no NODATA for %s type %d", name, typ)
+			}
+			if m.ID != 7 || !m.Response || !m.RecursionDesired || !m.RecursionAvailable || m.RCode != dnsmessage.RCodeSuccess || len(m.Answers) != 0 || len(m.Authorities) != 0 || len(m.Additionals) != 0 || len(m.Questions) != 1 {
+				t.Fatalf("bad NODATA %+v", m.Header)
+			}
+		}
+	}
+	q, r := dnsPair(t, "googlevideo.com.", nil)
+	for _, in := range [][]byte{
+		q,
+		r,
+		queryType(t, "example.com.", dnsmessage.TypeAAAA),
+		queryType(t, "notgooglevideo.com.", dnsmessage.TypeAAAA),
+		{0, 1, 2},
+	} {
+		if out := nodata(in, domains); out != nil {
+			t.Fatalf("NODATA applied to %x", in)
+		}
+	}
+}
+
+func TestRecordErrorRedactsAndTruncates(t *testing.T) {
+	e := &engine{}
+	e.recordError(errors.New("iptables -t nat -A QMVS_VIDEO -d 142.250.1.2 -p tcp"))
+	if !strings.Contains(e.status.LastError, "<addr>") || strings.Contains(e.status.LastError, "142.250.1.2") {
+		t.Fatalf("unredacted error %q", e.status.LastError)
+	}
+	e.recordError(errors.New(strings.Repeat("x", 300)))
+	if len(e.status.LastError) != 200 {
+		t.Fatalf("error length %d", len(e.status.LastError))
+	}
+}
+
 func FuzzDNSSelection(f *testing.F) {
 	f.Add([]byte{0, 1, 128, 0, 0, 0, 0, 0, 0, 0, 0, 0})
 	f.Fuzz(func(t *testing.T, b []byte) {
