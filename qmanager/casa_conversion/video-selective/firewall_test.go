@@ -53,3 +53,46 @@ func TestCleanupReportsAnOwnedChainThatCannotBeRemoved(t *testing.T) {
 		t.Fatalf("claimed cleanup succeeded while owned chain remained: %v", err)
 	}
 }
+
+func TestIPv6DNSCaptureAndCleanup(t *testing.T) {
+	present := map[string]bool{}
+	var calls []string
+	f := &firewall{iface: "bridge0", proxyPort: 989, dnsPort: 1053, ipv6: true,
+		execute: func(args ...string) error { return nil },
+		execute6: func(args ...string) error {
+			s := strings.Join(args, " ")
+			calls = append(calls, s)
+			switch args[2] {
+			case "-N":
+				present[args[3]] = true
+			case "-X":
+				delete(present, args[3])
+			case "-L":
+				if !present[args[3]] {
+					return errors.New("no chain")
+				}
+			case "-C":
+				return errors.New("absent")
+			}
+			return nil
+		}}
+	if err := f.ensure6(); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(calls, "\n")
+	for _, want := range []string{
+		"-t nat -A QMVS_DNS6 -p udp -j REDIRECT --to-ports 1053",
+		"-t nat -A QMVS_DNS6 -p tcp -j REDIRECT --to-ports 1053",
+		"-t filter -A QMVS_INPUT6 -i bridge0 -j ACCEPT",
+		"-t filter -A QMVS_INPUT6 -j REJECT",
+		"-t nat -I PREROUTING 1 -i bridge0 -p udp --dport 53 -j QMVS_DNS6",
+		"-t filter -I INPUT 1 -p tcp --dport 1053 -j QMVS_INPUT6",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("missing %q", want)
+		}
+	}
+	if err := f.cleanup6(); err != nil || len(present) != 0 {
+		t.Fatalf("cleanup6 err=%v remaining=%v", err, present)
+	}
+}

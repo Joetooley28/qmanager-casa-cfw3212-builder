@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/netip"
 	"os/exec"
@@ -14,6 +15,13 @@ const videoChain = "QMVS_VIDEO"
 const dnsChain = "QMVS_DNS"
 const quicChain = "QMVS_QUIC"
 const inputChain = "QMVS_INPUT"
+
+// IPv6 DNS: clients that resolve through the router's IPv6 address (Windows
+// prefers it) are redirected to the same helper so Narrow still sees them.
+const dns6Chain = "QMVS_DNS6"
+const input6Chain = "QMVS_INPUT6"
+
+var errNoIPv6 = errors.New("ip6tables not available")
 
 func (f *firewall) connections() (uint64, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -39,7 +47,9 @@ type firewall struct {
 	iface              string
 	client             string
 	proxyPort, dnsPort int
+	ipv6               bool
 	execute            func(...string) error
+	execute6           func(...string) error
 }
 
 func (f *firewall) lan(spec ...string) []string {
@@ -59,6 +69,95 @@ func (f *firewall) call(args ...string) error {
 	b, err := exec.CommandContext(ctx, "iptables", append([]string{"-w", "5"}, args...)...).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("iptables %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(b)))
+	}
+	return nil
+}
+
+func (f *firewall) call6(args ...string) error {
+	if f.execute != nil {
+		if f.execute6 == nil {
+			return errNoIPv6
+		}
+		return f.execute6(args...)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	b, err := exec.CommandContext(ctx, "ip6tables", append([]string{"-w", "5"}, args...)...).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("ip6tables %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(b)))
+	}
+	return nil
+}
+
+func (f *firewall) hook6(table, chain string, spec []string) error {
+	if f.call6(append([]string{"-t", table, "-C", chain}, spec...)...) == nil {
+		return nil
+	}
+	return f.call6(append([]string{"-t", table, "-I", chain, "1"}, spec...)...)
+}
+
+// ensure6 redirects LAN IPv6 DNS to the helper's IPv6 listener. Only DNS is
+// captured; video selection itself stays IPv4 (AAAA is hidden for targets).
+func (f *firewall) ensure6() error {
+	port := strconv.Itoa(f.dnsPort)
+	if f.call6("-t", "nat", "-C", dns6Chain, "-p", "udp", "-j", "REDIRECT", "--to-ports", port) != nil ||
+		f.call6("-t", "filter", "-C", input6Chain, "-j", "REJECT") != nil {
+		for _, c := range []struct{ table, name string }{{"nat", dns6Chain}, {"filter", input6Chain}} {
+			if f.call6("-t", c.table, "-L", c.name, "-n") != nil {
+				if err := f.call6("-t", c.table, "-N", c.name); err != nil {
+					return err
+				}
+			} else if err := f.call6("-t", c.table, "-F", c.name); err != nil {
+				return err
+			}
+		}
+		for _, p := range []string{"tcp", "udp"} {
+			if err := f.call6("-t", "nat", "-A", dns6Chain, "-p", p, "-j", "REDIRECT", "--to-ports", port); err != nil {
+				return err
+			}
+		}
+		for _, i := range []string{f.iface, "lo"} {
+			if err := f.call6("-t", "filter", "-A", input6Chain, "-i", i, "-j", "ACCEPT"); err != nil {
+				return err
+			}
+		}
+		if err := f.call6("-t", "filter", "-A", input6Chain, "-j", "REJECT"); err != nil {
+			return err
+		}
+	}
+	for _, p := range []string{"tcp", "udp"} {
+		if err := f.hook6("filter", "INPUT", []string{"-p", p, "--dport", port, "-j", input6Chain}); err != nil {
+			return err
+		}
+	}
+	for _, p := range []string{"tcp", "udp"} {
+		if err := f.hook6("nat", "PREROUTING", []string{"-i", f.iface, "-p", p, "--dport", "53", "-j", dns6Chain}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (f *firewall) cleanup6() error {
+	port := strconv.Itoa(f.dnsPort)
+	hooks := [][]string{}
+	for _, p := range []string{"tcp", "udp"} {
+		hooks = append(hooks, []string{"nat", "PREROUTING", "-i", f.iface, "-p", p, "--dport", "53", "-j", dns6Chain})
+		hooks = append(hooks, []string{"filter", "INPUT", "-p", p, "--dport", port, "-j", input6Chain})
+	}
+	for _, h := range hooks {
+		for i := 0; i < 16; i++ {
+			if f.call6(append([]string{"-t", h[0], "-D", h[1]}, h[2:]...)...) != nil {
+				break
+			}
+		}
+	}
+	for _, c := range []struct{ table, name string }{{"nat", dns6Chain}, {"filter", input6Chain}} {
+		_ = f.call6("-t", c.table, "-F", c.name)
+		_ = f.call6("-t", c.table, "-X", c.name)
+		if f.call6("-t", c.table, "-L", c.name, "-n") == nil {
+			return fmt.Errorf("cleanup incomplete: owned chain %s remains", c.name)
+		}
 	}
 	return nil
 }
@@ -147,6 +246,9 @@ func (f *firewall) ensure(entries map[netip.Addr]time.Time) error {
 			return err
 		}
 	}
+	if f.ipv6 {
+		return f.ensure6()
+	}
 	return nil
 }
 
@@ -219,5 +321,6 @@ func (f *firewall) cleanup() error {
 			return fmt.Errorf("cleanup incomplete: owned chain %s remains", c.name)
 		}
 	}
-	return nil
+	// Always attempted, so --clear also removes IPv6 rules from any run.
+	return f.cleanup6()
 }

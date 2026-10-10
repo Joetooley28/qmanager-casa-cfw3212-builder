@@ -627,6 +627,24 @@ func run(hostlist, proxy, listen, upstream, runtime string, fw *firewall) error 
 		return err
 	}
 	defer tcp.Close()
+	// IPv6 DNS listener on the same port (v6-only sockets). Its firewall
+	// chain only accepts bridge0/lo. Without IPv6, continue IPv4-only.
+	_, dnsPort, _ := net.SplitHostPort(listen)
+	udp6, err6 := net.ListenPacket("udp6", net.JoinHostPort("::", dnsPort))
+	var tcp6 net.Listener
+	if err6 == nil {
+		tcp6, err6 = net.Listen("tcp6", net.JoinHostPort("::", dnsPort))
+		if err6 != nil {
+			udp6.Close()
+		}
+	}
+	if err6 == nil {
+		defer udp6.Close()
+		defer tcp6.Close()
+		fw.ipv6 = true
+	} else {
+		log.Printf("IPv6 DNS listener unavailable, IPv4 only: %v", err6)
+	}
 	probe, err := net.Listen("tcp4", net.JoinHostPort(bind, fmt.Sprint(fw.proxyPort)))
 	if err != nil {
 		return fmt.Errorf("proxy port already in use: %w", err)
@@ -680,9 +698,13 @@ func run(hostlist, proxy, listen, upstream, runtime string, fw *firewall) error 
 	if err := fw.ensure(e.entries); err != nil {
 		return err
 	}
-	dnsDone := make(chan struct{}, 2)
+	dnsDone := make(chan struct{}, 4)
 	go func() { e.serveUDP(udp); dnsDone <- struct{}{} }()
 	go func() { e.serveTCP(tcp); dnsDone <- struct{}{} }()
+	if fw.ipv6 {
+		go func() { e.serveUDP(udp6); dnsDone <- struct{}{} }()
+		go func() { e.serveTCP(tcp6); dnsDone <- struct{}{} }()
+	}
 	e.mu.Lock()
 	e.writeStatus()
 	e.mu.Unlock()

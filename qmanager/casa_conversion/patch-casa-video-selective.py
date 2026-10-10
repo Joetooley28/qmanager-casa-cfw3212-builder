@@ -240,9 +240,7 @@ page = "components/local-network/traffic-engine/traffic-engine.tsx"
 edit(page, 'import ForceTcpCard from "./force-tcp-card";', 'import ForceTcpCard from "./force-tcp-card";\nimport VideoScopeCard from "./video-scope-card";\nimport { useVideoScope } from "@/hooks/use-video-scope";')
 edit(page, '  const hostlist = useCdnHostlist();\n', '  const hostlist = useCdnHostlist();\n  // Casa: Narrow/Broad scope of Video Optimizer (video_optimizer.scope).\n  const videoScope = useVideoScope();\n')
 edit(page, '''            <VerifyCard binaryInstalled={installed} />
-''', '''            <VerifyCard binaryInstalled={installed} />
-
-            <div className={CARD_PAIR_WIDE}>
+''', '''            <div className={CARD_PAIR_WIDE}>
               <VideoScopeCard
                 mode={mode}
                 scope={videoScope.scope}
@@ -255,6 +253,8 @@ edit(page, '''            <VerifyCard binaryInstalled={installed} />
                 forceTcp={videoOptimizer.data?.force_tcp}
               />
             </div>
+
+            <VerifyCard binaryInstalled={installed} />
 ''')
 # Narrow pauses the global Force-TCP rule (the helper rejects UDP 443 per
 # learned address), so its toggle is hidden there; Broad and Off keep it.
