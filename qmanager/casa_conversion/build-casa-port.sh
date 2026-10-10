@@ -9581,7 +9581,9 @@ apply_casa_overlays() {
     patch_email_alerts_casa_msmtp
     patch_casa_timezone_apply_cfw3212
     patch_ping_profile_service_toggle_cfw3212
-    patch_casa_hide_video_optimizer_cfw3212
+    # Experimental branch: expose Video Optimizer with destination selection
+    # before the relay. Leave the historical hide helper for stable branches.
+    python3 "$SCRIPT_DIR/patch-casa-video-selective.py" "$TARGET" "$TEMPLATE_DIR" "$SCRIPT_DIR/vendor"
     patch_speedtest_latency_iqm_guard_cfw3212
     if upstream_has_v14_software_update; then
         patch_software_update_v14_cfw3212

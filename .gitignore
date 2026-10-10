@@ -22,3 +22,7 @@ bun.lockb
 # Claude Code runtime/local files (never commit)
 .claude/scheduled_tasks.lock
 .claude/settings.local.json
+
+# Selective video helper is built and checked in CI, not committed as a binary.
+qmanager/casa_conversion/vendor/scripts/usr/bin/qmanager_video_selective
+__pycache__/

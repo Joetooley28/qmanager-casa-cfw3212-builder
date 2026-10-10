@@ -49,6 +49,11 @@ checked out into the existing local workspace layout.
 
 ## Dev testing on a live router (no package release)
 
+The `test/AI-72-selective-video` branch contains the experimental selective
+Video Optimizer. Read the [setup, CPU/offload limits, rollback and validation
+record](docs/SELECTIVE_VIDEO_TESTING.md) before testing it. Its builds are
+workflow artifacts; the combined video/ordinary throughput goal is unverified.
+
 Day-to-day edits use branch **`dev`**: CI produces **workflow artifacts only**
 (`.dev` version tags). Install on the modem with **`scripts/cfw3212-dev-load.sh`**
 — see **[scripts/README.md](scripts/README.md)** for the full loop, hotpatch vs

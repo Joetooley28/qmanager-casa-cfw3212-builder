@@ -401,6 +401,11 @@ info "Extracted to $EXTRACT_DIR"
 step "Patching path references for CFW-3212"
 
 _patch_file() {
+    # ARM helpers contain path strings too. Rewriting an ELF executable as text
+    # can corrupt it; only shell/config/service text needs Casa substitutions.
+    case "$(dd if="$1" bs=4 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n')" in
+        7f454c46) return 0 ;;
+    esac
     sed -i \
         -e 's|/usrdata/opt/bin|@QM_USRDATA_OPT_BIN@|g' \
         -e 's|/usrdata/opt/sbin|@QM_USRDATA_OPT_SBIN@|g' \
