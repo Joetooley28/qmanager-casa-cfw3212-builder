@@ -518,7 +518,7 @@ func main() {
 	hostlist := flag.String("hostlist", "/etc/qmanager/video_domains.txt", "video/CDN domain list")
 	proxy := flag.String("tpws", "/usrdata/qmanager/bin/tpws", "verified tpws executable")
 	listen := flag.String("dns-listen", "", "IPv4 LAN DNS listener; default is LAN interface address:1053")
-	upstream := flag.String("dns-upstream", "127.0.0.1:53", "existing Casa DNS resolver")
+	upstream := flag.String("dns-upstream", "", "existing Casa DNS resolver; default is LAN interface address:53")
 	port := flag.Int("proxy-port", 989, "tpws listener port")
 	iface := flag.String("interface", "bridge0", "LAN interface")
 	client := flag.String("client", "", "optional single IPv4 LAN client for bounded testing")
@@ -610,6 +610,12 @@ func run(hostlist, proxy, listen, upstream, runtime string, fw *firewall) error 
 		if a, err := netip.ParseAddr(bind); err != nil || !a.Is4() || a.IsUnspecified() {
 			return errors.New("DNS listener must bind a specific LAN IPv4 address")
 		}
+	}
+	// Firmware 1.2.24.0 dnsmasq listens only on the LAN address, not 127.0.0.1
+	// (1.1.99.0 binds 0.0.0.0), so the LAN address reaches it on both. The
+	// router's own queries use OUTPUT, so the bridge0 redirect cannot loop.
+	if upstream == "" {
+		upstream = net.JoinHostPort(bind, "53")
 	}
 	udp, err := net.ListenPacket("udp4", listen)
 	if err != nil {
