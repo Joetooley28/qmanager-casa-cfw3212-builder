@@ -342,6 +342,50 @@ if 'json.status === "reboot_required"' not in block:
     text = text[:start] + block + text[end:]
     hook.write_text(text)
 
+# Version Management poller (startChainedPolling): same fix. Upstream treats the
+# connection drop after install_staged as a reboot and jumps to /reboot/ (logging
+# the user out), but Casa only restarts services and then waits in reboot_required.
+text = hook.read_text()
+if "const startChainedPolling = useCallback(" in text:
+    start = text.index("  const startChainedPolling = useCallback(")
+    end = text.index("  }, [fail]);", start)
+    block = text[start:end]
+    if 'json.status === "reboot_required"' not in block:
+        anchor = '        if (json.status === "rebooting") {\n'
+        if block.count(anchor) != 1:
+            raise SystemExit("software update v14: chained poller rebooting anchor changed")
+        block = block.replace(anchor,
+            '        if (json.status === "reboot_required") {\n'
+            '          if (pollRef.current) clearInterval(pollRef.current);\n'
+            '          pollRef.current = null;\n'
+            '          sessionStorage.removeItem("qm_update_reload_scheduled");\n'
+            "          setUpdateStatus(json as UpdateStatus);\n"
+            "          setIsUpdating(false);\n"
+            "          return;\n"
+            "        }\n\n" + anchor, 1)
+        old_catch = block[block.index("      } catch {\n"):block.index("    }, POLL_INTERVAL);")]
+        if "installPosted" not in old_catch:
+            raise SystemExit("software update v14: chained poller catch changed")
+        block = block.replace(old_catch,
+            "      } catch {\n"
+            "        // Casa: a failed poll after install_staged is the service restart,\n"
+            "        // not a reboot. Keep polling; reload once as a session fallback.\n"
+            "        if (installPosted) {\n"
+            '          if (!sessionStorage.getItem("qm_update_reload_scheduled")) {\n'
+            '            sessionStorage.setItem("qm_update_reload_scheduled", "1");\n'
+            "            window.setTimeout(() => {\n"
+            "              window.location.reload();\n"
+            "            }, 30000);\n"
+            "          }\n"
+            "          setUpdateStatus({\n"
+            '            status: "installing",\n'
+            '            message: "QManager services are restarting; reconnecting.",\n'
+            "          });\n"
+            "        }\n"
+            "      }\n", 1)
+        text = text[:start] + block + text[end:]
+        hook.write_text(text)
+
 sub(hook, "  // Fetch on mount\n  useEffect(() => {\n    fetchUpdateInfo();\n  }, [fetchUpdateInfo]);\n",
     "  // Fetch on mount\n  useEffect(() => {\n    fetchUpdateInfo();\n  }, [fetchUpdateInfo]);\n\n"
     "  // Casa: restore a pending post-install reboot after navigation. The backend\n"
