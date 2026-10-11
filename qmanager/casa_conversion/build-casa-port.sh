@@ -325,13 +325,8 @@ if 'json.status === "reboot_required"' not in block:
         "      } catch {\n"
         "        // Casa restarts QManager/lighttpd during install, so a failed poll is\n"
         "        // expected. Keep polling until the worker reports reboot_required or\n"
-        "        // an error; reload this page as a fallback for a dropped session.\n"
-        '        if (!sessionStorage.getItem("qm_update_reload_scheduled")) {\n'
-        '          sessionStorage.setItem("qm_update_reload_scheduled", "1");\n'
-        "          window.setTimeout(() => {\n"
-        "            window.location.reload();\n"
-        "          }, 30000);\n"
-        "        }\n"
+        "        // an error. No page reload: lighttpd can be down >30 s, and a reload\n"
+        "        // then lands on a dead server (a lost session already goes to /login/).\n"
         "        setUpdateStatus({\n"
         '          status: "installing",\n'
         '          message: "QManager services are restarting; reconnecting.",\n'
@@ -369,14 +364,8 @@ if "const startChainedPolling = useCallback(" in text:
         block = block.replace(old_catch,
             "      } catch {\n"
             "        // Casa: a failed poll after install_staged is the service restart,\n"
-            "        // not a reboot. Keep polling; reload once as a session fallback.\n"
+            "        // not a reboot. Keep polling until reboot_required (no reload).\n"
             "        if (installPosted) {\n"
-            '          if (!sessionStorage.getItem("qm_update_reload_scheduled")) {\n'
-            '            sessionStorage.setItem("qm_update_reload_scheduled", "1");\n'
-            "            window.setTimeout(() => {\n"
-            "              window.location.reload();\n"
-            "            }, 30000);\n"
-            "          }\n"
             "          setUpdateStatus({\n"
             '            status: "installing",\n'
             '            message: "QManager services are restarting; reconnecting.",\n'
@@ -389,7 +378,8 @@ if "const startChainedPolling = useCallback(" in text:
 sub(hook, "  // Fetch on mount\n  useEffect(() => {\n    fetchUpdateInfo();\n  }, [fetchUpdateInfo]);\n",
     "  // Fetch on mount\n  useEffect(() => {\n    fetchUpdateInfo();\n  }, [fetchUpdateInfo]);\n\n"
     "  // Casa: restore a pending post-install reboot after navigation. The backend\n"
-    "  // keeps reboot_required in /tmp/qmanager_update.json until the reboot.\n"
+    "  // keeps reboot_required in /tmp/qmanager_update.json until the reboot. A\n"
+    "  // page opened or refreshed mid-install resumes polling instead of idling.\n"
     "  useEffect(() => {\n"
     "    let cancelled = false;\n"
     "    (async () => {\n"
@@ -399,6 +389,11 @@ sub(hook, "  // Fetch on mount\n  useEffect(() => {\n    fetchUpdateInfo();\n  }
     "        const json: UpdateStatus = await resp.json();\n"
     "        if (cancelled || !mountedRef.current) return;\n"
     '        if (json.status === "reboot_required") setUpdateStatus(json);\n'
+    '        if (json.status === "installing" && !pollRef.current) {\n'
+    "          setIsUpdating(true);\n"
+    "          setUpdateStatus(json);\n"
+    "          startPolling();\n"
+    "        }\n"
     "      } catch {\n"
     "        // the install poller picks it up if a job is active\n"
     "      }\n"
