@@ -9298,6 +9298,29 @@ patch_casa_device_photo_cfw3212() {
     cp "$photo" "$TARGET/public/device-rg520n.webp"
     sed -i 's|src="/device-icon.svg"|src="/device-rg520n.webp"|' "$card"
     rm -f "$TARGET/public/device-icon.svg"
+    # The photo is a wide board, not a square mark: drop the 188px disc and let
+    # it span the card width (owner request).
+    python3 - "$card" <<'PY'
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+text = path.read_text()
+pairs = [
+    ('<Skeleton className="aspect-square w-[188px] max-w-full rounded-pill" />',
+     '<Skeleton className="aspect-[760/470] max-h-[240px] w-full rounded-card" />'),
+    ('<div className="grid aspect-square w-[188px] max-w-full place-items-center rounded-pill bg-surface-container p-[18px]">',
+     '<div className="grid w-full place-items-center">'),
+    ('className="size-full object-contain drop-shadow-',
+     'className="max-h-[240px] w-full object-contain drop-shadow-'),
+]
+for old, new in pairs:
+    if text.count(old) != 1:
+        raise SystemExit(f"Device photo: anchor changed: {old[:70]!r}")
+    text = text.replace(old, new, 1)
+path.write_text(text)
+PY
+    [ $? -eq 0 ] || fail "Device photo: layout patch failed"
     log "Dashboard device card uses the RG520N board photo"
 }
 
