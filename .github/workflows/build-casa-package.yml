@@ -431,10 +431,26 @@ jobs:
           dep_dir="$target_dir/dependencies/entware"
           rm -rf "$dep_dir"
           mkdir -p "$dep_dir"
-          curl -fsSL "$entware_base/Packages.gz" -o /tmp/entware-Packages.gz
-          gzip -dc /tmp/entware-Packages.gz > /tmp/entware-Packages.txt
+          # bin.entware.net has gone down mid-day (2026-10-11); fall back to the
+          # vendored, checksummed .ipk set from a known-good build.
+          ent_fallback="qmanager/casa_conversion/vendor/entware-fallback"
+          use_entware_fallback() {
+            echo "::warning::bin.entware.net unreachable; using vendored Entware .ipk set ($ent_fallback)"
+            rm -f "$dep_dir"/*.ipk
+            ( cd "$ent_fallback" && sha256sum -c --quiet SHA256SUMS )
+            cp "$ent_fallback"/*.ipk "$dep_dir/"
+          }
+          entware_online=0
+          if curl -fsSL --connect-timeout 30 --max-time 120 "$entware_base/Packages.gz" -o /tmp/entware-Packages.gz; then
+            entware_online=1
+            gzip -dc /tmp/entware-Packages.gz > /tmp/entware-Packages.txt
+          else
+            : > /tmp/entware-Packages.txt
+          fi
           python3 - <<'PY' > /tmp/entware-closure.txt
-          import re
+          import os, re, sys
+          if os.path.getsize("/tmp/entware-Packages.txt") == 0:
+              sys.exit(0)  # offline: the vendored fallback is used below
           pkgs = {}
           cur = {}
           for line in open("/tmp/entware-Packages.txt"):
@@ -471,11 +487,18 @@ jobs:
               print(pkgs[p]["Filename"])
           PY
           mapfile -t ent_files < /tmp/entware-closure.txt
-          [ "${#ent_files[@]}" -gt 0 ] || { echo "Empty Entware closure" >&2; exit 1; }
-          for f in "${ent_files[@]}"; do
-            curl -fsSL "$entware_base/$f" -o "$dep_dir/$f"
-          done
-          echo "Downloaded ${#ent_files[@]} Entware .ipk(s) into $dep_dir"
+          if [ "$entware_online" = 1 ]; then
+            [ "${#ent_files[@]}" -gt 0 ] || { echo "Empty Entware closure" >&2; exit 1; }
+            for f in "${ent_files[@]}"; do
+              curl -fsSL --connect-timeout 30 --max-time 120 "$entware_base/$f" -o "$dep_dir/$f" \
+                || { entware_online=0; break; }
+            done
+          fi
+          if [ "$entware_online" = 1 ]; then
+            echo "Downloaded ${#ent_files[@]} Entware .ipk(s) into $dep_dir"
+          else
+            use_entware_fallback
+          fi
 
           # Pre-patch the sudo .ipk in place: repoint loader + RPATH to
           # /usrdata/opt and restore setuid (patchelf clears it). libsudo_util.so

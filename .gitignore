@@ -26,3 +26,4 @@ bun.lockb
 # Selective video helper is built and checked in CI, not committed as a binary.
 qmanager/casa_conversion/vendor/scripts/usr/bin/qmanager_video_selective
 __pycache__/
+!qmanager/casa_conversion/vendor/entware-fallback/*.ipk
