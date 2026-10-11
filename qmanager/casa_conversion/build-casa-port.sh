@@ -437,28 +437,46 @@ sub(notes,
     "          {changelog ? (\n            <>\n",
     "          {changelog ? (\n            <>\n"
     "              {hasSplitNotes && (\n"
-    '                <div className="inline-flex w-fit rounded-md border bg-background p-0.5">\n'
-    "                  <Button\n"
-    '                    type="button"\n'
-    '                    variant={notesSource === "joetooley" ? "secondary" : "ghost"}\n'
-    '                    size="sm"\n'
-    '                    className="h-7 px-2 text-xs"\n'
-    '                    onClick={() => setNotesSource("joetooley")}\n'
-    "                  >\n"
-    "                    Joetooley\n"
-    "                  </Button>\n"
-    "                  <Button\n"
-    '                    type="button"\n'
-    '                    variant={notesSource === "upstream" ? "secondary" : "ghost"}\n'
-    '                    size="sm"\n'
-    '                    className="h-7 px-2 text-xs"\n'
-    '                    onClick={() => setNotesSource("upstream")}\n'
-    "                  >\n"
-    "                    Rus | Ame / Dr. D\n"
-    "                  </Button>\n"
+    "                // Casa: selected side is a solid pill with a check (same as the\n"
+    "                // Video Optimizer Narrow | Broad switch) so it is easy to tell apart.\n"
+    "                <div\n"
+    '                  role="radiogroup"\n'
+    '                  aria-label="Release notes source"\n'
+    '                  className="inline-flex w-fit rounded-full border bg-muted p-0.5"\n'
+    "                >\n"
+    "                  {(\n"
+    "                    [\n"
+    '                      ["joetooley", "Joetooley"],\n'
+    '                      ["upstream", "Rus | Ame / Dr. D"],\n'
+    "                    ] as const\n"
+    "                  ).map(([value, label]) => {\n"
+    "                    const selected = notesSource === value;\n"
+    "                    return (\n"
+    "                      <button\n"
+    "                        key={value}\n"
+    '                        type="button"\n'
+    '                        role="radio"\n'
+    "                        aria-checked={selected}\n"
+    "                        onClick={() => setNotesSource(value)}\n"
+    "                        className={cn(\n"
+    '                          "flex items-center gap-1 rounded-full px-3 py-1 text-xs transition-colors",\n'
+    "                          selected\n"
+    '                            ? "bg-primary font-semibold text-primary-foreground shadow-sm"\n'
+    '                            : "text-muted-foreground hover:bg-background hover:text-foreground",\n'
+    "                        )}\n"
+    "                      >\n"
+    '                        {selected && <CheckIcon className="size-3.5" aria-hidden="true" />}\n'
+    "                        {label}\n"
+    "                      </button>\n"
+    "                    );\n"
+    "                  })}\n"
     "                </div>\n"
     "              )}\n",
     "release notes toggle")
+sub(notes,
+    'import { FileTextIcon } from "lucide-react";\n',
+    'import { CheckIcon, FileTextIcon } from "lucide-react";\n',
+    "release notes check icon")
 
 # --- English wording: Casa installs restart services, then ask for a reboot --
 data = json.loads(locale.read_text())
@@ -9268,6 +9286,21 @@ PY
     log "Terminal sidebar now shows AT Terminal and Web Console children"
 }
 
+patch_casa_device_photo_cfw3212() {
+    # Dashboard device card: the CFW-3212's RG520N board photo (public FCC
+    # image, 480px WebP) instead of upstream's ~500 KB traced device-icon.svg.
+    local card="$TARGET/components/dashboard/device-status.tsx"
+    local photo="$TEMPLATE_DIR/assets/device-rg520n.webp"
+    [ -f "$card" ] || fail "Device photo: missing $card"
+    [ -f "$photo" ] || fail "Device photo: missing $photo"
+    grep -q 'src="/device-icon.svg"' "$card" \
+        || fail "Device photo: device-icon.svg reference not found in $card"
+    cp "$photo" "$TARGET/public/device-rg520n.webp"
+    sed -i 's|src="/device-icon.svg"|src="/device-rg520n.webp"|' "$card"
+    rm -f "$TARGET/public/device-icon.svg"
+    log "Dashboard device card uses the RG520N board photo"
+}
+
 patch_onboarding_normalize_defaults_cfw3212() {
     # First-run onboarding's "default" choices for Network Mode (RAT) and Band
     # Locking were implemented upstream as no-ops: selecting the pre-checked
@@ -9525,6 +9558,10 @@ apply_casa_overlays() {
     # Experimental branch: expose Video Optimizer with destination selection
     # before the relay. Leave the historical hide helper for stable branches.
     python3 "$SCRIPT_DIR/patch-casa-video-selective.py" "$TARGET" "$TEMPLATE_DIR" "$SCRIPT_DIR/vendor"
+    # Band Locking explains when 5G Architecture turns a band category off.
+    python3 "$SCRIPT_DIR/patch-casa-band-arch.py" "$TARGET" \
+        || fail "Band Locking 5G Architecture patch failed"
+    patch_casa_device_photo_cfw3212
     patch_speedtest_latency_iqm_guard_cfw3212
     if upstream_has_v14_software_update; then
         patch_software_update_v14_cfw3212

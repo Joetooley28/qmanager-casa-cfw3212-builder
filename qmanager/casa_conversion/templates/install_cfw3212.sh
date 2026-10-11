@@ -1079,6 +1079,48 @@ EOF
 chmod 755 "$SRC_SCRIPTS/usr/bin/qmanager_dns_watch" 2>/dev/null || true
 info "Casa LAN DNS reconciler staged"
 
+# Casa/US Cellular no longer run these boxes; a carrier TR-069 or LwM2M push
+# (config or firmware) would wipe QManager, so block them by default (AI-47).
+cat > "$SRC_SCRIPTS/usr/bin/qmanager_carrier_block" << 'EOF'
+#!/bin/sh
+# qmanager_carrier_block -- Casa CFW-3212: block carrier remote management
+# (TR-069 / LwM2M). start: turn both off and drop their ports for router-
+# originated traffic only (OUTPUT); LAN clients are not affected. stop: remove
+# the drops (the RDB settings stay off).
+PORTS="tcp:7547 udp:5684 tcp:5222 tcp:5223"
+
+case "${1:-start}" in
+    start)
+        rdb set service.tr069.enable 0
+        rdb set tr069.server.url ''
+        rdb set tr069.server.username ''
+        rdb set tr069.server.password ''
+        rdb set service.lwm2m.enable 0
+        rdb set service.lwm2m.override.enable 0
+        rdb set service.lwm2m.override.server-uri ''
+        rdb set service.lwm2m.override.psk-key ''
+        rdb set service.lwm2m.override.psk-id ''
+        for p in $PORTS; do
+            proto=${p%%:*}; port=${p#*:}
+            iptables -C OUTPUT -p "$proto" --dport "$port" -j DROP 2>/dev/null \
+                || iptables -I OUTPUT -p "$proto" --dport "$port" -j DROP
+        done
+        logger -t qmanager_carrier_block "Carrier management (TR-069/LwM2M) blocked"
+        ;;
+    stop)
+        for p in $PORTS; do
+            proto=${p%%:*}; port=${p#*:}
+            i=0
+            while [ "$i" -lt 8 ] && iptables -D OUTPUT -p "$proto" --dport "$port" -j DROP 2>/dev/null; do
+                i=$((i + 1))
+            done
+        done
+        ;;
+esac
+exit 0
+EOF
+chmod 755 "$SRC_SCRIPTS/usr/bin/qmanager_carrier_block" 2>/dev/null || true
+
 # Casa keeps the upstream SIM Profile UI/manual apply path enabled. Profiles
 # can save/delete JSON state and, when manually applied by the user, can set APN,
 # QManager TTL/HL firewall state, and IMEI followed by AT+CFUN=1,1. ICCID
@@ -1886,6 +1928,29 @@ systemctl daemon-reload 2>/dev/null || true
 systemctl restart qmanager-dns-watch.service 2>/dev/null \
     || warn "qmanager-dns-watch did not start; DNS repair falls back to the 30 s timer"
 info "Casa DNS watcher installed (repairs within ~2 s of a reconnect)"
+
+cat > "$SYSTEMD_DIR/qmanager-carrier-block.service" << 'EOF'
+[Unit]
+Description=QManager Casa: block carrier remote management (TR-069 / LwM2M)
+After=network.target
+Before=invoke_tr069client.service tr069identity.service
+
+[Service]
+Type=oneshot
+ExecStart=/usrdata/bin/qmanager_carrier_block start
+ExecStop=/usrdata/bin/qmanager_carrier_block stop
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+sed -i 's/\r$//' "$SYSTEMD_DIR/qmanager-carrier-block.service" 2>/dev/null || true
+ln -sf "$SYSTEMD_DIR/qmanager-carrier-block.service" \
+    "$SYSTEMD_DIR/multi-user.target.wants/qmanager-carrier-block.service" 2>/dev/null || true
+systemctl daemon-reload 2>/dev/null || true
+systemctl restart qmanager-carrier-block.service 2>/dev/null \
+    || warn "qmanager-carrier-block did not start; carrier management may still be reachable"
+info "Carrier remote management (TR-069 / LwM2M) blocked"
 
 # --- Scheduled Reboot / Tower Lock schedule timers (config-driven re-arm) -----
 # Upstream v0.1.14+ generates these .timer units at save time and its installer

@@ -60,6 +60,13 @@ else
     info "Video Optimizer rules removed"
 fi
 
+step "Removing carrier-management block"
+# Drop the OUTPUT rules while the helper still exists; TR-069/LwM2M stay off in RDB.
+if [ -x /usrdata/bin/qmanager_carrier_block ]; then
+    /usrdata/bin/qmanager_carrier_block stop 2>/dev/null || true
+fi
+info "Carrier-management port blocks removed"
+
 step "Stopping QManager services"
 systemctl stop --no-block $SERVICES 2>/dev/null \
     && info "Stop requested" \
