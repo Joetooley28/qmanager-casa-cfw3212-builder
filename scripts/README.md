@@ -76,6 +76,19 @@ Public releases stay on `main` + manual approval of `official-package-release`.
   runs (read-only). They **cannot** dispatch workflows or publish packages
   without write access + your approval.
 
+### Branch model (keep the repo tidy)
+
+- **`main`** — what is released or about to be released. Changes reach it only
+  by merging (fast-forward when possible) with the owner's approval.
+- **`dev`** — the standing work branch. Reset it to `main` after every release
+  (`git push origin origin/main:refs/heads/dev`).
+- **Feature branches** (for example `ai-72-…`) — short-lived. Branch from `dev`
+  or `main`, merge back, then delete them on GitHub and locally once merged.
+  Before merging, run `git merge-tree --write-tree origin/main HEAD` to catch
+  conflicts with anything that landed on `main` meanwhile.
+- Stale pull requests for an older upstream version are closed with a note
+  rather than left open.
+
 ## Build a dev artifact (CI details)
 
 Manually dispatch **Build Casa CFW-3212 package** on branch **`dev`**.
@@ -156,6 +169,13 @@ When a `dev` sideload tests good:
 3. Dispatch builder on **`main`** with `casa_build=next` (or explicit `N`),
    `dry_run=false`, `create_release=true`, `force=true` if replacing assets.
 4. Approve **`official-package-release`** (publishes to package repo).
+5. After publishing: confirm one router updates from the package repo via
+   Software Update, reset `dev` to `main`, and delete the merged feature
+   branch(es) on GitHub and locally.
+
+Optional before step 1: test the real Software Update path with a release
+candidate staged in the TEST ONLY repo `Joetooley28/qmanager-casa-cfw3212-package-rc`
+(see `ACTIONS_RELEASE_FLOW.md` in the package repo, "Release Candidate Testing").
 
 Router **Software Update** installs from the **package repo**, not dev artifacts.
 
