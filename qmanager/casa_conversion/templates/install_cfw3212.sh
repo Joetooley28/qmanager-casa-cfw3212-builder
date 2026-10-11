@@ -808,11 +808,19 @@ casa_upstream() {
         done
 }
 
+# The resolver asks servers in order, so a dead FIRST server makes every router
+# lookup wait out its timeout (~10 s) even when later ones answer: it must answer.
+# Casa can write resolv.conf servers that are not in link.policy (seen: dead
+# 10.177.0.x ahead of working IPv6), so test the file's first entry while it is Casa's.
 casa_upstream_ok() {
-    for ns in $(casa_upstream); do
-        answers "$ns" && return 0
-    done
-    return 1
+    first=""
+    if ! resolv_is_ours; then
+        first="$(sed -n 's/^nameserver[[:space:]][[:space:]]*//p' "$RESOLV" 2>/dev/null \
+            | grep -vE '^$|^0\.0\.0\.0$|^::$|^127\.|^::1$' | drop_placeholder | head -1)"
+        printf '%s\n' "$(local_addrs)" | grep -qxF "$first" && first=""
+    fi
+    [ -n "$first" ] || first="$(casa_upstream | head -1)"
+    [ -n "$first" ] && answers "$first"
 }
 
 # Candidate carrier nameservers (IPv4 + IPv6), excluding the IPPT placeholder

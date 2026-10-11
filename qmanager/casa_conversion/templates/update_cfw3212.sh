@@ -428,10 +428,11 @@ if [ "$REQUEST_METHOD" = "GET" ]; then
           ]) | reverse' 2>/dev/null)
         [ -n "$releases" ] || releases="[]"
 
-        jq -n \
-            --argjson releases "$releases" \
+        # Via stdin: release notes exceed the 128 KB per-argument limit, which left
+        # this cache empty and refetched GitHub on every page load.
+        printf '%s' "$releases" | jq \
             --argjson include_prerelease_bool "$include_prerelease_json" \
-            '{include_prerelease: $include_prerelease_bool, releases: $releases}' \
+            '{include_prerelease: $include_prerelease_bool, releases: .}' \
             > "$RELEASES_PROCESSED_CACHE" 2>/dev/null || true
     fi
 
