@@ -49,10 +49,9 @@ checked out into the existing local workspace layout.
 
 ## Dev testing on a live router (no package release)
 
-The `test/AI-72-selective-video` branch contains the experimental selective
-Video Optimizer. Read the [setup, CPU/offload limits, rollback and validation
-record](docs/SELECTIVE_VIDEO_TESTING.md) before testing it. Its builds are
-workflow artifacts; the combined video/ordinary throughput goal is unverified.
+The Video Optimizer (Off / Narrow / Broad) ships in `v0.1.16-cfw3212.1`, Off by
+default and still in testing; see the Casa changelog for what each mode does and
+its CPU cost.
 
 Day-to-day edits use branch **`dev`**: CI produces **workflow artifacts only**
 (`.dev` version tags). Install on the modem with **`scripts/cfw3212-dev-load.sh`**
