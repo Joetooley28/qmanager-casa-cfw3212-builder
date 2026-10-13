@@ -36,6 +36,7 @@
 - **Connection Quality shows Jitter again.** On T-Mobile, cloudflare.com's IPv6 address answers only some pings, so the ping check kept switching between cloudflare.com and google.com and restarting its history every few seconds, and Jitter showed "No reading". It now stays with the host that last answered and only switches when that host stops answering.
 - **Installing Tailscale now installs the newest Tiny Tailscale.** Before, Install put on an older version that this package was set to and then offered an update straight away. It now looks up the newest release, and falls back to the tested version only if that lookup fails.
 - **Schedules show which time zone they use.** Scheduled Reboot and the Tower Lock schedule now show the router's time zone next to their times, with a link to change it. QManager starts on UTC, so if your network reports a different local time, these cards warn you that the times will run on UTC until you set your time zone in **System Settings**.
+- **Offline install and uninstall no longer put the package in memory.** The commands on the release page now copy the package to the router's storage (`/usrdata`) instead of `/tmp`, which is RAM on the CFW-3212, and delete it when they finish. Installing or updating needs about 60 MB free on `/usrdata`; the installer says so and stops if there is not enough.
 
 ## v0.1.16-cfw3212.1
 

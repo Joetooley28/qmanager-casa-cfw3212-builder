@@ -146,6 +146,7 @@ rm -rf /tmp/qmanager_install \
     /tmp/qmanager-cfw3212-uninstall \
     /tmp/qmanager_sessions \
     /tmp/qmanager.tar.gz \
+    /usrdata/qmanager.tar.gz \
     /tmp/qmanager_staged.tar.gz \
     /tmp/qmanager_staged_version \
     /tmp/qmanager_update.json \

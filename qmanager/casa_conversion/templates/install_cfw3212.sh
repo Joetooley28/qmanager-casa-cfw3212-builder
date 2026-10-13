@@ -373,7 +373,8 @@ info "/dev/smd11 present"
 # or on flash (/usrdata/qmanager_stage).
 qm_stage_cleanup() {
     rm -rf "$STAGE_ROOT" /tmp/qmanager_install /tmp/qmanager_update_install 2>/dev/null || true
-    rm -f "$TARBALL" /tmp/qmanager_staged.tar.gz /tmp/qmanager_staged_version 2>/dev/null || true
+    # /usrdata/qmanager.tar.gz: where the offline install commands copy the package.
+    rm -f "$TARBALL" /usrdata/qmanager.tar.gz /tmp/qmanager_staged.tar.gz /tmp/qmanager_staged_version 2>/dev/null || true
     sync
 }
 trap qm_stage_cleanup EXIT
@@ -384,7 +385,7 @@ unpacked_kb=$(tar tzvf "$TARBALL" 2>/dev/null | awk '{ s += $3 } END { printf "%
 need_kb=$((unpacked_kb + 20480))
 available_kb=$(df /usrdata | awk 'NR==2{print $4}')
 [ "$available_kb" -gt "$need_kb" ] \
-    || die "/usrdata has $((available_kb/1024)) MB free; this install needs $((need_kb/1024)) MB (the package is unpacked there, not in RAM)"
+    || die "/usrdata has $((available_kb/1024)) MB free; this install needs $((need_kb/1024)) MB (the package is unpacked there, not in RAM). Free space on /usrdata (df -h /usrdata) and try again."
 info "/usrdata has $((available_kb/1024)) MB free (package unpacks to $((unpacked_kb/1024)) MB on flash)"
 
 # --- Extract -----------------------------------------------------------------

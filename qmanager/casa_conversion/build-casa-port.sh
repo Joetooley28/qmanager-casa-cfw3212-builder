@@ -748,6 +748,7 @@ rm -rf /tmp/qmanager_install \
     /tmp/qmanager-cfw3212-uninstall \
     /tmp/qmanager_sessions \
     /tmp/qmanager.tar.gz \
+    /usrdata/qmanager.tar.gz \
     /tmp/qmanager_staged.tar.gz \
     /tmp/qmanager_staged_version \
     /tmp/qmanager_update.json \
@@ -9777,8 +9778,8 @@ Build: @VERSION_NAME@-cfw3212.1
 
 ## Install
 
-- Copy `qmanager-build/qmanager.tar.gz` to `/tmp/qmanager.tar.gz` on the router.
-- Run: `tar xzf /tmp/qmanager.tar.gz -C /tmp qmanager_install/install_cfw3212.sh` (only the installer script; it unpacks the rest on `/usrdata` and deletes it afterwards)
+- Copy `qmanager-build/qmanager.tar.gz` to `/usrdata/qmanager.tar.gz` on the router (not `/tmp`, which is RAM). It needs about 60 MB free on `/usrdata`.
+- Run: `ln -sf /usrdata/qmanager.tar.gz /tmp/qmanager.tar.gz && tar xzf /usrdata/qmanager.tar.gz -C /tmp qmanager_install/install_cfw3212.sh && sh /tmp/qmanager_install/install_cfw3212.sh` (only the installer script comes out; it unpacks the rest on `/usrdata` and deletes it and the package afterwards)
 - Run: `sh /tmp/qmanager_install/install_cfw3212.sh`
 - Confirm the installer reports HTTP `9080` and HTTPS `9000`.
 
