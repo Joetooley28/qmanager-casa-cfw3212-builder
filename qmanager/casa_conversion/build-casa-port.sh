@@ -9750,6 +9750,9 @@ apply_casa_overlays() {
     # Dashboard CA: PCC tile signal from the serving cell when QCAINFO omits it.
     python3 "$SCRIPT_DIR/patch-casa-ca-pcc-signal.py" "$TARGET" \
         || fail "CA PCC signal patch failed"
+    # Expired session / end of reboot land on the Overview page, not /login/.
+    python3 "$SCRIPT_DIR/patch-casa-overview-landing.py" "$TARGET" \
+        || fail "Overview landing patch failed"
     # Speed Test dialog: router-run test is CPU-bound (no hardware fast path).
     python3 "$SCRIPT_DIR/patch-casa-speedtest-note.py" "$TARGET" \
         || fail "Speed test note patch failed"
