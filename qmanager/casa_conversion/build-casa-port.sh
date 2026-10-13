@@ -962,7 +962,9 @@ write_ippt_card_cfw3212() {
     # below (self-fetching via useIpPassthrough()) would build but silently
     # ignore every prop the v0.1.16 shell passes it, so it must not be used
     # once ippt-strip.tsx is present.
-    if [ -f "$TARGET/components/local-network/ip-passthrough/ippt-strip.tsx" ]; then
+    # v0.1.17 renamed ippt-strip.tsx to status-strip.tsx (same prop-driven card).
+    if [ -f "$TARGET/components/local-network/ip-passthrough/ippt-strip.tsx" ] \
+        || [ -f "$TARGET/components/local-network/ip-passthrough/status-strip.tsx" ]; then
         write_ippt_card_cfw3212_v16
         return
     fi
