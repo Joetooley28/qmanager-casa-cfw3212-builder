@@ -64,17 +64,19 @@ export default function VideoScopeCard({
             </thead>
             <tbody>
               <tr className={scope === "narrow" ? "bg-muted" : undefined}>
-                <td className="px-2 py-1.5 font-medium">Narrow</td>
+                <td className="px-2 py-1.5 font-medium">
+                  Narrow <span className="font-normal text-muted-foreground">(recommended)</span>
+                </td>
                 <td className="px-2 py-1.5">only sites on your target list</td>
                 <td className="px-2 py-1.5">target-list sites</td>
-                <td className="px-2 py-1.5">stays on the hardware fast path</td>
+                <td className="px-2 py-1.5">stays on the hardware fast path (~490 Mbps in testing)</td>
                 <td className="px-2 py-1.5">moderate, video only</td>
               </tr>
               <tr className={scope === "broad" ? "bg-muted" : undefined}>
                 <td className="px-2 py-1.5 font-medium">Broad</td>
                 <td className="px-2 py-1.5">all web traffic (TCP 80/443)</td>
                 <td className="px-2 py-1.5">target-list sites</td>
-                <td className="px-2 py-1.5">also goes through the proxy</td>
+                <td className="px-2 py-1.5">also goes through the proxy (~25–50 Mbps in testing)</td>
                 <td className="px-2 py-1.5">high</td>
               </tr>
             </tbody>
@@ -126,8 +128,10 @@ export default function VideoScopeCard({
           <>
             <p className="text-muted-foreground">
               Broad catches video even when DNS is encrypted, because the proxy reads the
-              site name in each connection. It costs the most CPU: about 82% average and
-              near 100% peak in testing.
+              site name in each connection. Not recommended on the CFW-3212: in testing,
+              ordinary HTTPS downloads dropped from about 490 Mbps to 25–50 Mbps and the CPU
+              ran near 100%. If you need Broad, run a video optimizer on a router behind
+              this one instead.
             </p>
             {mode === "video_optimizer" && forceTcp === false && (
               <div className={AMBER_BOX}>
@@ -144,8 +148,13 @@ export default function VideoScopeCard({
           <p className="font-medium">CPU and offloading</p>
           <p className="mt-1">
             Traffic through the proxy is handled in software instead of the hardware fast
-            path, so CPU use and temperature rise and video speed can hit a CPU limit.
-            Choose Off to remove all optimizer rules.
+            path, so CPU use and temperature rise and video speed can hit a CPU limit
+            (about three 4K streams at once in testing). Choose Off to remove all optimizer
+            rules.
+          </p>
+          <p className="mt-1">
+            Speed tests such as Ookla use port 8080 and never go through the optimizer, so
+            they look the same in every mode. fast.com shows the video speed.
           </p>
         </div>
       </CardContent>
