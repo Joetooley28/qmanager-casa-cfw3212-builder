@@ -99,13 +99,52 @@ swap(L,
   standby: boolean;
   /** Wall-clock ms of the last snapshot this carrier appeared in. */''', "ResolvedCarrier standby")
 swap(L,
-     '''      role: roles[i],
+     '''  /** Wall-clock ms of the last snapshot this carrier appeared in. */
+  lastSeenMs: number;
+}''',
+     '''  /** Wall-clock ms of the last snapshot this carrier appeared in. */
+  lastSeenMs: number;
+  /** Casa: wall-clock ms of the last snapshot that showed it carrying data. */
+  lastActiveMs?: number;
+}''', "ResolvedCarrier lastActiveMs")
+swap(L,
+     '''const RELEASE_RETAIN_MS = 120000;
+''',
+     '''const RELEASE_RETAIN_MS = 120000;
+
+/** Casa: an SCC that carried data within this window still counts as active
+ *  while the network toggles it between active and standby under load (Box 4,
+ *  cell edge: state 1 <-> 2 every few seconds during a speed test). */
+const ACTIVE_HOLD_MS = 5000;
+''', "active hold constant")
+swap(L,
+     '''  const live = new Map<string, ResolvedCarrier>();
+  snapshot.forEach((c, i) => {
+    const key = carrierKey(c);
+    live.set(key, {
+      ...c,
+      key,
+      role: roles[i],
       released: false,
       lastSeenMs: nowMs,''',
-     '''      role: roles[i],
+     '''  const prevByKey = new Map(previous.map((p) => [p.key, p] as const));
+  const live = new Map<string, ResolvedCarrier>();
+  snapshot.forEach((c, i) => {
+    const key = carrierKey(c);
+    // Casa: state 1 = configured but not carrying data. Held active for
+    // ACTIVE_HOLD_MS after the last active reading so the card does not flicker.
+    const reportedStandby = roles[i] === "scc" && c.state === 1;
+    const lastActiveMs = reportedStandby ? prevByKey.get(key)?.lastActiveMs : nowMs;
+    live.set(key, {
+      ...c,
+      key,
+      role: roles[i],
       released: false,
-      standby: roles[i] === "scc" && c.state === 1,
-      lastSeenMs: nowMs,''', "reconcile standby")
+      standby:
+        reportedStandby &&
+        !(lastActiveMs !== undefined && nowMs - lastActiveMs < ACTIVE_HOLD_MS),
+      lastActiveMs,
+      lastSeenMs: nowMs,''', "reconcile standby + hold")
 swap(L,
      '''    out.push({
       ...prev,
