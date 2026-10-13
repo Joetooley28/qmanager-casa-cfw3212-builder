@@ -9747,6 +9747,9 @@ apply_casa_overlays() {
     # (after the QCAINFO patch: it reuses _casa_scc_state_form).
     python3 "$SCRIPT_DIR/patch-casa-ca-standby.py" "$TARGET" \
         || fail "Carrier aggregation standby patch failed"
+    # Dashboard CA: PCC tile signal from the serving cell when QCAINFO omits it.
+    python3 "$SCRIPT_DIR/patch-casa-ca-pcc-signal.py" "$TARGET" \
+        || fail "CA PCC signal patch failed"
     # Speed Test dialog: router-run test is CPU-bound (no hardware fast path).
     python3 "$SCRIPT_DIR/patch-casa-speedtest-note.py" "$TARGET" \
         || fail "Speed test note patch failed"
