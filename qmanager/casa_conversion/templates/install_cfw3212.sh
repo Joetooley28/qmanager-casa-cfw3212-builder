@@ -2081,8 +2081,10 @@ done
 info "QManager units load /etc/qmanager.env (Casa PATH for jq/qcmd)"
 
 # Enable services
+# qmanager-sites: upstream v0.1.17+ Sites monitor (absent on older upstreams).
 for svc in qmanager-lighttpd qmanager-firewall qmanager-setup qmanager-ping \
-           qmanager-poller qmanager-ttl qmanager-mtu qmanager-imei-check; do
+           qmanager-poller qmanager-ttl qmanager-mtu qmanager-imei-check \
+           qmanager-sites; do
     f="$SYSTEMD_DIR/${svc}.service"
     if [ -f "$f" ]; then
         ln -sf "$f" "$WANTS_DIR/${svc}.service"
@@ -2143,6 +2145,12 @@ if systemctl is-active qmanager-dpi >/dev/null 2>&1; then
     systemctl restart qmanager-dpi 2>/dev/null \
         && info "Video Optimizer restarted on the new version" \
         || warn "Video Optimizer restart failed — check: systemctl status qmanager-dpi"
+fi
+
+if [ -f "$SYSTEMD_DIR/qmanager-sites.service" ]; then
+    systemctl restart qmanager-sites 2>/dev/null \
+        && info "qmanager-sites started (Sites monitor)" \
+        || warn "qmanager-sites had issues — check: systemctl status qmanager-sites"
 fi
 
 # --- Web Console (ttyd) ------------------------------------------------------

@@ -7,3 +7,4 @@ components/monitoring/watchdog/derive.ts | 1: "Casa reconnect (RDB link.profile.
 components/nav-user.tsx | <Loader2 className="size-5 animate-spin text-primary" /> | now motion-safe:animate-spin (upstream v0.1.17 style)
 scripts/usr/lib/qmanager/dpi_state.sh | "--port=$DPI_PORT --bind-addr=$DPI_BIND_ADDR --user=www-data" \ | v0.1.17 binds the LAN address: now "--bind-addr=$bind --user=www-data"
 scripts/www/cgi-bin/quecmanager/network/custom_dns.sh | ENABLED=$(printf '%s' "$POST_DATA" | jq -r '.enabled | if . == null then "" else tostring end') | upstream v0.1.17 fixed it with has("enabled")
+components/support/donate-links.tsx | <Button asChild variant="outline" className={PILL_ACTION}> | v0.1.17 removed PILL_ACTION; Casa buttons now variant="outline" size="action"
