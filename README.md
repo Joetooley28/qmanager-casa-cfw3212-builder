@@ -17,6 +17,12 @@ community. The upstream project is
 Joetooley built only the Casa CFW-3212 converter/package flow for making
 QManager installable on the Casa CFW-3212.
 
+**Supporting the work:** donations to Rus support QManager itself
+([GitHub Sponsors](https://github.com/sponsors/dr-dolomite),
+[PayPal](https://paypal.me/iamrusss)). If the Casa port helped you, you can also
+tip Joetooley for the port only at
+**[paypal.me/Joetooley28](https://paypal.me/Joetooley28)**.
+
 It is the source of truth for building packages that are published to:
 
 ```text

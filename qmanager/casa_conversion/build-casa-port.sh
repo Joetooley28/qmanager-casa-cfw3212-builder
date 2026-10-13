@@ -9623,6 +9623,9 @@ apply_casa_overlays() {
     # Band Locking explains when 5G Architecture turns a band category off.
     python3 "$SCRIPT_DIR/patch-casa-band-arch.py" "$TARGET" \
         || fail "Band Locking 5G Architecture patch failed"
+    # Donate: separate PayPal button for the Casa port; upstream's links stay.
+    python3 "$SCRIPT_DIR/patch-casa-donate.py" "$TARGET" \
+        || fail "Donate links Casa PayPal patch failed"
     patch_casa_device_photo_cfw3212
     patch_speedtest_latency_iqm_guard_cfw3212
     if upstream_has_v14_software_update; then
