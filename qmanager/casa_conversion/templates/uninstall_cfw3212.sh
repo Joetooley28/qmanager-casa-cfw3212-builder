@@ -127,6 +127,7 @@ rm -f /etc/qmanager.env 2>/dev/null || true
 rm -rf /usrdata/qmanager
 rm -f /usrdata/bin/qmanager_* \
     /usrdata/bin/qcmd \
+    /usrdata/bin/qcmd_test \
     /usrdata/bin/atcli_smd11 \
     /usrdata/bin/sms_tool \
     /usrdata/bin/jq \
