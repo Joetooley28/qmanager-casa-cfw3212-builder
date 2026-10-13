@@ -5229,8 +5229,8 @@ if ladder is not None and "Watchdog SIM failover never exists here" in ladder.re
     lad = data["watchdog"]["ladder"]
     lad["tier1"]["name"] = "Reconnect through the router"
     lad["tier1"]["consequence"] = "Casa's connection manager reconnects; the link drops for under a minute."
-    lad["tier2"]["consequence"] = "Not used on the CFW-3212."
-    lad["tier3"]["consequence"] = "Not available: the CFW-3212 has one SIM slot."
+    lad["tier2"]["consequence"] = "The router's connection manager owns the radio on the CFW-3212."
+    lad["tier3"]["consequence"] = "The CFW-3212 has one SIM slot."
     loc.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n")
 
 if ladder is not None:
@@ -9734,6 +9734,9 @@ apply_casa_overlays() {
     # Network Events: log SCC band swaps at the same count (N66 -> N25).
     python3 "$SCRIPT_DIR/patch-casa-scc-band-change.py" "$TARGET" \
         || fail "SCC band-change events patch failed"
+    # Watchdog ladder: tiers 2/3 show a "Not available" badge, not a sentence.
+    python3 "$SCRIPT_DIR/patch-casa-watchdog-rung-badge.py" "$TARGET" \
+        || fail "Watchdog rung badge patch failed"
     # Ping: try the last winning host first so jitter keeps its history.
     python3 "$SCRIPT_DIR/patch-casa-ping-sticky.py" "$TARGET" \
         || fail "Ping sticky-winner patch failed"

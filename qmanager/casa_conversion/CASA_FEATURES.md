@@ -86,7 +86,7 @@ Live = last confirmed on a router (box, date, build). "—" = not yet tested on 
 |---|---|---|---|
 | All reboots via Casa managed reset (reason recorded) | `patch_casa_managed_reboot_cfw3212`, `patch_casa_reboot` | safety checks | Box 1, 2026-10-13 |
 | Reboot history: one crash.log entry labels one boot | `patch-casa-reboot-cause.py` | converter | Box 1, 2026-10-13 |
-| Watchdog: Tier 1 = Casa RDB reconnect, cooldown 120 s, Tier 2 (radio) and Tier 3 (SIM) off with notices, exits cleanly on stop | `patch_casa_watchcat_*`, `patch_casa_watchdog_ui_single_sim_cfw3212` | safety checks, delta gate | Box 2 ladder run, 2026-09-27 (v0.1.16 dev) |
+| Watchdog: Tier 1 = Casa RDB reconnect, cooldown 120 s, Tier 2 (radio) and Tier 3 (SIM) off with notices, exits cleanly on stop | `patch_casa_watchcat_*`, `patch_casa_watchdog_ui_single_sim_cfw3212`, `patch-casa-watchdog-rung-badge.py` (v0.1.17+: tiers 2/3 show a "Not available" badge; reason in the rung text) | safety checks, delta gate | Box 2 ladder run, 2026-09-27 (v0.1.16 dev) |
 | Watchdog skips recovery on stale ping data | v0.1.16: Casa ping-health patch; v0.1.17+: upstream `conn_state.sh` | safety checks (version-aware) | — on v0.1.17 |
 | Scheduled Reboot / Tower Lock schedule: systemd timers, re-armed by the installer; follow the router zone via `/etc/localtime` (`qmanager_timezone_apply`) | `patch_casa_scheduled_reboot_cfw3212`, `patch_casa_timezone_apply_cfw3212`, installer | — | arm/disarm + timer fired, Box 1, 2026-10-13 (v0.1.16); zone change moves timers live (UTC→US/Eastern→UTC), Box 1, 2026-10-13 (v0.1.17 dev) |
 | Single SIM slot: no SIM Slot switch, no Watchdog SIM failover | `patch_casa_single_sim_slot_cfw3212`, watchdog patches | safety checks | — |
