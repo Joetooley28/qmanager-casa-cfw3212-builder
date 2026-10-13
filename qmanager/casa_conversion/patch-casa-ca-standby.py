@@ -107,10 +107,42 @@ swap(L,
   /** Casa: wall-clock ms of the last snapshot that showed it carrying data. */
   lastActiveMs?: number;
 }''', "ResolvedCarrier lastActiveMs")
+# Casa: a released carrier stays 30 s (was 120 s) and sorts to the end, behind
+# the current primary and the live carriers, so after an LTE -> NR change the old
+# PCC does not lead the chain (owner, Box 4, 2026-10-13).
 swap(L,
      '''const RELEASE_RETAIN_MS = 120000;
 ''',
-     '''const RELEASE_RETAIN_MS = 120000;
+     '''const RELEASE_RETAIN_MS = 30000;
+''', "release retain 30 s")
+swap(L,
+     '''  // Genuinely new carriers join at the end, in the order the radio listed them.
+  for (const c of snapshot) {
+    const key = carrierKey(c);
+    if (placed.has(key)) continue;
+    const fresh = live.get(key);
+    if (fresh) out.push(fresh);
+  }
+
+  return out;''',
+     '''  // Genuinely new carriers join at the end, in the order the radio listed them.
+  for (const c of snapshot) {
+    const key = carrierKey(c);
+    if (placed.has(key)) continue;
+    const fresh = live.get(key);
+    if (fresh) out.push(fresh);
+  }
+
+  // Casa: the current primary leads, then live carriers, then released ones
+  // (stable sort keeps each group's order).
+  const rank = (c: ResolvedCarrier) =>
+    c.released ? 2 : isLeadRole(c.role) ? 0 : 1;
+  return out.sort((a, b) => rank(a) - rank(b));''', "reconcile order")
+
+swap(L,
+     '''const RELEASE_RETAIN_MS = 30000;
+''',
+     '''const RELEASE_RETAIN_MS = 30000;
 
 /** Casa: an SCC that carried data within this window still counts as active
  *  while the network toggles it between active and standby under load (Box 4,
