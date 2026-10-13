@@ -6628,6 +6628,19 @@ patch(card, [
       </CardContent>"""),
 ])
 
+# v0.1.17 dropped the ACTION class for Button size="action"; follow it.
+text = card.read_text()
+if "  ACTION,\n" not in text and 'size="action"' in text:
+    text = text.replace(
+        '              className={ACTION}\n',
+        '              size="action"\n', 1)
+    text = text.replace(
+        '              className={cn(ACTION, PILL_REST)}\n',
+        '              size="action"\n              className={PILL_REST}\n', 1)
+    if "{ACTION}" in text or "cn(ACTION," in text:
+        raise SystemExit("Tailscale update UI: ACTION class left on a v0.1.17 card")
+    card.write_text(text)
+
 data = json.loads(locale.read_text())
 conn = data["tailscale"]["connection"]
 conn.update({

@@ -105,6 +105,14 @@ edit(
     </div>""",
 )
 
+# v0.1.17 dropped PILL_ACTION for Button size="action"; follow it.
+text = (target / links).read_text()
+if "  PILL_ACTION,\n" not in text:
+    text = text.replace('variant="outline" className={PILL_ACTION}', 'variant="outline" size="action"')
+    if "PILL_ACTION" in text:
+        raise SystemExit("Donate patch: PILL_ACTION left on a v0.1.17 donate-links.tsx")
+    (target / links).write_text(text)
+
 # --- English strings (other locales fall back to English) ---
 loc = target / "public/locales/en/common.json"
 data = json.loads(loc.read_text())
