@@ -9743,6 +9743,10 @@ apply_casa_overlays() {
     # Schedules: show the device time zone; warn when the network disagrees.
     python3 "$SCRIPT_DIR/patch-casa-zone-note.py" "$TARGET" \
         || fail "Schedule time zone note patch failed"
+    # Carrier aggregation: standby SCCs, prompt release, active-only MHz
+    # (after the QCAINFO patch: it reuses _casa_scc_state_form).
+    python3 "$SCRIPT_DIR/patch-casa-ca-standby.py" "$TARGET" \
+        || fail "Carrier aggregation standby patch failed"
     # Ping: try the last winning host first so jitter keeps its history.
     python3 "$SCRIPT_DIR/patch-casa-ping-sticky.py" "$TARGET" \
         || fail "Ping sticky-winner patch failed"
