@@ -14,13 +14,14 @@ for all the hard work building, maintaining, and sharing QManager with the
 community. The upstream project is
 **[dr-dolomite/QManager-RM520N](https://github.com/dr-dolomite/QManager-RM520N)**.
 
-Joetooley built only the Casa CFW-3212 converter/package flow for making
-QManager installable on the Casa CFW-3212.
+Joetooley maintains the Casa CFW-3212 port: the converter and package flow,
+the Casa-specific changes that make QManager work on the CFW-3212, and keeping
+it up to date with each new QManager release.
 
 **Supporting the work:** donations to Rus support QManager itself
 ([GitHub Sponsors](https://github.com/sponsors/dr-dolomite),
 [PayPal](https://paypal.me/iamrusss)). If the Casa port helped you, you can also
-tip Joetooley for the port only:
+tip Joetooley for the port:
 **[PayPal](https://paypal.me/Joetooley28)** ·
 **[Venmo](https://venmo.com/u/Joetooley28)** ·
 **[Cash App](https://cash.app/$jtooley8921)**.

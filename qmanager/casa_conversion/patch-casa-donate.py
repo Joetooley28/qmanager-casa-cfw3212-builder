@@ -117,7 +117,7 @@ if "  PILL_ACTION,\n" not in text:
 loc = target / "public/locales/en/common.json"
 data = json.loads(loc.read_text())
 data["donate"]["casa"] = {
-    "note": "The buttons above support Rus, who writes QManager. The buttons below support Joetooley, who only ported it to the Casa CFW-3212.",
+    "note": "The buttons above support Rus, who writes QManager. The buttons below support Joetooley, who ports it to the Casa CFW-3212, adds the Casa-specific changes and keeps it up to date with new QManager releases.",
     "sr_suffix": "for the Casa port,",
 }
 loc.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n")
