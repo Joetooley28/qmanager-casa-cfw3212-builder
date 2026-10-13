@@ -5997,23 +5997,25 @@ do_release_info() {
 ''', "outer Helpers header")
 
 # --- Wrapper: resolve the release before launching the inner job ------------
-once("do_install() {\n", "do_install() {\n    local ts_want_arg=\"${1:-}\" ts_want ts_rel ts_err\n", "do_install header")
+once("do_install() {\n", "do_install() {\n    local ts_want_arg=\"${1:-}\" ts_want ts_rel ts_err ts_rc\n", "do_install header")
 
 once('''    rm -f "$TEMP_SERVICE_FILE" "$INNER_SCRIPT"
     : > "$LOG_FILE"
 ''', '''    rm -f "$TEMP_SERVICE_FILE" "$INNER_SCRIPT"
     : > "$LOG_FILE"
 
-    # Casa: look up the release (version + GitHub's SHA-256) before starting.
-    # Fresh install: the version this package pins. Installed: the requested
-    # version, or the fork's latest release.
-    if [ -f "$TAILSCALE_DIR/tailscaled" ]; then
-        ts_want="${ts_want_arg:-latest}"
-    else
-        ts_want="$TAILSCALE_VERSION"
-    fi
+    # Casa: look up the release (version + GitHub's SHA-256) before starting:
+    # the requested version, or the fork's latest release. A fresh install
+    # whose latest lookup fails falls back to the version this package pins.
+    ts_want="${ts_want_arg:-latest}"
     echo "Looking up Tiny Tailscale $ts_want on GitHub ($TAILSCALE_REPO)..." >> "$LOG_FILE"
-    if ! ts_rel=$(do_release_info "$ts_want" 2>/tmp/qmanager_tailscale_release.err); then
+    ts_rel=$(do_release_info "$ts_want" 2>/tmp/qmanager_tailscale_release.err); ts_rc=$?
+    if [ "$ts_rc" -ne 0 ] && [ "$ts_want" = "latest" ] && [ ! -f "$TAILSCALE_DIR/tailscaled" ]; then
+        echo "Latest release lookup failed; trying the pinned v$TAILSCALE_VERSION..." >> "$LOG_FILE"
+        ts_want="$TAILSCALE_VERSION"
+        ts_rel=$(do_release_info "$ts_want" 2>/tmp/qmanager_tailscale_release.err); ts_rc=$?
+    fi
+    if [ "$ts_rc" -ne 0 ]; then
         ts_err=$(tr -d '"\\\\' < /tmp/qmanager_tailscale_release.err | head -1)
         echo "ERROR: $ts_err" >> "$LOG_FILE"
         write_status '{"success":false,"status":"error","message":"'"${ts_err:-GitHub release lookup failed}"'"}'
