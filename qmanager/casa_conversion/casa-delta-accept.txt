@@ -8,3 +8,4 @@ components/nav-user.tsx | <Loader2 className="size-5 animate-spin text-primary" 
 scripts/usr/lib/qmanager/dpi_state.sh | "--port=$DPI_PORT --bind-addr=$DPI_BIND_ADDR --user=www-data" \ | v0.1.17 binds the LAN address: now "--bind-addr=$bind --user=www-data"
 scripts/www/cgi-bin/quecmanager/network/custom_dns.sh | ENABLED=$(printf '%s' "$POST_DATA" | jq -r '.enabled | if . == null then "" else tostring end') | upstream v0.1.17 fixed it with has("enabled")
 components/support/donate-links.tsx | <Button asChild variant="outline" className={PILL_ACTION}> | v0.1.17 removed PILL_ACTION; Casa buttons now variant="outline" size="action"
+scripts/usr/bin/qmanager_dpi_run | if ! dpi_narrow_active; then | ensure now only runs the helper cleanup when QMVS_ chains exist (ensure timer enabled on Casa from v0.1.17)

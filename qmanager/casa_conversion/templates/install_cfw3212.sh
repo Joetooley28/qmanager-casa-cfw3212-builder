@@ -2093,6 +2093,16 @@ for svc in qmanager-lighttpd qmanager-firewall qmanager-setup qmanager-ping \
     fi
 done
 
+# Upstream enables the Traffic Engine ensure timer: every 60 s it re-adds the
+# optimizer rule after a reconnect flush and restarts a dead engine; it does
+# nothing else while the optimizer is off.
+if [ -f "$SYSTEMD_DIR/qmanager-dpi-ensure.timer" ]; then
+    mkdir -p "$SYSTEMD_DIR/timers.target.wants"
+    ln -sf "$SYSTEMD_DIR/qmanager-dpi-ensure.timer" \
+        "$SYSTEMD_DIR/timers.target.wants/qmanager-dpi-ensure.timer" 2>/dev/null || true
+    info "Enabled qmanager-dpi-ensure.timer"
+fi
+
 systemctl daemon-reload || true
 
 # --- Fix permissions ---------------------------------------------------------
@@ -2146,6 +2156,8 @@ if systemctl is-active qmanager-dpi >/dev/null 2>&1; then
         && info "Video Optimizer restarted on the new version" \
         || warn "Video Optimizer restart failed — check: systemctl status qmanager-dpi"
 fi
+
+systemctl start qmanager-dpi-ensure.timer 2>/dev/null || true
 
 if [ -f "$SYSTEMD_DIR/qmanager-sites.service" ]; then
     systemctl restart qmanager-sites 2>/dev/null \

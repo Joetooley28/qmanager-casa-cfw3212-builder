@@ -170,7 +170,8 @@ edit(runner, '    --clear-selective)\n        exec /usrdata/bin/qmanager_video_s
         exec /usrdata/bin/qmanager_video_selective --clear
 ''')
 
-edit(runner, '        dpi_reconcile_force_tcp\n', '''        if ! dpi_narrow_active; then
+edit(runner, '        dpi_reconcile_force_tcp\n', '''        # Only start the helper to clean up when Narrow chains are actually left.
+        if ! dpi_narrow_active && iptables -w 5 -t nat -S 2>/dev/null | grep -q 'QMVS_'; then
             /usrdata/bin/qmanager_video_selective --clear || qlog_warn "ensure: selective cleanup incomplete"
         fi
         dpi_reconcile_force_tcp

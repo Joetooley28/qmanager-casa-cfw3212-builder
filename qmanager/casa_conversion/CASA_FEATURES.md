@@ -75,7 +75,8 @@ Live = last confirmed on a router (box, date, build). "—" = not yet tested on 
 | Feature | Implemented by | Automatic check | Live |
 |---|---|---|---|
 | Off / Narrow / Broad; Narrow = DNS-learned video IPs only via Go helper | `patch-casa-video-selective.py`, `video-selective/` | helper unit tests in CI, delta gate | Narrow: Box 2 field test 2026-10-12; Broad: Box 4 2026-10-10 |
-| v0.1.17: Narrow hands off before upstream's argv build; rule now applied by ExecStartPost `--rule-up` | same | delta gate | — |
+| v0.1.17: Narrow hands off before upstream's argv build; rule now applied by ExecStartPost `--rule-up` | same | delta gate | Box 1, 2026-10-13, v0.1.17 dev: Narrow, Broad, Off |
+| Traffic Engine ensure timer (60 s): re-adds the rule after a flush, restarts a dead engine; helper cleanup only when Narrow chains exist | installer (from v0.1.17; never enabled on v0.1.16), `patch-casa-video-selective.py` | — | Box 1, 2026-10-13: ensure run by hand in Narrow (no-op), Broad (restored a deleted rule), Off (adds nothing) |
 | tpws pinned to zapret v72.13 + hash, `--user=www-data` | same | converter | Box 4, 2026-10-10 |
 | Uninstall/disable removes all VO and Force-TCP rules | uninstall, `--clear-selective` | — | Box 4, 2026-10-10 |
 
@@ -87,7 +88,7 @@ Live = last confirmed on a router (box, date, build). "—" = not yet tested on 
 | Reboot history: one crash.log entry labels one boot | `patch-casa-reboot-cause.py` | converter | Box 1, 2026-10-13 |
 | Watchdog: Tier 1 = Casa RDB reconnect, cooldown 120 s, Tier 2 (radio) and Tier 3 (SIM) off with notices, exits cleanly on stop | `patch_casa_watchcat_*`, `patch_casa_watchdog_ui_single_sim_cfw3212` | safety checks, delta gate | Box 2 ladder run, 2026-09-27 (v0.1.16 dev) |
 | Watchdog skips recovery on stale ping data | v0.1.16: Casa ping-health patch; v0.1.17+: upstream `conn_state.sh` | safety checks (version-aware) | — on v0.1.17 |
-| Scheduled Reboot / Tower Lock schedule: systemd timers, re-armed by the installer; follow the router zone via `/etc/localtime` (`qmanager_timezone_apply`) | `patch_casa_scheduled_reboot_cfw3212`, `patch_casa_timezone_apply_cfw3212`, installer | — | arm/disarm Box 1, 2026-10-13; timer firing pending; zone change not re-tested on v0.1.16 |
+| Scheduled Reboot / Tower Lock schedule: systemd timers, re-armed by the installer; follow the router zone via `/etc/localtime` (`qmanager_timezone_apply`) | `patch_casa_scheduled_reboot_cfw3212`, `patch_casa_timezone_apply_cfw3212`, installer | — | arm/disarm + timer fired, Box 1, 2026-10-13 (v0.1.16, UTC zone); zone change not re-tested on v0.1.16 |
 | Single SIM slot: no SIM Slot switch, no Watchdog SIM failover | `patch_casa_single_sim_slot_cfw3212`, watchdog patches | safety checks | — |
 | APN changes through the Casa connection manager | `patch_casa_apn_apply_cfw3212` | — | — (no real APN change yet) |
 | Band locks persist across reboot; notice when 5G Architecture / Network Type blocks a lock | `patch_casa_band_locking_persist_cfw3212`, `patch-casa-band-arch.py` | converter | Box 1, 2026-10-10 |
