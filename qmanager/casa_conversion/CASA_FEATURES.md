@@ -94,6 +94,7 @@ Live = last confirmed on a router (box, date, build). "—" = not yet tested on 
 | Band locks persist across reboot; notice when 5G Architecture / Network Type blocks a lock | `patch_casa_band_locking_persist_cfw3212`, `patch-casa-band-arch.py` | converter | Box 1, 2026-10-10 |
 | QCAINFO: short NR SCC line with SCell state reads the real PCI (no fake "SCC handoff PCI 1 -> 2") | `patch-casa-qcainfo-scc.py` | converter | parser tested on Box 1 BusyBox, 2026-10-13; raw line capture running |
 | Network Events: secondary-carrier band change at the same count is logged ("NR carriers changed (+N25, -N66)"), settled ~9 s; count changes stay upstream's | `patch-casa-scc-band-change.py` | converter | 10 simulated sequences on Box 1 BusyBox, 2026-10-13 |
+| Ping: last winning host is tried first (per hostname / IP pair), so a host that drops some pings (cloudflare.com IPv6 on T-Mobile) no longer clears latency history every ~13 s and Jitter gets a reading | `patch-casa-ping-sticky.py` | converter | probe-order cases on Box 1 BusyBox, 2026-10-13 |
 | Poller boot identity fix | `patch_casa_poller_boot_identity_cfw3212` | — | v0.1.11 era |
 | ICCID profile auto-apply only when explicitly enabled | `patch_disable_profile_auto_apply` | safety checks | Box 2, `.22.19.dev` |
 
