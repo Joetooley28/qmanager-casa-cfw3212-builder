@@ -554,6 +554,34 @@ jobs:
           fi
           rm -rf "$tmp_check"
 
+      - name: Check no Casa change was dropped
+        if: steps.scheduled_check.outputs.should_build == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Compares this conversion's Casa delta with the newest released snapshot.
+          # A loss fails the build; review it, then fix the converter or list it in
+          # qmanager/casa_conversion/casa-delta-accept.txt with a reason.
+          upstream_tag="${{ steps.resolve.outputs.upstream_tag }}"
+          snap="$(ls qmanager/casa_conversion/casa-delta/*.json | sort -V | tail -n 1)"
+          up_dir="$RUNNER_TEMP/upstream-src"
+          git clone --quiet --depth 1 --branch "$upstream_tag" "https://github.com/${UPSTREAM_REPO_SLUG}.git" "$up_dir"
+          echo "Checking qmanager_work_${upstream_tag}_casa against $(basename "$snap")"
+          python3 scripts/casa-delta-compare.py check "$snap" "$up_dir" \
+            "qmanager/qmanager_work_${upstream_tag}_casa" \
+            --accept qmanager/casa_conversion/casa-delta-accept.txt
+          python3 scripts/casa-delta-compare.py snapshot "$up_dir" \
+            "qmanager/qmanager_work_${upstream_tag}_casa" "$RUNNER_TEMP/casa-delta-snapshot.json"
+
+      - name: Upload Casa delta snapshot
+        if: steps.scheduled_check.outputs.should_build == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          # Commit this as qmanager/casa_conversion/casa-delta/<casa tag>.json after a release.
+          name: casa-delta-snapshot-${{ steps.resolve.outputs.casa_tag }}
+          path: ${{ runner.temp }}/casa-delta-snapshot.json
+          if-no-files-found: error
+
       - name: Stage release assets
         if: steps.scheduled_check.outputs.should_build == 'true'
         id: stage
