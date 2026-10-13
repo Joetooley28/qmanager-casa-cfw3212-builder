@@ -110,5 +110,5 @@ Live = last confirmed on a router (box, date, build). "—" = not yet tested on 
 ## Upstream changes taken as-is (no Casa patch) — re-check on each port
 
 - Conn Uptime = internet-reachable timer from the ping daemon (resets on poller restart). Same upstream.
-- v0.1.17 Sites monitor: upstream default on (13 sites every 5 min, ~20–30 MB/day of data). Owner decision pending.
+- v0.1.17 Sites monitor: upstream default on (13 sites every 5 min, ~20–30 MB/day of data, estimate). Kept on by owner decision 2026-10-13.
 - v0.1.17 DNS lookup timing: probes the first `resolv.conf` server; works on Casa because the DNS repair keeps that server live.
