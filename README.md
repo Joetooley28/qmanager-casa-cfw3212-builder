@@ -20,8 +20,10 @@ QManager installable on the Casa CFW-3212.
 **Supporting the work:** donations to Rus support QManager itself
 ([GitHub Sponsors](https://github.com/sponsors/dr-dolomite),
 [PayPal](https://paypal.me/iamrusss)). If the Casa port helped you, you can also
-tip Joetooley for the port only at
-**[paypal.me/Joetooley28](https://paypal.me/Joetooley28)**.
+tip Joetooley for the port only:
+**[PayPal](https://paypal.me/Joetooley28)** ·
+**[Venmo](https://venmo.com/u/Joetooley28)** ·
+**[Cash App](https://cash.app/$jtooley8921)**.
 
 It is the source of truth for building packages that are published to:
 
