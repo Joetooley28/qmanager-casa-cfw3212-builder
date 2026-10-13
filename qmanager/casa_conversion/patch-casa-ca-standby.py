@@ -14,7 +14,8 @@ the box was really on n71 alone.
   badge); a carrier missing from a NON-empty snapshot is released at once (the
   6 s grace stays only for an empty snapshot = failed AT read).
 - Dashboard card: standby tiles in the neutral tone with "Standby", no fake
-  meter; header shows active MHz only (no "/ total").
+  meter; header shows active MHz only (no "/ total"). Bubble widths retain
+  reported bandwidth, so a configured 100 MHz carrier is not squeezed to zero.
 """
 from pathlib import Path
 import sys
@@ -212,12 +213,23 @@ swap(C,
      '''      if (c.released) return t("ca.role.released");
       if (c.standby) return "Standby";
 ''', "card role label")
-swap(C,
-     '''  const shares = computeSegmentShares(resolved.map((c) => c.bandwidth_mhz));''',
-     '''  // Casa: a standby carrier keeps a sliver in the chain, not its bandwidth.
+# Keep upstream's reported-bandwidth proportions. Standby is conveyed by tone
+# and its role label; only the aggregate total excludes its configured MHz.
+# Reapplying to a tree converted before this fix also removes the old override.
+card = target / C
+old_shares = '''  // Casa: a standby carrier keeps a sliver in the chain, not its bandwidth.
   const shares = computeSegmentShares(
     resolved.map((c) => (c.standby && !c.released ? 0 : c.bandwidth_mhz)),
-  );''', "card shares")
+  );'''
+card_text = card.read_text()
+reported_shares = '  const shares = computeSegmentShares(resolved.map((c) => c.bandwidth_mhz));'
+if card_text.count(old_shares) > 1:
+    raise SystemExit("CA standby patch: card shares anchor changed")
+updated_card = card_text.replace(old_shares, reported_shares, 1)
+if updated_card.count(reported_shares) != 1:
+    raise SystemExit("CA standby patch: card shares anchor changed")
+if updated_card != card_text:
+    card.write_text(updated_card)
 swap(C,
      '''              {summary.totalMhz}
               {hasReleased && (
