@@ -9739,6 +9739,9 @@ apply_casa_overlays() {
     # Watchdog ladder: tiers 2/3 show a "Not available" badge, not a sentence.
     python3 "$SCRIPT_DIR/patch-casa-watchdog-rung-badge.py" "$TARGET" \
         || fail "Watchdog rung badge patch failed"
+    # Schedules: show the device time zone; warn when the network disagrees.
+    python3 "$SCRIPT_DIR/patch-casa-zone-note.py" "$TARGET" \
+        || fail "Schedule time zone note patch failed"
     # Ping: try the last winning host first so jitter keeps its history.
     python3 "$SCRIPT_DIR/patch-casa-ping-sticky.py" "$TARGET" \
         || fail "Ping sticky-winner patch failed"

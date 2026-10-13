@@ -96,6 +96,7 @@ Live = last confirmed on a router (box, date, build). "—" = not yet tested on 
 | Network Events: secondary-carrier band change at the same count is logged ("NR carriers changed (+N25, -N66)"), settled ~9 s; count changes stay upstream's | `patch-casa-scc-band-change.py` | converter | 10 simulated sequences on Box 1 BusyBox, 2026-10-13 |
 | Ping: last winning host is tried first (per hostname / IP pair), so a host that drops some pings (cloudflare.com IPv6 on T-Mobile) no longer clears latency history every ~13 s and Jitter gets a reading | `patch-casa-ping-sticky.py` | converter | probe-order cases on Box 1 BusyBox, 2026-10-13 |
 | Tiny Tailscale: fresh install takes the fork's latest release (GitHub SHA-256), falls back to the pinned `tiny_ver` only when the latest lookup fails; updates never fall back | `patch_casa_tailscale_inplace_upgrade_cfw3212` (do_install wrapper) | converter | lookup cases with stubbed GitHub, 2026-10-13 |
+| Scheduled Reboot + Tower Lock schedule say which time zone their times use (link to System Settings); warning when the carrier's local offset (RDB `wwan.0.networktime.timezone`) differs from the device clock. Settings GET adds `network_offset`. Styled per card (TZ_NOTICE / tile NOTICE) | `patch-casa-zone-note.py` | converter | offset conversion on Box 1 BusyBox awk, 2026-10-13 |
 | Poller boot identity fix | `patch_casa_poller_boot_identity_cfw3212` | — | v0.1.11 era |
 | ICCID profile auto-apply only when explicitly enabled | `patch_disable_profile_auto_apply` | safety checks | Box 2, `.22.19.dev` |
 
