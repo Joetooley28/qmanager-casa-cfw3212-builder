@@ -4978,6 +4978,32 @@ if watchdog_card is not None:
 # field slot (previously the sole child of the removed Field above) is now
 # the backup-SIM Select; force the tier off and swap its field slot for a
 # static notice so Casa single-SIM hardware never shows it as available.
+# Upstream v0.1.17+: rungs are On/Off pills and tier 3 is one Slot 1 / Slot 2 / Off
+# choice; swap that choice for the static notice.
+if ladder_card is not None and 'SegmentedOption<SlotChoice>' in ladder_card.read_text():
+    text = ladder_card.read_text()
+    import re as _re
+    text, n = _re.subn(
+        r"  if \(tier === 3\) \{\n    const slots: SegmentedOption<SlotChoice>\[\] = \[.*?\n  \} else \{\n",
+        '''  if (tier === 3) {
+    // Casa CFW-3212 is single-SIM hardware: Watchdog SIM failover never exists here.
+    control = (
+      <span className={RUNG.COST}>
+        Disabled on Casa CFW-3212 single-SIM hardware.
+      </span>
+    );
+  } else {
+''',
+        text,
+        count=1,
+        flags=_re.S,
+    )
+    if n != 1:
+        raise SystemExit("ladder-card.tsx v0.1.17 tier 3 slot control not found")
+    ladder_card.write_text(text)
+    ladder_card = None
+    ladder_v17 = True
+
 if ladder_card is not None:
     text = ladder_card.read_text()
     if 'Disabled on Casa CFW-3212 single-SIM hardware' not in text:
@@ -5091,7 +5117,7 @@ PY
     else
         grep -q 'Disabled on Casa CFW-3212 single-SIM hardware' "$ladder_card" \
             || fail "Could not replace Watchdog backup SIM UI"
-        grep -q 'rung.tier === 3 ? false : rung.enabled' "$ladder_card" \
+        grep -Eq 'rung.tier === 3 \? false : rung.enabled|Watchdog SIM failover never exists here' "$ladder_card" \
             || fail "Watchdog backup SIM toggle still present"
     fi
     grep -q 'Apply matching profiles on boot and user SIM-switch actions' "$profile_page" \
@@ -5121,13 +5147,15 @@ patch_casa_watchcat_tier2_off_cfw3212() {
     [ -f "$ladder_card" ] || fail "Target missing watchdog ladder-card.tsx (Tier 2 Casa patch)"
     [ -f "$derive" ] || fail "Target missing watchdog derive.ts (Tier 2 Casa patch)"
 
-    python3 - "$watchcat" "$watchdog_cgi" "$ladder_card" "$derive" <<'PY'
+    python3 - "$watchcat" "$watchdog_cgi" "$ladder_card" "$derive" "$TARGET/public/locales/en/common.json" <<'PY'
 from pathlib import Path
+import json
 import sys
 
 watchcat, cgi = Path(sys.argv[1]), Path(sys.argv[2])
 ladder = Path(sys.argv[3]) if sys.argv[3] else None
 derive = Path(sys.argv[4]) if sys.argv[4] else None
+ladder_loc = Path(sys.argv[5])
 
 def swap(text, old, new, marker, what):
     if marker in text:
@@ -5175,6 +5203,34 @@ text = swap(text,
     "never persist Watchdog Tier 2", "watchdog CGI tier2 save")
 cgi.write_text(text)
 
+# Upstream v0.1.17+: rung controls are pills built in Rung(); the single-SIM
+# patch already turned tier 3 into a notice. Add tier 2's notice before it.
+if ladder is not None and "Watchdog SIM failover never exists here" in ladder.read_text():
+    text = ladder.read_text()
+    text = swap(text,
+        '''  if (tier === 3) {
+    // Casa CFW-3212 is single-SIM hardware''',
+        '''  if (tier === 2) {
+    // Casa CFW-3212: the radio belongs to Casa's connection manager.
+    control = (
+      <span className={RUNG.COST}>
+        Disabled on Casa CFW-3212: the router&apos;s connection manager owns the radio.
+      </span>
+    );
+  } else if (tier === 3) {
+    // Casa CFW-3212 is single-SIM hardware''',
+        "the router&apos;s connection manager owns the radio", "ladder v0.1.17 tier 2 notice")
+    ladder.write_text(text)
+    ladder = None
+    loc = ladder_loc
+    data = json.loads(loc.read_text())
+    lad = data["watchdog"]["ladder"]
+    lad["tier1"]["name"] = "Reconnect through the router"
+    lad["tier1"]["consequence"] = "Casa's connection manager reconnects; the link drops for under a minute."
+    lad["tier2"]["consequence"] = "Not used on the CFW-3212."
+    lad["tier3"]["consequence"] = "Not available: the CFW-3212 has one SIM slot."
+    loc.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n")
+
 if ladder is not None:
     text = ladder.read_text()
     text = swap(text,
@@ -5209,7 +5265,8 @@ if ladder is not None:
         "the router&apos;s connection manager", "ladder tier3 notice anchor")
     ladder.write_text(text)
 
-if derive is not None:
+# v0.1.17+ derive.ts no longer lists the per-tier AT command.
+if derive is not None and "TIER_COMMAND" in derive.read_text():
     text = derive.read_text()
     text = swap(text,
         '''  1: "AT+COPS=2 → AT+COPS=0",
@@ -5225,7 +5282,7 @@ PY
     grep -q 'never persist Watchdog Tier 2' "$watchdog_cgi" \
         || fail "Could not force Watchdog CGI Tier 2 saves off"
     if [ -n "$ladder_card" ]; then
-        grep -q 'masterOff || rung.tier === 2' "$ladder_card" \
+        grep -Eq 'masterOff \|\| rung.tier === 2|connection manager owns the radio' "$ladder_card" \
             || fail "Could not disable Watchdog Tier 2 switch in ladder card"
     fi
 }
@@ -5237,6 +5294,12 @@ patch_casa_watchcat_ping_health_cfw3212() {
     # bounded attempt to restart qmanager-ping.
     local watchcat="$TARGET/scripts/usr/bin/qmanager_watchcat"
     [ -f "$watchcat" ] || return 0
+    # v0.1.17+ reads ping.json through conn_state.sh and skips the cycle on stale
+    # data (fail closed), which covers the no-escalation half of this patch.
+    if grep -q 'conn_state_read' "$watchcat"; then
+        log "Watchcat ping-health patch skipped (upstream conn_state.sh stale handling)"
+        return 0
+    fi
 
     python3 - "$watchcat" <<'PY'
 from pathlib import Path
@@ -7263,7 +7326,8 @@ PY
         || fail "Could not apply Casa Custom DNS get_passthrough_bypass patch"
     grep -q 'STAGING_FILE="/tmp/qmanager-dnsmasq.conf.new"' "$dns_cgi" \
         || fail "Could not apply Casa Custom DNS staging path patch"
-    grep -q 'if . == null then "" else tostring end' "$dns_cgi" \
+    # v0.1.17+ upstream reads .enabled with has() itself (same fix).
+    grep -Eq 'if \. == null then "" else tostring end|if has\("enabled"\) then \.enabled' "$dns_cgi" \
         || fail "Could not apply Casa Custom DNS enabled boolean fix"
     grep -q 'systemctl restart dnsmasq_service@0.service' "$dns_cgi" \
         || fail "Could not apply Casa Custom DNS reload-fix patch"
@@ -7690,10 +7754,25 @@ new_install_v16 = '''    # -----------------------------------------------------
     fi
 '''
 
+# v0.1.17 writes the job PID from outside the subshell ($!), not inside ($$).
+def _pid_outside(block):
+    block = block.replace('            echo $$ > "$MSMTP_INSTALL_PID"\n', '', 1)
+    return block.replace(
+        '        ) </dev/null >/dev/null 2>&1 &\n',
+        '        ) </dev/null >/dev/null 2>&1 &\n'
+        "        # $! is the background job; $$ inside the subshell is this CGI's PID.\n"
+        '        echo $! > "$MSMTP_INSTALL_PID"\n',
+        1,
+    )
+old_install_v17 = _pid_outside(old_install_v16)
+new_install_v17 = _pid_outside(new_install_v16)
+
 if old_install in cgi:
     cgi = cgi.replace(old_install, new_install, 1)
 elif old_install_v16 in cgi:
     cgi = cgi.replace(old_install_v16, new_install_v16, 1)
+elif old_install_v17 in cgi:
+    cgi = cgi.replace(old_install_v17, new_install_v17, 1)
 elif "Casa Entware IPK extraction" not in cgi:
     raise SystemExit("email alert install action block not found")
 
@@ -7954,7 +8033,9 @@ patch_ping_profile_service_toggle_cfw3212() {
     # Retired on v0.1.14+ (user decision 2026-09-25): this switch belonged to
     # the Rust-ping era; upstream now ships the shell ping daemon and replaced
     # the sensitivity card with the Connection Quality page. Skip on purpose.
-    if [ ! -f "$card" ] && [ -f "$TARGET/components/system-settings/connection-quality/connection-quality.tsx" ]; then
+    # v0.1.17 moved the page to components/monitoring/connection-quality/.
+    if [ ! -f "$card" ] && { [ -f "$TARGET/components/system-settings/connection-quality/connection-quality.tsx" ] \
+        || [ -f "$TARGET/components/monitoring/connection-quality/connection-quality.tsx" ]; }; then
         log "Casa ping-service switch retired on v0.1.14+ (upstream Connection Quality page)"
         return 0
     fi
@@ -9922,12 +10003,20 @@ safety_checks() {
         "sudoers must not allow broad raw Tailscale CLI (AI-62 phase 2)"
     require_rg_clean "/usrdata/tailscale/tailscaled" "$TARGET/scripts/etc/sudoers.d/qmanager" \
         "sudoers must not allow direct tailscaled commands (AI-62 phase 2)"
+    if grep -q 'conn_state_read' "$TARGET/scripts/usr/bin/qmanager_watchcat"; then
+        # v0.1.17+: upstream skips the cycle on stale/missing ping data (no escalation).
+        require_rg_present "if ! conn_state_read; then" "$TARGET/scripts/usr/bin/qmanager_watchcat" \
+            "watchcat must skip recovery when ping data is stale (upstream conn_state)"
+        require_rg_present "result inconclusive, returning to monitor" "$TARGET/scripts/usr/bin/qmanager_watchcat" \
+            "watchcat cooldown must not escalate on stale ping data"
+    else
     require_rg_present "PING_STALE_RESTART_CYCLES" "$TARGET/scripts/usr/bin/qmanager_watchcat" \
         "watchcat must expose stale ping cache and restart qmanager-ping"
     require_rg_present "write_disabled_state" "$TARGET/scripts/usr/bin/qmanager_watchcat" \
         "watchcat must write disabled state on UI/service disable"
     require_rg_present "state=\"ping_\\$\\{ping_status\\}\"" "$TARGET/scripts/usr/bin/qmanager_watchcat" \
         "watchcat must report ping_missing/stale/invalid degraded states"
+    fi
     require_rg_present "qmanager_iptables" "$TARGET/scripts/usr/lib/qmanager/platform.sh" \
         "platform.sh must call qmanager_iptables helper (AI-62 phase 2)"
     [ -x "$TARGET/scripts/usr/bin/qmanager_iptables" ] \

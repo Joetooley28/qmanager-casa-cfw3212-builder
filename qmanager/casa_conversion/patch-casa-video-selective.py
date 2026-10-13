@@ -67,14 +67,20 @@ edit(runner, '    --clear)\n', '''    --clear-selective)
         ;;
     --clear)
 ''')
-edit(runner, '        if ! dpi_apply_rule; then\n', '''        if dpi_narrow_active; then
+_narrow_exec = '''        if dpi_narrow_active; then
             dpi_remove_rule_upstream
             dpi_remove_force_tcp_rule
             qlog_info "run: starting Casa selective video DNS/routing supervisor (Narrow)"
             exec /usrdata/bin/qmanager_video_selective --hostlist="$DPI_HOSTLIST" --tpws="$DPI_BINARY" --proxy-port="$DPI_PORT"
         fi
-        if ! dpi_apply_rule; then
-''')
+'''
+# v0.1.17 no longer applies the rule in `run` (ExecStartPost --rule-up does,
+# once tpws listens); hand Narrow to the helper before upstream builds argv.
+_run_anchor_v17 = '        # The REDIRECT rule is deliberately NOT applied here.'
+if _run_anchor_v17 in (target / runner).read_text():
+    edit(runner, _run_anchor_v17, _narrow_exec + _run_anchor_v17)
+else:
+    edit(runner, '        if ! dpi_apply_rule; then\n', _narrow_exec + '        if ! dpi_apply_rule; then\n')
 
 lib = target / "scripts/usr/lib/qmanager/dpi_state.sh"
 text = lib.read_text()
@@ -86,10 +92,13 @@ for name in ["dpi_apply_rule", "dpi_remove_rule", "dpi_rule_present", "dpi_packe
 # Upstream modes start tpws without --user, so it drops to UID 2147483647 and
 # cannot read the www-data 0640 target list on installed boxes (exits 1).
 # The Narrow helper already passes --user=www-data; do the same here.
-bind_args = '"--port=$DPI_PORT --bind-addr=$DPI_BIND_ADDR"'
-if text.count(bind_args) != 2:
+# v0.1.17 binds the LAN address ($bind from dpi_bind_addr) instead of 0.0.0.0.
+for bind_args in ('"--port=$DPI_PORT --bind-addr=$DPI_BIND_ADDR"', '"--port=$DPI_PORT --bind-addr=$bind"'):
+    if text.count(bind_args) == 2:
+        text = text.replace(bind_args, bind_args[:-1] + ' --user=www-data"')
+        break
+else:
     raise SystemExit("Selective-video tpws argument anchors changed")
-text = text.replace(bind_args, '"--port=$DPI_PORT --bind-addr=$DPI_BIND_ADDR --user=www-data"')
 text += '''
 # Casa Video Optimizer scope: narrow (default) = only DNS-learned video
 # addresses enter tpws; broad = upstream's all bridge0 TCP 80/443 redirect.
