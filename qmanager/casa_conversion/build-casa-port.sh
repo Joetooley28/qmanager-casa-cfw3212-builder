@@ -9731,6 +9731,9 @@ apply_casa_overlays() {
     # QCAINFO: short NR SCC lines carry the SCell state before the PCI.
     python3 "$SCRIPT_DIR/patch-casa-qcainfo-scc.py" "$TARGET" \
         || fail "QCAINFO SCC PCI patch failed"
+    # Network Events: log SCC band swaps at the same count (N66 -> N25).
+    python3 "$SCRIPT_DIR/patch-casa-scc-band-change.py" "$TARGET" \
+        || fail "SCC band-change events patch failed"
     patch_casa_device_photo_cfw3212
     patch_speedtest_latency_iqm_guard_cfw3212
     if upstream_has_v14_software_update; then

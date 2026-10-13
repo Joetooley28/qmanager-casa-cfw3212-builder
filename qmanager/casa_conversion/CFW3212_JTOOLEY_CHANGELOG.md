@@ -32,6 +32,7 @@
 - The redesigned **Watchdog** page keeps the Casa recovery ladder: the reconnect step is labelled **Reconnect through the router**, and **Restart the radio** and **Switch to the backup SIM** show why they are off on the CFW-3212.
 - The redesigned **IP Passthrough** page keeps the Casa choice of Disabled or Enabled (Ethernet).
 - **Recent Activities / Network Events no longer log fake 5G secondary-carrier handoffs.** When the modem reports a 5G secondary carrier that is configured but not in use, QManager read its on/off state as the cell ID, so it showed "NR SCC handoff (PCI 1 -> 2)" entries flipping every few seconds. The real cell ID is now shown and no handoff is logged.
+- **Recent Activities / Network Events now log every secondary-carrier band change.** Before, a swap such as 5G n66 to n25 was only logged when the number of carriers changed too, so it could happen silently. It now shows as "NR carriers changed (+N25, -N66)" once the new band has held for about 9 seconds.
 
 ## v0.1.16-cfw3212.1
 
