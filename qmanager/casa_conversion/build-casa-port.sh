@@ -9747,6 +9747,9 @@ apply_casa_overlays() {
     # (after the QCAINFO patch: it reuses _casa_scc_state_form).
     python3 "$SCRIPT_DIR/patch-casa-ca-standby.py" "$TARGET" \
         || fail "Carrier aggregation standby patch failed"
+    # Speed Test dialog: router-run test is CPU-bound (no hardware fast path).
+    python3 "$SCRIPT_DIR/patch-casa-speedtest-note.py" "$TARGET" \
+        || fail "Speed test note patch failed"
     # Ping: try the last winning host first so jitter keeps its history.
     python3 "$SCRIPT_DIR/patch-casa-ping-sticky.py" "$TARGET" \
         || fail "Ping sticky-winner patch failed"
