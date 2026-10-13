@@ -9626,6 +9626,9 @@ apply_casa_overlays() {
     # Donate: separate PayPal button for the Casa port; upstream's links stay.
     python3 "$SCRIPT_DIR/patch-casa-donate.py" "$TARGET" \
         || fail "Donate links Casa PayPal patch failed"
+    # Support page: Casa issues and release-notes rows.
+    python3 "$SCRIPT_DIR/patch-casa-support.py" "$TARGET" \
+        || fail "Support page Casa links patch failed"
     # Reboot history: a crash.log reboot entry labels one boot only.
     python3 "$SCRIPT_DIR/patch-casa-reboot-cause.py" "$TARGET" \
         || fail "Reboot cause patch failed"
