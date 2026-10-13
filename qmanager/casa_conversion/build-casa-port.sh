@@ -9626,6 +9626,9 @@ apply_casa_overlays() {
     # Donate: separate PayPal button for the Casa port; upstream's links stay.
     python3 "$SCRIPT_DIR/patch-casa-donate.py" "$TARGET" \
         || fail "Donate links Casa PayPal patch failed"
+    # Reboot history: a crash.log reboot entry labels one boot only.
+    python3 "$SCRIPT_DIR/patch-casa-reboot-cause.py" "$TARGET" \
+        || fail "Reboot cause patch failed"
     patch_casa_device_photo_cfw3212
     patch_speedtest_latency_iqm_guard_cfw3212
     if upstream_has_v14_software_update; then

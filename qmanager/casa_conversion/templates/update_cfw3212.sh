@@ -609,6 +609,8 @@ if [ "$REQUEST_METHOD" = "POST" ]; then
             '{status: $status, message: $message}' > "$STATUS_FILE"
         (
             sleep 1
+            # Log it as a user reboot, like the System menu Reboot, so the next boot is not labelled from an older entry.
+            $_SUDO /usrdata/bin/qmanager_crash_log_append user 2>/dev/null
             if command -v rdb_set >/dev/null 2>&1 && command -v rdb_get >/dev/null 2>&1 && rdb_get service.system.reset >/dev/null 2>&1; then
                 rdb_set service.system.reset_reason "QManager GUI update reboot"
                 rdb_set service.system.reset.delay 5
