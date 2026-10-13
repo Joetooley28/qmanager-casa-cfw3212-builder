@@ -179,6 +179,16 @@ candidate staged in the TEST ONLY repo `Joetooley28/qmanager-casa-cfw3212-packag
 
 Router **Software Update** installs from the **package repo**, not dev artifacts.
 
+## Porting a new upstream version
+
+Follow the checklist at the top of
+[`qmanager/casa_conversion/CASA_FEATURES.md`](../qmanager/casa_conversion/CASA_FEATURES.md).
+The CI step **Check no Casa change was dropped** compares every build with the
+last released snapshot (`casa_conversion/casa-delta/<tag>.json`) and fails when
+a Casa change disappears; review each loss, then fix the converter or list it in
+`casa_conversion/casa-delta-accept.txt` with a reason. After a release, commit
+the run's `casa-delta-snapshot-<tag>` artifact as the next snapshot.
+
 ## What not to do
 
 - Do **not** tell the user to approve package-repo publish for a **`dev`** branch build.
