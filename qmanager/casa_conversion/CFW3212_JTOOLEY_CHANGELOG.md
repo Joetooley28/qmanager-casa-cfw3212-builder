@@ -31,6 +31,7 @@
 - **Video Optimizer is safer when the optimizer stops.** The web-traffic redirect is now added only once the optimizer is actually listening and is removed as soon as it stops or crashes, so a stopped optimizer can no longer leave web pages hanging, and the optimizer only listens on the LAN side. Narrow and Broad work as before.
 - The redesigned **Watchdog** page keeps the Casa recovery ladder: the reconnect step is labelled **Reconnect through the router**, and **Restart the radio** and **Switch to the backup SIM** show why they are off on the CFW-3212.
 - The redesigned **IP Passthrough** page keeps the Casa choice of Disabled or Enabled (Ethernet).
+- **Recent Activities / Network Events no longer log fake 5G secondary-carrier handoffs.** When the modem reports a 5G secondary carrier that is configured but not in use, QManager read its on/off state as the cell ID, so it showed "NR SCC handoff (PCI 1 -> 2)" entries flipping every few seconds. The real cell ID is now shown and no handoff is logged.
 
 ## v0.1.16-cfw3212.1
 

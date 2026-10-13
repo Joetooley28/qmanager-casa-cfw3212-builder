@@ -92,6 +92,7 @@ Live = last confirmed on a router (box, date, build). "—" = not yet tested on 
 | Single SIM slot: no SIM Slot switch, no Watchdog SIM failover | `patch_casa_single_sim_slot_cfw3212`, watchdog patches | safety checks | — |
 | APN changes through the Casa connection manager | `patch_casa_apn_apply_cfw3212` | — | — (no real APN change yet) |
 | Band locks persist across reboot; notice when 5G Architecture / Network Type blocks a lock | `patch_casa_band_locking_persist_cfw3212`, `patch-casa-band-arch.py` | converter | Box 1, 2026-10-10 |
+| QCAINFO: short NR SCC line with SCell state reads the real PCI (no fake "SCC handoff PCI 1 -> 2") | `patch-casa-qcainfo-scc.py` | converter | parser tested on Box 1 BusyBox, 2026-10-13; raw line capture running |
 | Poller boot identity fix | `patch_casa_poller_boot_identity_cfw3212` | — | v0.1.11 era |
 | ICCID profile auto-apply only when explicitly enabled | `patch_disable_profile_auto_apply` | safety checks | Box 2, `.22.19.dev` |
 
