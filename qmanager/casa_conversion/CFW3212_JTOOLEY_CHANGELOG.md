@@ -6,18 +6,22 @@
 - System Health Check has been pointed at the Casa paths, services, lighttpd ports, and the `/usrdata/opt/bin` helper locations it actually needs to look at.
 - QManager now installs on a clean, stock router with no internet and no pivot/overlay filesystem prep. The installer bundles everything it needs (the web server, `sudo`, and their support libraries) inside the package, and the stock install path runs entirely from `/usrdata`.
 - Tailscale runs from the QManager UI using the lighter Tiny Tailscale build. You do your own Tailscale login from the UI. It stays optional: QManager updates never install or change it, and the Tailscale page has **Check for updates** and **Update Tiny Tailscale** buttons.
-- Ookla Speedtest works once the `speedtest` helper is installed. install handles if connected to internet.
+- Ookla Speedtest works. The installer adds the `speedtest` helper when the router has internet.
 - Email Alerts can install and remove `msmtp` through the Casa Entware package flow. The Gmail app-password setup and an actual test send are the last things to confirm working on your end. (wired up, not tested yet) 
 - Discord Bot backend is now part of the Casa package, so you can plug in your own Discord bot token and user ID and try the UI. (wired up, not tested yet)
-- Cell Lock and Frequency Lock (Tower Lock page) come from upstream QManager and are wired up on Casa, but have not been tested on the CFW-3212 yet. (wired up, not tested yet)
+- Tower Locking and Frequency Locking (Cellular menu) come from upstream QManager and are wired up on Casa, but locking has not been tested on the CFW-3212 yet. The Tower Lock schedule's timers arm and disarm correctly. (wired up, locking not tested yet)
 - SIM Profiles can be saved, applied, deleted, and deactivated by hand on Casa. That includes APN, TTL/HL, IMEI, and the modem reboot apply step. ICCID-matched auto-apply is available as an explicit on/off setting in the SIM Profiles page and stays off until you turn it on.
 - Custom DNS works from the QManager UI, including custom upstream resolvers for LAN clients without changing DHCP leases or rebooting the router.
 - DNS for the router and the devices behind it is kept working automatically: whenever the router's own DNS is broken (which happens after reconnects, especially with IP Passthrough), QManager points it at the carrier DNS servers that answer, or at public DNS if none do, within a few seconds. IP Passthrough is off by default (you can turn it back on); the dashboard shows whether it is on and where the router/LAN DNS is currently coming from.
 - The Watchdog works on Casa: when the connection stops answering it reconnects through the router's connection manager, waits 120 seconds, and only reboots the router if that did not help (tested on a CFW-3212 with a simulated outage).
 - The Reconnect Network menu action now uses Casa's connection manager path instead of forcing a modem deregister/re-register.
 - Reconnect Network now keeps a small progress window open so you can watch elapsed time, network registration, WAN IP, and internet status while the router comes back online.
-- Cellular → Radio Information now lets you keep multiple Active Cellular Bands expanded at the same time, so you can compare signal details across carriers without one row closing another.
-- Software Update → Version Management can now install a different version (including rollbacks). After the download verifies, the Install button switches to "Install Now" so the staged package actually gets applied instead of being left on disk.
+- Cellular → Radio Information shows every active band's details at once, so you can compare signal across carriers.
+- Software Update → Version Management can install a different version (including rollbacks). After the download verifies, the button switches to **Install now**, the install finishes without signing you out, and the page shows **Reboot required** with a **Reboot now** button.
+- Software Update from the last public build (`v0.1.12-cfw3212.21`) to this version was tested on both CFW-3212 firmware lines (`1.1.x` and `1.2.24.0`), keeping your password and settings. Uninstalling and reinstalling QManager were tested too.
+- Video Optimizer in **Narrow** mode was field-tested on a ~600 Mbps connection: 4K YouTube through the optimizer while ordinary downloads kept their speed. See this version's notes for the limits.
+- Scheduled Reboot saves, arms and disarms its timer from System Settings, and the installer re-arms saved schedules after an update.
+- Carrier remote management (TR-069 / LwM2M) is turned off and blocked by default, so a carrier push cannot wipe QManager.
 - A handful of upstream modem-management actions stay blocked or limited on Casa because they'd let you push the modem into a state we don't want it in.
 
 ## v0.1.16-cfw3212.1
