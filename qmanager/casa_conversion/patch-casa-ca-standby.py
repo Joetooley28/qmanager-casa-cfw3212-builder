@@ -16,6 +16,8 @@ the box was really on n71 alone.
 - Dashboard card: standby tiles in the neutral tone with "Standby", no fake
   meter; header shows active MHz only (no "/ total"). Bubble widths retain
   reported bandwidth, so a configured 100 MHz carrier is not squeezed to zero.
+- Cellular Information: retains the same standby flag, excludes it from active
+  counts/MHz, and labels configured rows without presenting filler signal bars.
 """
 from pathlib import Path
 import sys
@@ -250,3 +252,95 @@ swap(C,
                   </p>
                 ) : c.released ? (
                   <p className="text-xs font-medium">''', "card standby body")
+
+# --- Cellular Information ----------------------------------------------------
+R = "lib/radio-info.ts"
+swap(R,
+     '''  released: boolean; // from reconcileCarriers
+''',
+     '''  released: boolean; // from reconcileCarriers
+  standby: boolean; // same held-active decision as the dashboard
+''', "radio standby type")
+swap(R,
+     '''    const metrics = buildMetrics(carrier);''',
+     '''    // Casa: standby signal fields may be modem placeholders, not readings.
+    const metrics = buildMetrics(carrier.standby
+      ? { ...carrier, rsrp: null, rsrq: null, rssi: null, sinr: null }
+      : carrier);''', "radio standby metrics")
+swap(R,
+     '''      released: carrier.released,
+''',
+     '''      released: carrier.released,
+      standby: carrier.standby,
+''', "radio standby flag")
+swap(R,
+     '''  const active = carriers.filter((c) => !c.released);''',
+     '''  const active = carriers.filter((c) => !c.released && !c.standby);''',
+     "radio active counts")
+swap(R,
+     '''      c.pci !== null ? `PCI ${c.pci}` : "PCI -",
+''',
+     '''      c.pci !== null ? `PCI ${c.pci}` : "PCI -",
+      c.released ? "Released" : c.standby ? "Standby" : "",
+''', "radio diagnostics state")
+
+B = "components/cellular/radio/active-bands-card.tsx"
+swap(B,
+     '''  if (c.released) return "neutral";''',
+     '''  if (c.released || c.standby) return "neutral";''', "radio standby tone")
+swap(B,
+     '''                  : `${roleLabel(c)} ${bandLabel(c)}, ${qualityWord}`;''',
+     '''                  : c.standby
+                    ? `${roleLabel(c)} ${bandLabel(c)}, ${t("radio_info.bands.standby")}`
+                    : `${roleLabel(c)} ${bandLabel(c)}, ${qualityWord}`;''',
+     "radio standby accessible label")
+swap(B,
+     '''                  !c.released &&
+                  sinr !== undefined &&''',
+     '''                  !c.released && !c.standby &&
+                  sinr !== undefined &&''', "radio standby SNR notice")
+swap(B,
+     '''                                {t("radio_info.bands.released")}
+                              </SwapLabel>
+                            </Badge>
+                          ) : null}''',
+     '''                                {t("radio_info.bands.released")}
+                              </SwapLabel>
+                            </Badge>
+                          ) : c.standby ? (
+                            <Badge variant="muted">
+                              {t("radio_info.bands.standby")}
+                            </Badge>
+                          ) : null}''', "radio standby badge")
+swap(B,
+     '''                        {c.metrics
+                          .filter((m) => m.id !== "rssi")
+                          .map((m, i) => (
+                            <MetricCell
+                              key={m.id}
+                              metric={m}
+                              technology={c.technology}
+                              index={i}
+                            />
+                          ))}''',
+     '''                        {c.standby && !c.released ? (
+                          <p className="self-center text-xs text-on-surface-variant @4xl/bands:col-span-3">
+                            {t("radio_info.bands.standby_note")}
+                          </p>
+                        ) : c.metrics
+                          .filter((m) => m.id !== "rssi")
+                          .map((m, i) => (
+                            <MetricCell
+                              key={m.id}
+                              metric={m}
+                              technology={c.technology}
+                              index={i}
+                            />
+                          ))}''', "radio standby row body")
+swap("public/locales/en/cellular.json",
+     '''      "released": "Released",
+''',
+     '''      "released": "Released",
+      "standby": "Standby",
+      "standby_note": "Configured, not carrying data",
+''', "radio standby strings")
