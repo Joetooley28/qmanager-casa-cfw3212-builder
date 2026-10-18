@@ -26,6 +26,11 @@
 
 ## v0.1.17-cfw3212.1
 
+- Home's Network Status now uses the same active-carrier state as the Carrier Aggregation card, so configured standby carriers do not incorrectly advertise NR-CA or LTE-CA. The five-second active hold remains in place.
+- Tower Lock identifies configured standby carriers and hides their signal readings. A standby carrier alone no longer makes the page report that an active tower lock is on target.
+- The Casa IP Passthrough summary omits USB-only details. Passthrough NAT is shown as not applicable in Router mode, or not reported when enabled, instead of guessing from unsupported modem fields.
+- On small screens, a compact legend below the carrier bandwidth bubbles shows each band's MHz and Active, Standby or Released state while preserving the bubbles' reported bandwidth proportions.
+- The Video Optimizer scope switch sits below its mode row so it does not cover the description in narrow desktop cards.
 - Moves the Casa build onto upstream QManager **v0.1.17**: a new **Sites** monitor (Monitoring → Latency Monitor), DNS lookup time on the dashboard's new Connection Quality card, one alert per internet drop, and redesigned Watchdog, Alerts, Network Events, Latency Monitor and IP Passthrough pages. See the Rus | Ame / Dr. D release notes for the full list. All Casa changes were carried over.
 - **Sites monitor runs on the CFW-3212.** It checks 13 popular sites every 5 minutes by default, which uses roughly 20–30 MB of mobile data a day. Turn it off or check fewer sites in its **Manage** dialog.
 - **Video Optimizer is safer when the optimizer stops.** The web-traffic redirect is now added only once the optimizer is actually listening and is removed as soon as it stops or crashes, so a stopped optimizer can no longer leave web pages hanging, and the optimizer only listens on the LAN side. Narrow and Broad work as before.

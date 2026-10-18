@@ -9750,6 +9750,9 @@ apply_casa_overlays() {
     # Dashboard CA: PCC tile signal from the serving cell when QCAINFO omits it.
     python3 "$SCRIPT_DIR/patch-casa-ca-pcc-signal.py" "$TARGET" \
         || fail "CA PCC signal patch failed"
+    # Home/Tower Lock use reconciled carriers; Casa IPPT omits USB/NAT guesses.
+    python3 "$SCRIPT_DIR/patch-casa-display-consistency.py" "$TARGET" \
+        || fail "Casa display consistency patch failed"
     # Public Overview: active carriers only; PCC signal from the serving cell.
     python3 "$SCRIPT_DIR/patch-casa-overview-carriers.py" "$TARGET" \
         || fail "Overview carriers patch failed"

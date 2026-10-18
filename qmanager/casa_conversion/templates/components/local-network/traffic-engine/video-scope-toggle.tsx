@@ -5,10 +5,9 @@ import { CheckIcon } from "lucide-react";
 import type { VideoScope } from "@/hooks/use-video-scope";
 import { cn } from "@/lib/utils";
 
-// Casa: Narrow/Broad switch laid over the Video Optimizer row of the Bypass
-// mode card. It is a sibling of the row's button (never inside it), so a
-// click changes scope without re-selecting the mode. Below sm it sits under
-// the row instead. The Narrow vs Broad card further down explains each one.
+// Casa: Narrow/Broad switch below the Video Optimizer row of the Bypass mode
+// card. Normal flow reserves space even in a narrow desktop card. It remains
+// a sibling of the row's button so scope changes do not re-select the mode.
 //
 // Drawn by hand rather than with ToggleGroup: the stock "on" state was not
 // distinguishable on the blue selected row (owner feedback). The chosen side
@@ -29,7 +28,7 @@ export default function VideoScopeToggle({
 }) {
   const disabled = isSaving || scope === null;
   return (
-    <div className="mt-2 flex items-center justify-end gap-2 sm:absolute sm:right-16 sm:top-1/2 sm:mt-0 sm:-translate-y-1/2">
+    <div className="mt-2 flex flex-wrap items-center justify-end gap-2">
       <span className="text-xs font-medium opacity-80">Scope</span>
       <div
         role="radiogroup"
