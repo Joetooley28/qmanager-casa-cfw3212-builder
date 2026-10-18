@@ -118,7 +118,8 @@ test("Tower Lock labels standby, hides placeholder RSRP and does not claim an ac
 test.each(["0", "1"] as const)("disabled Casa IPPT makes no NAT claim for raw value %s", (ipptNat) => {
   const html = render(<StatusStrip mode="disabled" targetMac={null} ipptNat={ipptNat}
     usbMode="0" dnsProxy="enabled" failed={false} onRetry={() => {}} />);
-  expect(html).toContain("Not applicable in Router mode");
+  expect(html).toContain("Not applicable");
+  expect(html).toContain("Router mode");
   expect(html).not.toContain("Without NAT");
   expect(html).not.toContain("With NAT");
   expect(html).not.toContain("RMNET");
@@ -128,7 +129,7 @@ test.each(["0", "1"] as const)("disabled Casa IPPT makes no NAT claim for raw va
 test("enabled Ethernet IPPT reports missing NAT information honestly", () => {
   const html = render(<StatusStrip mode="eth" targetMac="02:00:00:00:00:01"
     ipptNat="0" usbMode="0" dnsProxy="enabled" failed={false} onRetry={() => {}} />);
-  expect(html).toContain("Not reported by Casa");
+  expect(html).toContain("Not reported");
   expect(html).toContain("02:00:00:00:00:01");
   expect(html).not.toContain("Without NAT");
   expect(html).not.toContain("RMNET");

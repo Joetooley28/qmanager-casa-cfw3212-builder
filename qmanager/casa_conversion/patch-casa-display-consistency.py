@@ -182,8 +182,8 @@ for rel, section, values in [
      {"reported_carriers": "Active and configured carriers"}),
     ("public/locales/en/common.json", ["ipPassthrough", "status"],
      {"casa_nat_label": "Passthrough NAT",
-      "casa_nat_unreported": "Not reported by Casa",
-      "casa_nat_na": "Not applicable in Router mode"}),
+      "casa_nat_unreported": "Not reported",
+      "casa_nat_na": "Not applicable"}),
 ]:
     data = json.loads((target / rel).read_text())
     node = data
