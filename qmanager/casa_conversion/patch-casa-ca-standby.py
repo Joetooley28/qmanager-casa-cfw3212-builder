@@ -13,11 +13,13 @@ the box was really on n71 alone.
 - lib/carrier-aggregation.ts: standby SCCs are not active (MHz figure, NR/LTE-CA
   badge); a carrier missing from a NON-empty snapshot is released at once (the
   6 s grace stays only for an empty snapshot = failed AT read).
-- Dashboard card: standby tiles in the neutral tone with "Standby", no fake
-  meter; header shows active MHz only (no "/ total"). Bubble widths retain
+- parse_at.sh: report floors (RSRP -156 dBm, RSRQ -43 dB, SNR -30.1 dB) become
+  null, so every page shows "No reading" instead of a fake figure.
+- Dashboard card: standby tiles in the neutral tone with "Standby" and their
+  real RSRP on a muted meter, or "No reading"; header shows active MHz only. Bubble widths retain
   reported bandwidth, so a configured 100 MHz carrier is not squeezed to zero.
 - Cellular Information: retains the same standby flag, excludes it from active
-  counts/MHz, and labels configured rows without presenting filler signal bars.
+  counts/MHz, and shows standby signal metrics ("No reading" when none).
 """
 from pathlib import Path
 import sys
@@ -52,6 +54,15 @@ swap(P,
 
         # --- Sanitize numeric fields (empty / dash / non-numeric → null) ---
 ''', "parse_at state")
+swap(P,
+     '''        case "$cc_sinr" in ''|'-') cc_sinr="null" ;; esac
+''',
+     '''        case "$cc_sinr" in ''|'-') cc_sinr="null" ;; esac
+        # Casa: 3GPP report floors mean the modem has no measurement.
+        case "$cc_rsrp" in -15[6-9]|-1[6-9][0-9]) cc_rsrp="null" ;; esac
+        case "$cc_rsrq" in -4[3-9]|-[5-9][0-9]) cc_rsrq="null" ;; esac
+        case "$cc_sinr" in -30.1|-3[1-9].*|-[4-9][0-9].*) cc_sinr="null" ;; esac
+''', "parse_at report floors")
 swap(P,
      '''        printf '%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n' \\
             "$cc_type" "$tech" "$band_short" "${freq:-null}" "$mhz" \\
@@ -210,6 +221,12 @@ for fn in ("segmentTone", "tileTone", "roleChipTone"):
          f'''function {fn}(c: ResolvedCarrier): string {{
   if (c.released || c.standby) return''', f"card {fn}")
 swap(C,
+     '''function meterFillTone(c: ResolvedCarrier): string {
+  return c.technology''',
+     '''function meterFillTone(c: ResolvedCarrier): string {
+  if (c.standby) return "bg-on-surface-variant/50";
+  return c.technology''', "card standby meter tone")
+swap(C,
      '''      if (c.released) return t("ca.role.released");
 ''',
      '''      if (c.released) return t("ca.role.released");
@@ -246,10 +263,8 @@ swap(C,
 swap(C,
      '''                {c.released ? (
                   <p className="text-xs font-medium">''',
-     '''                {c.standby && !c.released ? (
-                  <p className="text-xs font-medium">
-                    Configured, not carrying data
-                  </p>
+     '''                {c.standby && !c.released && c.rsrp == null ? (
+                  <p className="text-xs font-medium">{t("ca.no_reading")}</p>
                 ) : c.released ? (
                   <p className="text-xs font-medium">''', "card standby body")
 
@@ -261,12 +276,6 @@ swap(R,
      '''  released: boolean; // from reconcileCarriers
   standby: boolean; // same held-active decision as the dashboard
 ''', "radio standby type")
-swap(R,
-     '''    const metrics = buildMetrics(carrier);''',
-     '''    // Casa: standby signal fields may be modem placeholders, not readings.
-    const metrics = buildMetrics(carrier.standby
-      ? { ...carrier, rsrp: null, rsrq: null, rssi: null, sinr: null }
-      : carrier);''', "radio standby metrics")
 swap(R,
      '''      released: carrier.released,
 ''',
@@ -323,9 +332,9 @@ swap(B,
                               index={i}
                             />
                           ))}''',
-     '''                        {c.standby && !c.released ? (
+     '''                        {c.standby && !c.released && c.metrics.every((m) => m.value === null) ? (
                           <p className="self-center text-xs text-on-surface-variant @4xl/bands:col-span-3">
-                            {t("radio_info.bands.standby_note")}
+                            {t("radio_info.bands.quality.none")}
                           </p>
                         ) : c.metrics
                           .filter((m) => m.id !== "rssi")

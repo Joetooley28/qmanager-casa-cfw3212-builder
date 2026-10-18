@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Align v0.1.17 Home, Tower Lock and IPPT displays with Casa carrier state.
 
+Standby carriers show their real signal; a missing reading reads "No reading".
+
 Runs after the standby/PCC patches. Raw modem data and network controls stay
 unchanged. Validate every anchor before writing any of the patched files.
 """
@@ -139,26 +141,16 @@ swap(tower, 'const verdict = matchVerdict(modemState, onAir);',
      'const verdict = matchVerdict(modemState, onAir.filter((c) => !c.standby));')
 swap(tower, '{t("tower_locking.live.camped_on")}',
      '{t("tower_locking.live.reported_carriers")}')
-swap(tower, 'const quality = getSignalQuality(c.rsrp, RSRP_THRESHOLDS);',
-     'const quality = getSignalQuality(c.standby ? null : c.rsrp, RSRP_THRESHOLDS);')
 swap(tower, '<span className={CARRIER_TILE.BAND}>{c.band}</span>', '''<span className={CARRIER_TILE.BAND}>{c.band}</span>
                       {c.standby && (
                         <span className="text-on-surface-variant text-xs">
                           {t("radio_info.bands.standby")}
                         </span>
                       )}''')
-swap(tower, '<div className="ml-auto flex min-w-0 items-center gap-2 self-center">', '''{c.standby ? (
-                        <span className="text-on-surface-variant ml-auto text-xs">
-                          {t("radio_info.bands.standby_note")}
-                        </span>
-                      ) : (
-                      <>
-                      <div className="ml-auto flex min-w-0 items-center gap-2 self-center">''')
-swap(tower, '''                        {t(QUALITY_LABEL_KEY[quality])}
-                      </span>''', '''                        {t(QUALITY_LABEL_KEY[quality])}
-                      </span>
-                      </>
-                      )}''')
+# Standby carriers keep their real RSRP; a missing reading says so in words.
+swap(tower, '''                          {c.rsrp === null
+                            ? t("tower_locking.live.tile_no_value")''', '''                          {c.rsrp === null
+                            ? t("radio_info.bands.quality.none")''')
 
 ippt = "components/local-network/ip-passthrough/status-strip.tsx"
 swap(ippt, '''          <Figure label={t(`${K}.rows.nat.label`)}>
@@ -177,7 +169,8 @@ swap(ippt, '  ipptNat,\n  usbMode,\n', '')
 
 for rel, section, values in [
     ("public/locales/en/dashboard.json", ["ca"],
-     {"legend_label": "Carrier bandwidth and state", "active": "Active", "standby": "Standby"}),
+     {"legend_label": "Carrier bandwidth and state", "active": "Active", "standby": "Standby",
+      "no_reading": "No reading"}),
     ("public/locales/en/cellular.json", ["tower_locking", "live"],
      {"reported_carriers": "Active and configured carriers"}),
     ("public/locales/en/common.json", ["ipPassthrough", "status"],

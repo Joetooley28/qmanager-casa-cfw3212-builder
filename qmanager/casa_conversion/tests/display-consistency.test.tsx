@@ -98,21 +98,37 @@ test("LTE standby does not become LTE-CA; the NSA NR anchor stays active", () =>
   expect(nsa).toMatchObject({ activeCount: 2, endc: true, nrCa: false });
 });
 
-test("Tower Lock labels standby, hides placeholder RSRP and does not claim an active match", () => {
-  const modemState: TowerModemState = {
-    lte_locked: false, lte_cells: [], nr_locked: true,
-    nr_cell: { arfcn: 400000, pci: 200, band: 25, scs: 30 },
-    persist_lte: false, persist_nr: false,
-  };
-  const html = render(<TowerLiveStrip modemState={modemState}
-    carrierComponents={reconcileCarriers([], snapshot, "5G-SA", 10000)}
-    canTarget={{ lte: { ok: true, reasonKey: null }, nr_sa: { ok: true, reasonKey: null } }}
-    isLoading={false} onPickCarrier={() => {}} />);
+const towerState: TowerModemState = {
+  lte_locked: false, lte_cells: [], nr_locked: true,
+  nr_cell: { arfcn: 400000, pci: 200, band: 25, scs: 30 },
+  persist_lte: false, persist_nr: false,
+};
+const tower = (carriers: CarrierComponent[]) => render(<TowerLiveStrip modemState={towerState}
+  carrierComponents={reconcileCarriers([], carriers, "5G-SA", 10000)}
+  canTarget={{ lte: { ok: true, reasonKey: null }, nr_sa: { ok: true, reasonKey: null } }}
+  isLoading={false} onPickCarrier={() => {}} />);
+
+test("Tower Lock labels standby, shows its real RSRP and does not claim an active match", () => {
+  const html = tower([primary, { ...standby, rsrp: -100 }]);
   expect(html).toContain("Active and configured carriers");
   expect(html).toContain("Standby");
-  expect(html).toContain("Configured, not carrying data");
-  expect(html).not.toContain("-156");
+  expect(html).toContain("-100");
   expect(html).toContain("Not on target");
+});
+
+test("Tower Lock says No reading when a standby carrier reports no RSRP", () => {
+  const html = tower([primary, { ...standby, rsrp: null }]);
+  expect(html).toContain("Standby");
+  expect(html).toContain("No reading");
+});
+
+test("CA card shows standby RSRP, or No reading when the modem gives none", () => {
+  const card = (rsrp: number | null) => render(<CarrierAggregationComponent
+    resolvedCarriers={reconcileCarriers([], [primary, { ...standby, rsrp }], "5G-SA", 10000)}
+    networkType="5G-SA" isLoading={false} receivedAtMs={10000} />);
+  expect(card(-100)).toContain("-100 dBm");
+  expect(card(null)).toContain("No reading");
+  expect(card(-100)).not.toContain("Configured, not carrying data");
 });
 
 test.each(["0", "1"] as const)("disabled Casa IPPT makes no NAT claim for raw value %s", (ipptNat) => {
