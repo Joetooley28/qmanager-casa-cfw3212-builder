@@ -9750,6 +9750,9 @@ apply_casa_overlays() {
     # Dashboard CA: PCC tile signal from the serving cell when QCAINFO omits it.
     python3 "$SCRIPT_DIR/patch-casa-ca-pcc-signal.py" "$TARGET" \
         || fail "CA PCC signal patch failed"
+    # Poller keeps reading QCAINFO during a speed test (scans stay paused).
+    python3 "$SCRIPT_DIR/patch-casa-speedtest-ca-poll.py" "$TARGET" \
+        || fail "Speed test CA poll patch failed"
     # Home/Tower Lock use reconciled carriers; Casa IPPT omits USB/NAT guesses.
     python3 "$SCRIPT_DIR/patch-casa-display-consistency.py" "$TARGET" \
         || fail "Casa display consistency patch failed"
