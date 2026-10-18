@@ -30,6 +30,7 @@
 - Tower Lock identifies configured standby carriers. A standby carrier alone no longer makes the page report that an active tower lock is on target.
 - Standby carriers now show their real signal (RSRP, RSRQ, SNR) on Home, Cellular Information and Tower Lock, still marked Standby and still left out of the bandwidth total. When the modem has no measurement, the page says "No reading" instead of showing a fake floor value such as -156 dBm.
 - During a Speed Test the dashboard keeps updating its carrier list, so a secondary carrier that the network switches on under load can appear on the Carrier Aggregation card. Other modem reads stay paused during the test, and cell scans and the System Health Check still pause them completely.
+- Tower Locking and Frequency Locking keep their text inside the tiles at mid-size window widths: the carrier RSRP wraps under the channel number, the 5G channel field no longer shrinks to one letter, and the spacing selector no longer cuts off its label.
 - The Casa IP Passthrough summary omits USB-only details. Passthrough NAT is shown as not applicable in Router mode, or not reported when enabled, instead of guessing from unsupported modem fields.
 - On small screens, a compact legend below the carrier bandwidth bubbles shows each band's MHz and Active, Standby or Released state while preserving the bubbles' reported bandwidth proportions.
 - The Video Optimizer scope switch sits below its mode row so it does not cover the description in narrow desktop cards.
