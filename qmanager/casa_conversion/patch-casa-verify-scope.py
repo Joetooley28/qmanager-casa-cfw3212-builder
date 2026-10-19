@@ -87,6 +87,11 @@ swap(V, "reference:$refj,improvement:$imp}')\"",
 swap(V, '''    qlog_info "verify: complete without=${without_mbps}Mbps with=${with_mbps}Mbps reference=${reference_mbps:-n/a}Mbps"''',
      '''    qlog_info "verify: complete without=${without_mbps}Mbps with=${with_mbps}Mbps reference=${reference_mbps:-n/a}Mbps other_direct=${other_direct_mbps:-n/a}Mbps other_bypass=${other_bypass_mbps:-n/a}Mbps mode=$applied_mode"''')
 
+# The status endpoint passes only listed fields; add the new ones.
+G = "scripts/www/cgi-bin/quecmanager/network/video_optimizer.sh"
+swap(G, "improvement:$body.improvement,message:$body.message",
+     "improvement:$body.improvement,ordinary_direct:$body.ordinary_direct,ordinary_bypass:$body.ordinary_bypass,applied_mode:$body.applied_mode,message:$body.message")
+
 T = "types/traffic-engine.ts"
 swap(T, '''  improvement?: string;
   message?: string;''', '''  improvement?: string;
