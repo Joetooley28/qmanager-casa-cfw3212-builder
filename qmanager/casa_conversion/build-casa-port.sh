@@ -9759,6 +9759,9 @@ apply_casa_overlays() {
     # Tower/Frequency Locking: keep tile text inside its tile at mid widths.
     python3 "$SCRIPT_DIR/patch-casa-lock-layout.py" "$TARGET" \
         || fail "Lock layout patch failed"
+    # Bypass benefit test: ordinary-traffic leg, live setting summary, adaptive scope toggle.
+    python3 "$SCRIPT_DIR/patch-casa-verify-scope.py" "$TARGET" \
+        || fail "Verify scope patch failed"
     # Public Overview: active carriers only; PCC signal from the serving cell.
     python3 "$SCRIPT_DIR/patch-casa-overview-carriers.py" "$TARGET" \
         || fail "Overview carriers patch failed"

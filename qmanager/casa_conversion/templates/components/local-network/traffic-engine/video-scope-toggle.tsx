@@ -5,9 +5,10 @@ import { CheckIcon } from "lucide-react";
 import type { VideoScope } from "@/hooks/use-video-scope";
 import { cn } from "@/lib/utils";
 
-// Casa: Narrow/Broad switch below the Video Optimizer row of the Bypass mode
-// card. Normal flow reserves space even in a narrow desktop card. It remains
-// a sibling of the row's button so scope changes do not re-select the mode.
+// Casa: Narrow/Broad switch for the Video Optimizer row of the Bypass mode
+// card: on the row when the row is wide (the row text reserves @xl/vorow:pr-56),
+// below it when narrow. It stays a sibling of the row's button so scope
+// changes do not re-select the mode.
 //
 // Drawn by hand rather than with ToggleGroup: the stock "on" state was not
 // distinguishable on the blue selected row (owner feedback). The chosen side
@@ -28,7 +29,7 @@ export default function VideoScopeToggle({
 }) {
   const disabled = isSaving || scope === null;
   return (
-    <div className="mt-2 flex flex-wrap items-center justify-end gap-2">
+    <div className="mt-2 flex flex-wrap items-center justify-end gap-2 @xl/vorow:absolute @xl/vorow:right-14 @xl/vorow:top-1/2 @xl/vorow:mt-0 @xl/vorow:-translate-y-1/2">
       <span className="text-xs font-medium opacity-80">Scope</span>
       <div
         role="radiogroup"

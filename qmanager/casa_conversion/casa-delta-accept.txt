@@ -15,3 +15,5 @@ scripts/usr/bin/qmanager_tailscale_mgr | # version, or the fork's latest release
 scripts/usr/bin/qmanager_tailscale_mgr | if ! ts_rel=$(do_release_info "$ts_want" 2>/tmp/qmanager_tailscale_release.err); then | fresh install now takes the latest Tiny Tailscale with pinned fallback (owner, 2026-10-13, bf5f18a)
 scripts/usr/bin/qmanager_tailscale_mgr | local ts_want_arg="${1:-}" ts_want ts_rel ts_err | fresh install now takes the latest Tiny Tailscale with pinned fallback (owner, 2026-10-13, bf5f18a)
 scripts/usr/bin/qmanager_dpi_run | if ! dpi_narrow_active; then | ensure now only runs the helper cleanup when QMVS_ chains exist (ensure timer enabled on Casa from v0.1.17)
+# --- 2026-10-18 owner-requested changes ---
+components/local-network/traffic-engine/mode-card.tsx | <div key={entry.mode} className="relative"> | now "@container/vorow relative" so the scope toggle sits on the row when wide (patch-casa-verify-scope.py, owner 2026-10-18)
