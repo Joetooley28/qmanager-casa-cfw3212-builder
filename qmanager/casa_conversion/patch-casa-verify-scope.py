@@ -45,22 +45,33 @@ swap(V, '''        out=$(curl -ksS -m 30 \\
 swap(V, '''    local url without_mbps with_mbps reference_mbps reference_source
 ''', '''    local url without_mbps with_mbps reference_mbps reference_source
     local other_bypass_mbps other_direct_mbps other_json direct_json applied_mode obw
+    local other_source target
+''')
+# Fallback ordinary-HTTPS target: Cloudflare's speed endpoint rate-limits
+# repeated large downloads (429, Retry-After ~47 min, Box 2 2026-10-19).
+swap(V, '''DPI_REF_CLOUDFLARE_URL="https://speed.cloudflare.com/__down?bytes=25000000"
+''', '''DPI_REF_CLOUDFLARE_URL="https://speed.cloudflare.com/__down?bytes=25000000"
+DPI_ORDINARY_FALLBACK_URL="https://ash-speed.hetzner.com/100MB.bin"
 ''')
 # Phase 3 while the temporary proxy is still up.
 swap(V, '''    bw=$(_dpi_curl_bw "$url" "$DPI_SOCKS_PORT") || bw=$(_dpi_curl_bw "$url" "$DPI_SOCKS_PORT")
     _dpi_socks_stop''', '''    bw=$(_dpi_curl_bw "$url" "$DPI_SOCKS_PORT") || bw=$(_dpi_curl_bw "$url" "$DPI_SOCKS_PORT")
-    # Casa: ordinary HTTPS (Cloudflare, port 443) through the same proxy, then direct.
+    # Casa: ordinary HTTPS (port 443) through the same proxy, then direct; one
+    # capped download per leg, Hetzner when Cloudflare refuses.
     qlog_info "verify: phase 3 (ordinary HTTPS, with and without bypass)"
     other_bypass_mbps=""
     other_direct_mbps=""
-    obw=$(_dpi_reference_bw "$DPI_REF_CLOUDFLARE_URL" "$DPI_SOCKS_PORT") || obw=""
-    [ -n "$obw" ] && other_bypass_mbps=$(awk -v b="$obw" 'BEGIN { printf "%.1f", b * 8 / 1000000 }')
-    if [ "$reference_source" = "cloudflare" ] && [ -n "$reference_mbps" ]; then
-        other_direct_mbps="$reference_mbps"
-    else
-        obw=$(_dpi_reference_bw "$DPI_REF_CLOUDFLARE_URL") || obw=""
+    other_source=""
+    for target in "$DPI_REF_CLOUDFLARE_URL cloudflare" "$DPI_ORDINARY_FALLBACK_URL hetzner"; do
+        set -- $target
+        obw=$(_dpi_curl_bw "$1" "$DPI_SOCKS_PORT") || obw=""
+        [ -n "$obw" ] || { qlog_warn "verify: ordinary HTTPS via $2 failed"; continue; }
+        other_bypass_mbps=$(awk -v b="$obw" 'BEGIN { printf "%.1f", b * 8 / 1000000 }')
+        obw=$(_dpi_curl_bw "$1") || obw=""
         [ -n "$obw" ] && other_direct_mbps=$(awk -v b="$obw" 'BEGIN { printf "%.1f", b * 8 / 1000000 }')
-    fi
+        other_source="$2"
+        break
+    done
     _dpi_socks_stop''')
 swap(V, '''        ref_json="null"
     fi
@@ -80,24 +91,26 @@ swap(V, '''        --argjson refj "$ref_json" \\
 ''', '''        --argjson refj "$ref_json" \\
         --argjson obj "$other_json" \\
         --argjson odj "$direct_json" \\
+        --arg osrc "$other_source" \\
         --arg mode "$applied_mode" \\
 ''')
 swap(V, "reference:$refj,improvement:$imp}')\"",
-     "reference:$refj,improvement:$imp,ordinary_direct:$odj,ordinary_bypass:$obj,applied_mode:$mode}')\"")
+     "reference:$refj,improvement:$imp,ordinary_direct:$odj,ordinary_bypass:$obj,ordinary_source:(if $osrc == \"\" then null else $osrc end),applied_mode:$mode}')\"")
 swap(V, '''    qlog_info "verify: complete without=${without_mbps}Mbps with=${with_mbps}Mbps reference=${reference_mbps:-n/a}Mbps"''',
      '''    qlog_info "verify: complete without=${without_mbps}Mbps with=${with_mbps}Mbps reference=${reference_mbps:-n/a}Mbps other_direct=${other_direct_mbps:-n/a}Mbps other_bypass=${other_bypass_mbps:-n/a}Mbps mode=$applied_mode"''')
 
 # The status endpoint passes only listed fields; add the new ones.
 G = "scripts/www/cgi-bin/quecmanager/network/video_optimizer.sh"
 swap(G, "improvement:$body.improvement,message:$body.message",
-     "improvement:$body.improvement,ordinary_direct:$body.ordinary_direct,ordinary_bypass:$body.ordinary_bypass,applied_mode:$body.applied_mode,message:$body.message")
+     "improvement:$body.improvement,ordinary_direct:$body.ordinary_direct,ordinary_bypass:$body.ordinary_bypass,ordinary_source:$body.ordinary_source,applied_mode:$body.applied_mode,message:$body.message")
 
 T = "types/traffic-engine.ts"
 swap(T, '''  improvement?: string;
   message?: string;''', '''  improvement?: string;
-  /** Casa: ordinary HTTPS (Cloudflare) direct and through the temporary proxy. */
+  /** Casa: ordinary HTTPS direct and through the temporary proxy, and which server. */
   ordinary_direct?: { speed_mbps: number } | null;
   ordinary_bypass?: { speed_mbps: number } | null;
+  ordinary_source?: "cloudflare" | "hetzner" | null;
   /** Casa: live engine setting when the test ran. */
   applied_mode?: "narrow" | "broad" | "full_bypass" | "off";
   message?: string;''')
@@ -114,7 +127,7 @@ swap(C, '''    reference?.speed_mbps ?? 0,
     otherDirect?.speed_mbps ?? 0,
     otherBypass?.speed_mbps ?? 0,
   );''')
-cloudflareTag = '''<Tag variant="neutral">{t("trafficEngine.verify.source_cloudflare")}</Tag>'''
+cloudflareTag = '''<Tag variant="neutral">{t(result?.ordinary_source === "hetzner" ? "trafficEngine.verify.source_hetzner" : "trafficEngine.verify.source_cloudflare")}</Tag>'''
 swap(C, '''              {reference ? (
                 <ComparisonRow
                   label={t("trafficEngine.verify.line_speed")}''', '''              {otherDirect ? (
@@ -169,6 +182,9 @@ swap(C, '''              ) : null}
                 ) : null}
               </div>
             ) : null}
+            {appliedMode && !otherDirect && !otherBypass ? (
+              <p className={FOOTNOTE}>{t("trafficEngine.verify.other_unavailable")}</p>
+            ) : null}
 ''')
 
 loc = "public/locales/en/common.json"
@@ -181,6 +197,8 @@ updates = {
     "with": "Video, through bypass",
     "other_direct": "Other traffic, direct",
     "other_bypass": "Other traffic, through bypass",
+    "source_hetzner": "Hetzner",
+    "other_unavailable": "Other traffic couldn't be measured this time because the test servers were busy. Run the test again later.",
     "footnote": "Line speed is the reference: if every row is slow, the connection is slow, not throttled.",
     "setting_narrow": "Your setting, Narrow: video {{video}} Mbps through the bypass, other traffic {{other}} Mbps direct.",
     "setting_broad": "Your setting, Broad: video {{video}} Mbps and other traffic {{other}} Mbps, both through the bypass.",
